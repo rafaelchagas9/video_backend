@@ -1,0 +1,37 @@
+# Python-generated files (legacy)
+__pycache__/
+*.py[oc]
+*.egg-info
+.venv
+
+# Node/Bun
+node_modules/
+bun.lockb
+*.log
+logs/
+
+# Build
+build/
+dist/
+
+# Environment
+.env
+.env.local
+
+# Database
+data/
+
+videos/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+.husky
