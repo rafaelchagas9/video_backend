@@ -1,0 +1,7 @@
+[install]
+# Configure package manager
+registry = "https://registry.npmjs.org/"
+
+[test]
+# Configure test runner
+preload = ["./src/test-setup.ts"]
