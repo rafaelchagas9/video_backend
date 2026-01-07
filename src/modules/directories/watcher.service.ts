@@ -296,18 +296,32 @@ export class WatcherService {
       // Compute file hash (async, don't block)
       let fileHash: string | null = null;
       const hashStart = Date.now();
+      const PARTIAL_HASH_THRESHOLD = 1 * 1024 * 1024 * 1024; // 2GB
+      const hashMethod = fileSize >= PARTIAL_HASH_THRESHOLD ? 'partial' : 'full';
+      
       try {
-        logger.debug({ filePath }, "Computing file hash...");
+        logger.debug(
+          { filePath, fileSizeGB: (fileSize / (1024 ** 3)).toFixed(2), method: hashMethod },
+          `Computing file hash (${hashMethod})...`,
+        );
         fileHash = await computeFileHash(filePath);
         const hashDuration = Date.now() - hashStart;
         
         if (hashDuration > 2000) {
           logger.warn(
-            { filePath, durationMs: hashDuration, fileSizeMB: (fileSize / 1024 / 1024).toFixed(2) },
-            `Hash computation took ${(hashDuration / 1000).toFixed(2)}s`,
+            { 
+              filePath, 
+              durationMs: hashDuration, 
+              fileSizeGB: (fileSize / (1024 ** 3)).toFixed(2),
+              method: hashMethod,
+            },
+            `Hash computation took ${(hashDuration / 1000).toFixed(2)}s using ${hashMethod} hashing`,
           );
         } else {
-          logger.debug({ filePath, durationMs: hashDuration }, `Hash computed in ${hashDuration}ms`);
+          logger.debug(
+            { filePath, durationMs: hashDuration, method: hashMethod },
+            `Hash computed in ${hashDuration}ms using ${hashMethod} hashing`,
+          );
         }
       } catch (error) {
         const hashDuration = Date.now() - hashStart;
