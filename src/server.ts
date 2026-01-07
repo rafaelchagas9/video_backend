@@ -5,6 +5,11 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
+import {
+  serializerCompiler,
+  validatorCompiler,
+  jsonSchemaTransform,
+} from "fastify-type-provider-zod";
 import { env } from "./config/env";
 import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
@@ -33,6 +38,10 @@ export async function buildServer() {
     requestIdHeader: "x-request-id",
   });
 
+  // Set up Zod type provider for schema validation and OpenAPI generation
+  fastify.setValidatorCompiler(validatorCompiler);
+  fastify.setSerializerCompiler(serializerCompiler);
+
   // Initialize database
   getDatabase();
 
@@ -42,13 +51,18 @@ export async function buildServer() {
   });
 
   await fastify.register(cors, {
-    origin: env.NODE_ENV === "development" ? true : false,
+    origin: env.NODE_ENV === "development" ? true : ["http://localhost:3000", "http://localhost:5173"],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Range"],
+    exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length"],
   });
 
   // Security hardening
   await fastify.register(helmet, {
     contentSecurityPolicy: env.NODE_ENV === "production",
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false,
   });
 
   await fastify.register(rateLimit, {
@@ -58,6 +72,7 @@ export async function buildServer() {
 
   // Swagger documentation
   await fastify.register(swagger, {
+    transform: jsonSchemaTransform,
     openapi: {
       info: {
         title: "Video Streaming Backend API",

@@ -1,23 +1,40 @@
 import type { FastifyInstance } from "fastify";
-import { validateSchema } from "@/utils/validation";
+import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authService } from "./auth.service";
-import { registerSchema, loginSchema } from "./auth.types";
+import {
+  registerBodySchema,
+  loginBodySchema,
+  authSuccessResponseSchema,
+  meResponseSchema,
+  logoutResponseSchema,
+  errorResponseSchema,
+} from "./auth.schemas";
 import { authenticateUser } from "./auth.middleware";
 import { COOKIE_NAME } from "@/config/constants";
 import { env } from "@/config/env";
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+
   // Register new user
-  fastify.post(
+  app.post(
     "/register",
     {
       schema: {
         tags: ["auth"],
+        summary: "Register a new user",
+        description:
+          "Create a new user account. Only one user can be registered (single-user system).",
+        body: registerBodySchema,
+        response: {
+          201: authSuccessResponseSchema,
+          400: errorResponseSchema,
+          409: errorResponseSchema,
+        },
       },
     },
     async (request, reply) => {
-      const input = validateSchema(registerSchema, request.body);
-      const user = await authService.register(input);
+      const user = await authService.register(request.body);
 
       return reply.status(201).send({
         success: true,
@@ -28,16 +45,24 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // Login
-  fastify.post(
+  app.post(
     "/login",
     {
       schema: {
         tags: ["auth"],
+        summary: "Login to an existing account",
+        description:
+          "Authenticate with username and password. Returns a session cookie.",
+        body: loginBodySchema,
+        response: {
+          200: authSuccessResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
       },
     },
     async (request, reply) => {
-      const input = validateSchema(loginSchema, request.body);
-      const result = await authService.login(input);
+      const result = await authService.login(request.body);
 
       // Set session cookie
       reply.setCookie(COOKIE_NAME, result.sessionId, {
@@ -62,9 +87,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // Logout
-  fastify.post("/logout", {
+  app.post("/logout", {
     schema: {
       tags: ["auth"],
+      summary: "Logout from current session",
+      description:
+        "Invalidate the current session and clear the session cookie.",
+      response: {
+        200: logoutResponseSchema,
+        401: errorResponseSchema,
+      },
     },
     preHandler: authenticateUser,
     handler: async (request, reply) => {
@@ -84,16 +116,25 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // Get current user
-  fastify.get("/me", {
+  app.get("/me", {
     schema: {
       tags: ["auth"],
+      summary: "Get current user info",
+      description: "Returns the currently authenticated user's information.",
+      response: {
+        200: meResponseSchema,
+        401: errorResponseSchema,
+      },
     },
     preHandler: authenticateUser,
     handler: async (request, reply) => {
       if (!request.user) {
         return reply.status(401).send({
           success: false,
-          message: "Not authenticated",
+          error: {
+            message: "Not authenticated",
+            statusCode: 401,
+          },
         });
       }
 

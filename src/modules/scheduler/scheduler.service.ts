@@ -85,7 +85,10 @@ export class SchedulerService {
     const cronExpression = this.minutesToCron(intervalMinutes);
 
     const cronJob = cron.schedule(cronExpression, async () => {
-      logger.info({ directoryId, path }, "Running scheduled scan");
+      logger.info(
+        { directoryId, path, intervalMinutes, triggeredBy: "scheduler" },
+        `Running scheduled scan (interval: ${intervalMinutes}min)`,
+      );
       try {
         const result = await watcherService.scanDirectory(directoryId);
         logger.info(
