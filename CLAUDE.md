@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Single-user video streaming backend built with Bun, Fastify, and SQLite. Manages local video files with metadata extraction, directory watching, hierarchical tags, ratings, playlists, favorites, and bookmarks. Uses session-based authentication and serves videos via HTTP range requests.
+Single-user video streaming backend built with Bun, Fastify, and SQLite. Manages local video files with comprehensive features:
+
+- **Video Management**: Automatic indexing, metadata extraction, search/filter
+- **Organization**: Hierarchical tags, creators, playlists, favorites, bookmarks
+- **Media Features**: HTTP range streaming, thumbnail generation, GPU-accelerated conversion
+- **Automation**: Scheduled directory scanning, real-time WebSocket updates
+- **Data Management**: Ratings (1-5 stars), custom metadata, database backup/export
+
+Uses session-based authentication and serves content via HTTP range requests for efficient streaming.
 
 ## Commands
 
@@ -33,6 +41,24 @@ bun test --filter "should register"
 ```bash
 # Run migrations (if migration script exists)
 bun db:migrate
+```
+
+### Conversions
+```bash
+# List available presets
+curl http://localhost:3000/api/presets
+
+# Start conversion (requires authentication)
+curl -X POST http://localhost:3000/api/videos/1/convert \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"preset": "1080p_h265"}'
+
+# Monitor conversion status
+curl http://localhost:3000/api/conversions/1 -b cookies.txt
+
+# Download converted video
+curl http://localhost:3000/api/conversions/1/download -b cookies.txt -o output.mkv
 ```
 
 ## Architecture
@@ -125,14 +151,71 @@ Extraction happens asynchronously during directory scanning. Failed extractions 
 **Flow**:
 1. `DirectoriesService.create()` validates path and creates DB record
 2. `WatcherService.scanDirectory()` recursively finds video files
-3. For each video: compute SHA256 hash, extract metadata, create DB record
+3. For each video: compute XXH3-128 hash with collision detection, extract metadata, create DB record
 4. Results logged to `scan_logs` table
 
 **Soft Deletion**: When files are missing, they're marked `is_available = 0` instead of deleted from the database.
 
 ### Hierarchical Tags
 
-Uses adjacency list model with `parent_id` self-reference. Tag queries use recursive CTEs for tree traversal (not yet implemented in service layer).
+Uses adjacency list model with `parent_id` self-reference. Tag queries use recursive CTEs for tree traversal.
+
+### GPU-Accelerated Video Conversion
+
+**Architecture**:
+- Job queue system processes one conversion at a time
+- Uses VAAPI (Video Acceleration API) for GPU encoding
+- Progress tracking via FFmpeg output parsing
+- Real-time WebSocket updates for conversion status
+
+**Presets** (`src/config/presets.ts`):
+- 9 presets covering 1080p, 720p, and original resolution
+- Three codecs: H.264 (compatibility), H.265/HEVC (balance), AV1 (best compression)
+- All outputs use MKV container, preserving aspect ratio
+- Quality parameters (QP) tuned for file size optimization
+
+**Conversion Flow**:
+1. User submits conversion via `POST /api/videos/:id/convert`
+2. Job created with status `pending`
+3. Queue processes job, updating status to `processing`
+4. FFmpeg spawned with VAAPI encoding
+5. Progress broadcast via WebSocket (`conversion:progress` events)
+6. Completion updates status to `completed` and stores output file path
+7. User can download via `GET /api/conversions/:id/download`
+
+**WebSocket Events**:
+- `conversion:started` - Job begins processing
+- `conversion:progress` - Real-time progress percentage
+- `conversion:completed` - Job finished successfully
+- `conversion:failed` - Job encountered error
+
+**Important Notes**:
+- **CRITICAL**: Requires GPU with VAAPI support (Intel/AMD on Linux)
+- Check VAAPI availability: `vainfo` command should show supported profiles
+- Intel GPUs: Install `intel-media-driver` or `i965-va-driver`
+- AMD GPUs: Install `mesa-va-drivers`
+- Output files stored in `data/conversions/` directory
+- Jobs can be cancelled while `pending` or `processing`
+- Failed/completed jobs retain metadata for history
+- Queue automatically starts on server initialization (except in tests)
+- If VAAPI unavailable, conversions will fail - consider software encoding fallback
+
+### WebSocket Communication
+
+**Connection**: `ws://[host]:[port]/ws`
+- Requires session cookie authentication
+- Service registered at `src/modules/websocket/websocket.ts`
+- Broadcasts conversion events to all connected clients
+- Gracefully handles disconnects and reconnections
+
+### Scheduled Directory Scanning
+
+**Scheduler Service** (`src/modules/scheduler/scheduler.service.ts`):
+- Uses `node-cron` for periodic scans
+- Scans all directories with `auto_scan = true`
+- Interval configurable per directory via `scan_interval_minutes`
+- Automatically starts on server initialization (except in tests)
+- Logs scan results to `scan_logs` table
 
 ## Testing
 
@@ -183,28 +266,48 @@ Copy `.env.example` to `.env` and configure:
 - `FFMPEG_PATH=/usr/bin/ffmpeg`
 - `FFPROBE_PATH=/usr/bin/ffprobe`
 
+**Storage Paths**:
+- `THUMBNAILS_DIR=./data/thumbnails` - Thumbnail storage
+- `CONVERSIONS_DIR=./data/conversions` - Converted video storage
+- `LOGS_DIR=./logs` - Application logs
+
+**Thumbnail Settings**:
+- `THUMBNAIL_SIZE=320x240` - Thumbnail dimensions (width x height)
+- `THUMBNAIL_TIMESTAMP=5.0` - Fallback position in video (seconds, used when duration unavailable)
+- `THUMBNAIL_FORMAT=webp` - Image format (webp or jpg)
+- `THUMBNAIL_QUALITY=80` - Compression quality (1-100, higher is better)
+- `THUMBNAIL_POSITION_PERCENT=20` - Default position as percentage of video duration (0-100)
+
+**File Scanning**:
+- `DEFAULT_SCAN_INTERVAL_MINUTES=30` - Default auto-scan interval
+- `MAX_FILE_SIZE_GB=50` - Maximum video file size to index
+
 Environment validation happens at startup via Zod schema in `src/config/env.ts`.
 
 ## Implementation Status
 
-**Completed** (Phases 1-3):
+**Completed** (Phases 1-7):
 - Project foundation with Bun + Fastify
 - Authentication (register, login, logout, sessions)
 - Directory management and registration
-- Recursive video file scanning
+- Recursive video file scanning with scheduler
 - Video metadata extraction with FFprobe
-- Video CRUD operations
-- File hash computation (SHA256)
-- Integration tests with UTF-8 filename support
+- Video CRUD operations with search and filtering
+- File hash computation (XXH3-128 with collision detection)
 - HTTP range request video streaming
-
-**Pending** (Phases 4-7):
-- Creators, tags, and custom metadata
-- Rating system
-- Thumbnail generation with FFmpeg
-- Playlists, favorites, and bookmarks
+- Creators management with many-to-many video relationships
+- Hierarchical tags system with parent/child relationships
+- Rating system (1-5 stars with comments)
+- Thumbnail generation with FFmpeg (WebP format, percentage-based frame selection, auto-generation)
+- Playlists with position ordering
+- Favorites system
+- Bookmarks with timestamps and descriptions
+- Database backup and export functionality
+- GPU-accelerated video conversion with presets (H.264/H.265/AV1)
+- Real-time WebSocket updates for conversion progress
+- Job queue management for conversions
 - Scheduled directory scanning with node-cron
-- API documentation via Swagger UI (plugin registered but routes not documented)
+- Full Swagger UI API documentation
 
 ## Key Patterns
 
@@ -232,7 +335,54 @@ logger.error({ error }, 'Failed to extract metadata');
 Common file operations in `src/utils/file-utils.ts`:
 - `isVideoFile(path)` - Check if file is a supported video format
 - `getFileSize(path)` - Get file size in bytes
-- `computeFileHash(path)` - Compute SHA256 hash
+- `computeFileHash(path)` - Compute XXH3 hash (128-bit partial for files >= 10MB, 64-bit full for smaller files)
+- `computeFullHash(path)` - Compute full XXH3-64 streaming hash (used for collision resolution)
+
+**Hash Implementation**:
+- Uses XXH3 (xxHash3) via `@node-rs/xxhash` for extremely fast hashing
+- Files < 10MB: full XXH3-64 streaming hash (~5ms)
+- Files >= 10MB: partial XXH3-128 hash sampling 4MB start + 4MB middle + 4MB end + file size (~5-10ms)
+- **Collision detection**: automatic fallback to full XXH3-64 streaming hash when partial hash collision detected
+  - Uses 64-bit for full hash (vs 128-bit for partial) due to library streaming limitations
+  - Safe: probability of 64-bit collision AFTER 128-bit partial collision is negligible
+  - Enables true streaming with no memory limits (critical for files >4GB)
+- ~50-100x faster than SHA256 while maintaining sufficient uniqueness for duplicate detection
+
+## Module-Specific Patterns
+
+### Playlists
+- Videos are ordered by `position` integer field
+- Adding video without position auto-assigns to end (MAX(position) + 1)
+- Position conflicts can occur during reordering - handle via transaction-like updates
+- `GET /api/playlists/:id/videos` returns videos with `thumbnail_url` field populated from LEFT JOIN with thumbnails table
+
+### Thumbnails
+- **One thumbnail per video** (UNIQUE constraint on `video_id`)
+- **Auto-generated** during directory scan if missing
+- **Format**: WebP by default (configurable: webp or jpg) for 30-40% storage savings
+- **Frame selection**: Percentage-based (default 20% of video duration) for better content representation
+  - Scales with video length (20% of 10s = 2s, 20% of 2hr = 24min)
+  - Avoids intros and credits
+  - Fallback to fixed timestamp if duration unavailable
+- **Quality control**: Configurable compression (1-100 scale, default 80)
+- **API options**:
+  - `timestamp`: Override with specific second (e.g., 30.5)
+  - `positionPercent`: Override with percentage (e.g., 50 for midpoint)
+- **Serving**: `/api/thumbnails/:id/image` with dynamic content-type (image/webp or image/jpeg)
+- **Storage**: `file_size_bytes` populated, dimensions parsed from `THUMBNAIL_SIZE` env
+
+### Conversions
+- Jobs are queued and processed sequentially (one at a time)
+- FFmpeg progress parsed from stderr output (timemarks converted to percentage)
+- Cancellation sends SIGTERM to FFmpeg process
+- Output files follow pattern: `{video_id}_{preset}_{timestamp}.mkv`
+- WebSocket broadcasts require active connection - missed updates not queued
+
+### Backup
+- Exports database and optionally includes video files
+- Uses streaming for large file exports
+- Database export via `.backup()` SQLite command
+- Video files copied to temporary archive then streamed as ZIP
 
 ## Database Schema Highlights
 
@@ -244,5 +394,65 @@ Common file operations in `src/utils/file-utils.ts`:
   - `video_creators` (videos ↔ creators)
   - `video_tags` (videos ↔ tags)
   - `playlist_videos` (playlists ↔ videos with position)
+- **One-to-one relationships**:
+  - `thumbnails` (video_id UNIQUE - one thumbnail per video)
+- **New tables for Phase 4-7**:
+  - `conversions` - Video conversion jobs with status, progress, and output paths
+  - `ratings` - Video ratings with 1-5 stars and optional comments
+  - `bookmarks` - Timestamp bookmarks within videos
+  - `favorites` - User-favorited videos
+  - `video_metadata` - Custom key-value metadata per video
 
 See `src/database/schema.sql` for complete schema.
+
+## API Endpoints Summary
+
+All endpoints are prefixed with `/api`. Full documentation available at `/docs` (Swagger UI).
+
+**Authentication**: `/auth/*`
+- Register (once only), login, logout, get current user
+
+**Videos**: `/videos/*`
+- CRUD operations, streaming, verification, search/filter
+- `/videos/:id/stream` - HTTP range request streaming
+- `/videos/:id/convert` - Start conversion job
+- `/videos/:id/conversions` - List conversions for video
+- `/videos/:id/thumbnails` - Generate/get thumbnails
+
+**Directories**: `/directories/*`
+- Register, update, delete, scan, statistics
+
+**Creators**: `/creators/*`
+- CRUD operations, list videos by creator
+
+**Tags**: `/tags/*`
+- CRUD operations with parent/child support, list videos by tag
+
+**Ratings**: `/ratings/*`
+- CRUD operations, list ratings by video
+
+**Thumbnails**: `/thumbnails/*`
+- Generate (auto or manual), serve image, delete
+- `/thumbnails/:id/image` - Serve thumbnail (WebP or JPEG, dynamic content-type)
+- Generation parameters: `timestamp` (seconds) or `positionPercent` (0-100)
+
+**Playlists**: `/playlists/*`
+- CRUD operations, add/remove videos, reorder
+- `/playlists/:id/videos` - Get videos in playlist (includes thumbnail URLs)
+
+**Favorites**: `/favorites/*`
+- Add/remove favorites, list user favorites
+
+**Bookmarks**: `/bookmarks/*`
+- CRUD operations, list bookmarks by video
+
+**Conversions**: `/conversions/*`
+- Get job status, cancel, delete, download result
+- `/conversions/:id/download` - Download converted video
+- `/presets` - List available conversion presets
+
+**Backup**: `/backup/*`
+- Export database and optionally video files as ZIP
+
+**WebSocket**: `/ws`
+- Real-time conversion progress updates

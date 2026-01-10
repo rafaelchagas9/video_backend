@@ -146,15 +146,26 @@ export class PlaylistsService {
       throw new ForbiddenError('You do not have permission to view this playlist');
     }
 
-    return this.db
+    const videos = this.db
       .prepare(`
-        SELECT v.*, pv.position, pv.added_at as added_to_playlist_at
+        SELECT
+          v.*,
+          pv.position,
+          pv.added_at as added_to_playlist_at,
+          t.id as thumbnail_id
         FROM videos v
         INNER JOIN playlist_videos pv ON v.id = pv.video_id
+        LEFT JOIN thumbnails t ON v.id = t.video_id
         WHERE pv.playlist_id = ?
         ORDER BY pv.position ASC
       `)
-      .all(playlistId);
+      .all(playlistId) as any[];
+
+    // Add thumbnail_url to each video
+    return videos.map(video => ({
+      ...video,
+      thumbnail_url: video.thumbnail_id ? `/api/thumbnails/${video.thumbnail_id}/image` : null
+    }));
   }
 
   async reorderVideos(playlistId: number, userId: number, positions: { video_id: number; position: number }[]): Promise<void> {

@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { stat } from 'fs/promises';
 import ffmpeg from 'fluent-ffmpeg';
 import { getDatabase } from '@/config/database';
 import { env } from '@/config/env';
@@ -35,34 +36,80 @@ export class ThumbnailsService {
       await this.delete(existing.id);
     }
 
-    const timestamp = input?.timestamp ?? env.THUMBNAIL_TIMESTAMP;
-    const filename = `thumbnail_${videoId}_${Date.now()}.jpg`;
+    // Parse width and height from THUMBNAIL_SIZE env variable (e.g., "320x240")
+    const [width, height] = env.THUMBNAIL_SIZE.split('x').map(Number);
+
+    // Calculate timestamp from percentage or use override
+    let timestamp: number;
+    if (input?.timestamp !== undefined) {
+      // User provided explicit timestamp (seconds)
+      timestamp = input.timestamp;
+    } else if (input?.positionPercent !== undefined) {
+      // User provided percentage (0-100)
+      if (!video.duration_seconds) {
+        throw new InternalServerError('Video duration not available for percentage calculation');
+      }
+      timestamp = video.duration_seconds * (input.positionPercent / 100);
+    } else {
+      // Use default percentage from env
+      if (!video.duration_seconds) {
+        // Fallback to old fixed timestamp if duration unavailable
+        timestamp = env.THUMBNAIL_TIMESTAMP;
+      } else {
+        timestamp = video.duration_seconds * (env.THUMBNAIL_POSITION_PERCENT / 100);
+      }
+    }
+
+    // Validate timestamp bounds
+    if (video.duration_seconds) {
+      timestamp = Math.max(0, Math.min(timestamp, video.duration_seconds - 1));
+    }
+
+    const format = env.THUMBNAIL_FORMAT;
+    const filename = `thumbnail_${videoId}_${Date.now()}.${format}`;
     const outputPath = join(env.THUMBNAILS_DIR, filename);
 
     return new Promise((resolve, reject) => {
-      ffmpeg(video.file_path)
+      const command = ffmpeg(video.file_path)
         .screenshots({
           timestamps: [timestamp],
           filename: filename,
           folder: env.THUMBNAILS_DIR,
           size: env.THUMBNAIL_SIZE,
-        })
+        });
+
+      // Add quality settings based on format
+      if (format === 'webp') {
+        // WebP quality (0-100 scale)
+        command.outputOptions(['-quality', env.THUMBNAIL_QUALITY.toString()]);
+      } else {
+        // JPEG quality (2-31 scale, lower is better)
+        // Convert from 0-100 scale (higher is better) to 2-31 scale (lower is better)
+        const jpegQuality = Math.round(2 + ((100 - env.THUMBNAIL_QUALITY) / 100) * 29);
+        command.outputOptions(['-qscale:v', jpegQuality.toString()]);
+      }
+
+      command
         .on('end', async () => {
           try {
-            // Get file stats (size) could be added here but we'll trust ffmpeg worked
-            // Let's insert into DB
+            // Get file size
+            const stats = await stat(outputPath);
+            const fileSize = stats.size;
+
+            // Insert into DB
             const result = this.db
               .prepare(
                 `INSERT INTO thumbnails (
-                  video_id, file_path, timestamp_seconds, width, height
-                ) VALUES (?, ?, ?, ?, ?)`
+                  video_id, file_path, file_size_bytes, timestamp_seconds, width, height
+                ) VALUES (?, ?, ?, ?, ?, ?)`
               )
               .run(
                 videoId,
                 outputPath,
+                fileSize,
                 timestamp,
-                320, // Default width from env constant assumption or parse it
-                240  // Default height
+                width,
+                height
               );
 
             const thumbnail = await this.findById(result.lastInsertRowid as number);

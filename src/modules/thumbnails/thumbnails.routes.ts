@@ -95,7 +95,11 @@ export async function thumbnailsRoutes(
       const { id } = request.params as { id: string };
       const thumbnail = await thumbnailsService.findById(Number(id));
 
-      reply.header("Content-Type", "image/jpeg");
+      // Determine mime type from file extension
+      const ext = thumbnail.file_path.split('.').pop()?.toLowerCase();
+      const mimeType = ext === 'webp' ? 'image/webp' : 'image/jpeg';
+
+      reply.header("Content-Type", mimeType);
       const buffer = readFileSync(thumbnail.file_path);
       return reply.send(buffer);
     },

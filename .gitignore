@@ -21,8 +21,6 @@ dist/
 # Database
 data/
 
-videos/
-
 # IDE
 .vscode/
 .idea/

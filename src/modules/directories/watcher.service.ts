@@ -1,7 +1,7 @@
 import { readdir } from "fs/promises";
 import { join, basename } from "path";
 import { getDatabase } from "@/config/database";
-import { isVideoFile, getFileSize, computeFileHash } from "@/utils/file-utils";
+import { isVideoFile, getFileSize, computeFileHash, computeFullHash } from "@/utils/file-utils";
 import { logger } from "@/utils/logger";
 import { metadataService } from "@/modules/videos/metadata.service";
 import { directoriesService } from "./directories.service";
@@ -293,25 +293,66 @@ export class WatcherService {
         };
       }
 
-      // Compute file hash (async, don't block)
+      // Compute file hash with collision detection
       let fileHash: string | null = null;
       const hashStart = Date.now();
-      const PARTIAL_HASH_THRESHOLD = 1 * 1024 * 1024 * 1024; // 2GB
-      const hashMethod = fileSize >= PARTIAL_HASH_THRESHOLD ? 'partial' : 'full';
-      
+      let hashMethod = 'partial';
+
       try {
         logger.debug(
-          { filePath, fileSizeGB: (fileSize / (1024 ** 3)).toFixed(2), method: hashMethod },
-          `Computing file hash (${hashMethod})...`,
+          { filePath, fileSizeGB: (fileSize / (1024 ** 3)).toFixed(2) },
+          'Computing partial file hash...',
         );
-        fileHash = await computeFileHash(filePath);
+
+        // Step 1: Compute partial hash (fast)
+        const partialHash = await computeFileHash(filePath);
+
+        // Step 2: Check for collision in database
+        const collision = this.db
+          .prepare('SELECT id, file_path FROM videos WHERE file_hash = ? AND file_path != ?')
+          .get(partialHash, filePath) as { id: number; file_path: string } | undefined;
+
+        if (collision) {
+          // Collision detected! Compute full hash for both files
+          logger.warn(
+            {
+              currentFile: filePath,
+              collidingFile: collision.file_path,
+              partialHash,
+            },
+            'Partial hash collision detected, computing full hash',
+          );
+
+          hashMethod = 'full';
+          fileHash = await computeFullHash(filePath);
+
+          // Also recompute full hash for the colliding file and update it
+          const collidingFileFullHash = await computeFullHash(collision.file_path);
+          this.db
+            .prepare('UPDATE videos SET file_hash = ? WHERE id = ?')
+            .run(collidingFileFullHash, collision.id);
+
+          logger.info(
+            {
+              currentFile: filePath,
+              currentHash: fileHash,
+              collidingFile: collision.file_path,
+              collidingHash: collidingFileFullHash,
+            },
+            'Resolved hash collision with full hashes',
+          );
+        } else {
+          // No collision, use partial hash
+          fileHash = partialHash;
+        }
+
         const hashDuration = Date.now() - hashStart;
-        
+
         if (hashDuration > 2000) {
           logger.warn(
-            { 
-              filePath, 
-              durationMs: hashDuration, 
+            {
+              filePath,
+              durationMs: hashDuration,
               fileSizeGB: (fileSize / (1024 ** 3)).toFixed(2),
               method: hashMethod,
             },

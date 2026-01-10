@@ -28,4 +28,4 @@ export const API_PREFIX = '/api';
 
 export const COOKIE_NAME = 'session_id';
 
-export const HASH_ALGORITHM = 'sha256';
+export const HASH_ALGORITHM = 'xxh3-128'; // XXH3-128 (128-bit xxHash3)

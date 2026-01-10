@@ -5,6 +5,8 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
+import websocket from "@fastify/websocket";
+import multipart from "@fastify/multipart";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -65,8 +67,9 @@ export async function buildServer() {
     crossOriginEmbedderPolicy: false,
   });
 
+
   await fastify.register(rateLimit, {
-    max: 100, // 100 requests per minute
+    max: 10000, // Very high limit for private single-user app
     timeWindow: "1 minute",
   });
 
@@ -91,6 +94,7 @@ export async function buildServer() {
         { name: "videos", description: "Video management" },
         { name: "directories", description: "Directory management" },
         { name: "creators", description: "Creator management" },
+        { name: "studios", description: "Studio and network management" },
         { name: "tags", description: "Tag management" },
         { name: "ratings", description: "Rating management" },
         { name: "thumbnails", description: "Thumbnail management" },
@@ -98,6 +102,7 @@ export async function buildServer() {
         { name: "favorites", description: "Favorites management" },
         { name: "bookmarks", description: "Bookmark management" },
         { name: "backup", description: "Database backup and export" },
+        { name: "conversion", description: "Video conversion and transcoding" },
         { name: "scheduler", description: "Scan scheduling" },
         { name: "system", description: "System health and status" },
       ],
@@ -109,6 +114,17 @@ export async function buildServer() {
     uiConfig: {
       docExpansion: "list",
       deepLinking: true,
+    },
+  });
+
+  // WebSocket support
+  await fastify.register(websocket);
+
+  // Multipart form data support (for file uploads)
+  await fastify.register(multipart, {
+    limits: {
+      fileSize: 5 * 1024 * 1024, // 5MB max file size for profile pictures
+      files: 1, // Only one file per request
     },
   });
 
@@ -172,6 +188,8 @@ export async function buildServer() {
       const { videosRoutes } = await import("./modules/videos/videos.routes");
       const { creatorsRoutes } =
         await import("./modules/creators/creators.routes");
+      const { studiosRoutes } =
+        await import("./modules/studios/studios.routes");
       const { tagsRoutes } = await import("./modules/tags/tags.routes");
       const { ratingsRoutes } =
         await import("./modules/ratings/ratings.routes");
@@ -184,11 +202,13 @@ export async function buildServer() {
       const { bookmarksRoutes } =
         await import("./modules/bookmarks/bookmarks.routes");
       const { backupRoutes } = await import("./modules/backup/backup.routes");
+      const { conversionRoutes } = await import("./modules/conversion/conversion.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
       await instance.register(videosRoutes, { prefix: "/videos" });
       await instance.register(creatorsRoutes, { prefix: "/creators" });
+      await instance.register(studiosRoutes, { prefix: "/studios" });
       await instance.register(tagsRoutes, { prefix: "/tags" });
       await instance.register(ratingsRoutes, { prefix: "/ratings" });
       await instance.register(thumbnailsRoutes, { prefix: "/" }); // Register at root so it can handle /videos/... and /thumbnails/... prefixes itself or via internally defined paths
@@ -196,6 +216,7 @@ export async function buildServer() {
       await instance.register(favoritesRoutes, { prefix: "/favorites" });
       await instance.register(bookmarksRoutes, { prefix: "/bookmarks" });
       await instance.register(backupRoutes, { prefix: "/backup" });
+      await instance.register(conversionRoutes, { prefix: "/" }); // Conversion routes handle /videos/:id/convert and /conversions/:id paths
     },
     { prefix: API_PREFIX },
   );
@@ -205,6 +226,13 @@ export async function buildServer() {
     schedulerService.start().catch((err) => {
       fastify.log.error(err, "Failed to start scheduler");
     });
+
+    // Register WebSocket service and start conversion queue
+    const { websocketService } = await import("./modules/websocket/websocket");
+    const { conversionService } = await import("./modules/conversion/conversion.service");
+    
+    await websocketService.register(fastify);
+    await conversionService.startQueue();
   }
 
   // 404 handler

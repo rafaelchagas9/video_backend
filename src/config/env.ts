@@ -11,6 +11,7 @@ const envSchema = z.object({
 
   // Paths
   THUMBNAILS_DIR: z.string().default('./data/thumbnails'),
+  PROFILE_PICTURES_DIR: z.string().default('./data/profile-pictures'),
   LOGS_DIR: z.string().default('./logs'),
 
   // Authentication
@@ -22,10 +23,23 @@ const envSchema = z.object({
   FFPROBE_PATH: z.string().default('/usr/bin/ffprobe'),
   THUMBNAIL_SIZE: z.string().default('320x240'),
   THUMBNAIL_TIMESTAMP: z.string().default('5.0').transform(Number),
+  THUMBNAIL_FORMAT: z.enum(['webp', 'jpg']).default('webp'),
+  THUMBNAIL_QUALITY: z.string().default('80').transform(Number).pipe(z.number().min(1).max(100)),
+  THUMBNAIL_POSITION_PERCENT: z.string().default('20').transform(Number).pipe(z.number().min(0).max(100)),
 
   // File Scanning
   DEFAULT_SCAN_INTERVAL_MINUTES: z.string().default('30').transform(Number),
   MAX_FILE_SIZE_GB: z.string().default('50').transform(Number),
+
+  // GPU Acceleration (VAAPI for AMD)
+  VAAPI_DEVICE: z.string().default('/dev/dri/renderD128'),
+  CONVERTED_VIDEOS_DIR: z.string().default('./data/converted'),
+
+  // Redis (for job queue)
+  REDIS_URL: z.string().default('redis://localhost:6379'),
+
+  // Conversion
+  CONVERSION_MAX_CONCURRENT: z.string().default('2').transform(Number),
 });
 
 function loadEnv() {

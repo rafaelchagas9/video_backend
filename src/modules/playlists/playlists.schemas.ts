@@ -34,6 +34,8 @@ const playlistVideoSchema = z.object({
   title: z.string().nullable(),
   duration_seconds: z.number().nullable(),
   position: z.number(),
+  thumbnail_id: z.number().nullable(),
+  thumbnail_url: z.string().nullable(),
 });
 
 const errorSchema = z.object({

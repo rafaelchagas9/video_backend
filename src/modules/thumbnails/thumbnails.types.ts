@@ -11,8 +11,13 @@ export interface Thumbnail {
   generated_at: string;
 }
 
-export const generateThumbnailSchema = z.object({
-  timestamp: z.number().min(0).optional(), // Optional override
-});
+export const generateThumbnailSchema = z
+  .object({
+    timestamp: z.number().min(0).optional(), // Optional override (seconds)
+    positionPercent: z.number().min(0).max(100).optional(), // Optional override (percentage)
+  })
+  .refine((data) => !(data.timestamp && data.positionPercent), {
+    message: 'Cannot specify both timestamp and positionPercent',
+  });
 
 export type GenerateThumbnailInput = z.infer<typeof generateThumbnailSchema>;
