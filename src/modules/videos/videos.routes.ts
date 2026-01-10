@@ -33,6 +33,11 @@ import {
   bookmarkCreatedResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
+  bulkDeleteVideosSchema,
+  bulkUpdateCreatorsSchema,
+  bulkUpdateTagsSchema,
+  bulkUpdateStudiosSchema,
+  bulkUpdateFavoritesSchema,
 } from "./videos.schemas";
 
 export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -66,6 +71,127 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         success: true,
         ...result,
+      });
+    },
+  );
+
+  // Bulk Actions
+  app.post(
+    "/bulk/delete",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Bulk delete videos",
+        description: "Deletes multiple videos by ID.",
+        body: bulkDeleteVideosSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await videosService.bulkDelete(request.body.ids);
+
+      return reply.send({
+        success: true,
+        message: "Videos deleted successfully",
+      });
+    },
+  );
+
+  app.post(
+    "/bulk/creators",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Bulk update creators",
+        description: "Adds or removes creators for multiple videos.",
+        body: bulkUpdateCreatorsSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await videosService.bulkUpdateCreators(request.body);
+
+      return reply.send({
+        success: true,
+        message: "Creators updated successfully",
+      });
+    },
+  );
+
+  app.post(
+    "/bulk/tags",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Bulk update tags",
+        description: "Adds or removes tags for multiple videos.",
+        body: bulkUpdateTagsSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await videosService.bulkUpdateTags(request.body);
+
+      return reply.send({
+        success: true,
+        message: "Tags updated successfully",
+      });
+    },
+  );
+
+  app.post(
+    "/bulk/studios",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Bulk update studios",
+        description: "Adds or removes studios for multiple videos.",
+        body: bulkUpdateStudiosSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await videosService.bulkUpdateStudios(request.body);
+
+      return reply.send({
+        success: true,
+        message: "Studios updated successfully",
+      });
+    },
+  );
+
+  app.post(
+    "/bulk/favorites",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Bulk update favorites",
+        description: "Sets favorite status for multiple videos.",
+        body: bulkUpdateFavoritesSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await videosService.bulkUpdateFavorites(request.user!.id, request.body);
+
+      return reply.send({
+        success: true,
+        message: "Favorites updated successfully",
       });
     },
   );

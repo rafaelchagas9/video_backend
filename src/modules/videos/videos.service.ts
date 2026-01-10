@@ -363,7 +363,7 @@ export class VideosService {
     };
   }
 
-  async findById(id: number, userId: number): Promise<Video & { thumbnail_url?: string | null; thumbnail_base64?: string | null }> {
+  async findById(id: number, userId?: number): Promise<Video & { thumbnail_url?: string | null; thumbnail_base64?: string | null }> {
     const video = this.db
       .prepare(`
         SELECT v.*, t.id as thumbnail_id, t.file_path as thumbnail_file_path
@@ -377,7 +377,10 @@ export class VideosService {
       throw new NotFoundError(`Video not found with id: ${id}`);
     }
 
-    const isFavorite = this.db.prepare('SELECT 1 FROM favorites WHERE user_id = ? AND video_id = ?').get(userId, id) ? true : false;
+    let isFavorite = false;
+    if (userId) {
+      isFavorite = this.db.prepare('SELECT 1 FROM favorites WHERE user_id = ? AND video_id = ?').get(userId, id) ? true : false;
+    }
 
     video.is_favorite = isFavorite;
 
@@ -499,6 +502,108 @@ export class VideosService {
       .all(videoId);
 
     return studios;
+  }
+
+  // Bulk Actions
+  async bulkDelete(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
+
+    const placeholders = ids.map(() => '?').join(',');
+    this.db.prepare(`DELETE FROM videos WHERE id IN (${placeholders})`).run(...ids);
+  }
+
+  async bulkUpdateCreators(input: { videoIds: number[]; creatorIds: number[]; action: 'add' | 'remove' }): Promise<void> {
+    const { videoIds, creatorIds, action } = input;
+    if (videoIds.length === 0 || creatorIds.length === 0) return;
+
+    const update = this.db.transaction(() => {
+      if (action === 'add') {
+        const insert = this.db.prepare('INSERT OR IGNORE INTO video_creators (video_id, creator_id) VALUES (?, ?)');
+        for (const videoId of videoIds) {
+          for (const creatorId of creatorIds) {
+            insert.run(videoId, creatorId);
+          }
+        }
+      } else {
+        const deleteStmt = this.db.prepare(
+          `DELETE FROM video_creators WHERE video_id = ? AND creator_id IN (${creatorIds.map(() => '?').join(',')})`
+        );
+        for (const videoId of videoIds) {
+          deleteStmt.run(videoId, ...creatorIds);
+        }
+      }
+    });
+
+    update();
+  }
+
+  async bulkUpdateTags(input: { videoIds: number[]; tagIds: number[]; action: 'add' | 'remove' }): Promise<void> {
+    const { videoIds, tagIds, action } = input;
+    if (videoIds.length === 0 || tagIds.length === 0) return;
+
+    const update = this.db.transaction(() => {
+      if (action === 'add') {
+        const insert = this.db.prepare('INSERT OR IGNORE INTO video_tags (video_id, tag_id) VALUES (?, ?)');
+        for (const videoId of videoIds) {
+          for (const tagId of tagIds) {
+            insert.run(videoId, tagId);
+          }
+        }
+      } else {
+        const deleteStmt = this.db.prepare(
+          `DELETE FROM video_tags WHERE video_id = ? AND tag_id IN (${tagIds.map(() => '?').join(',')})`
+        );
+        for (const videoId of videoIds) {
+          deleteStmt.run(videoId, ...tagIds);
+        }
+      }
+    });
+
+    update();
+  }
+
+  async bulkUpdateStudios(input: { videoIds: number[]; studioIds: number[]; action: 'add' | 'remove' }): Promise<void> {
+    const { videoIds, studioIds, action } = input;
+    if (videoIds.length === 0 || studioIds.length === 0) return;
+
+    const update = this.db.transaction(() => {
+      if (action === 'add') {
+        const insert = this.db.prepare('INSERT OR IGNORE INTO video_studios (video_id, studio_id) VALUES (?, ?)');
+        for (const videoId of videoIds) {
+          for (const studioId of studioIds) {
+            insert.run(videoId, studioId);
+          }
+        }
+      } else {
+        const deleteStmt = this.db.prepare(
+          `DELETE FROM video_studios WHERE video_id = ? AND studio_id IN (${studioIds.map(() => '?').join(',')})`
+        );
+        for (const videoId of videoIds) {
+          deleteStmt.run(videoId, ...studioIds);
+        }
+      }
+    });
+
+    update();
+  }
+
+  async bulkUpdateFavorites(userId: number, input: { videoIds: number[]; isFavorite: boolean }): Promise<void> {
+    const { videoIds, isFavorite } = input;
+    if (videoIds.length === 0) return;
+
+    const update = this.db.transaction(() => {
+      if (isFavorite) {
+        const insert = this.db.prepare('INSERT OR IGNORE INTO favorites (user_id, video_id) VALUES (?, ?)');
+        for (const videoId of videoIds) {
+          insert.run(userId, videoId);
+        }
+      } else {
+        const placeholders = videoIds.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM favorites WHERE user_id = ? AND video_id IN (${placeholders})`).run(userId, ...videoIds);
+      }
+    });
+
+    update();
   }
 }
 

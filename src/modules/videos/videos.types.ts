@@ -95,3 +95,26 @@ export interface ListVideosOptions {
   hasThumbnail?: boolean;
   isAvailable?: boolean;
 }
+
+export interface BulkUpdateCreatorsInput {
+  videoIds: number[];
+  creatorIds: number[];
+  action: 'add' | 'remove';
+}
+
+export interface BulkUpdateTagsInput {
+  videoIds: number[];
+  tagIds: number[];
+  action: 'add' | 'remove';
+}
+
+export interface BulkUpdateStudiosInput {
+  videoIds: number[];
+  studioIds: number[];
+  action: 'add' | 'remove';
+}
+
+export interface BulkUpdateFavoritesInput {
+  videoIds: number[];
+  isFavorite: boolean;
+}

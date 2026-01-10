@@ -21,6 +21,7 @@ import {
   socialLinkListResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
+  bulkUpdateCreatorsSchema,
 } from "./studios.schemas";
 
 export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -378,6 +379,34 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         success: true,
         message: "Social link deleted successfully",
+      });
+    },
+  );
+
+  // Bulk update creators for studio
+  app.post(
+    "/:id/creators/bulk",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Bulk update creators",
+        description: "Adds or removes multiple creators for this studio.",
+        params: idParamSchema,
+        body: bulkUpdateCreatorsSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      await studiosService.bulkUpdateCreators(Number(id), request.body);
+
+      return reply.send({
+        success: true,
+        message: "Creators updated successfully",
       });
     },
   );

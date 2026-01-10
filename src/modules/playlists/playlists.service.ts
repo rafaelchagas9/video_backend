@@ -188,6 +188,42 @@ export class PlaylistsService {
       }
     }
   }
+
+  // Bulk Actions
+  async bulkUpdateVideos(playlistId: number, userId: number, input: { videoIds: number[]; action: 'add' | 'remove' }): Promise<void> {
+    const { videoIds, action } = input;
+    if (videoIds.length === 0) return;
+
+    const playlist = await this.findById(playlistId);
+    if (playlist.user_id !== userId) {
+      throw new ForbiddenError('You do not have permission to modify this playlist');
+    }
+
+    const update = this.db.transaction(() => {
+      if (action === 'add') {
+        // Get current max position
+        const result = this.db.prepare('SELECT MAX(position) as maxPos FROM playlist_videos WHERE playlist_id = ?').get(playlistId) as { maxPos: number | null };
+        let nextPos = (result.maxPos ?? -1) + 1;
+
+        const insert = this.db.prepare('INSERT OR IGNORE INTO playlist_videos (playlist_id, video_id, position) VALUES (?, ?, ?)');
+        
+        for (const videoId of videoIds) {
+          // Check if exists to avoid incrementing position unnecessarily
+          const exists = this.db.prepare('SELECT 1 FROM playlist_videos WHERE playlist_id = ? AND video_id = ?').get(playlistId, videoId);
+          if (!exists) {
+            insert.run(playlistId, videoId, nextPos++);
+          }
+        }
+      } else {
+        const deleteStmt = this.db.prepare(
+          `DELETE FROM playlist_videos WHERE playlist_id = ? AND video_id IN (${videoIds.map(() => '?').join(',')})`
+        );
+        deleteStmt.run(playlistId, ...videoIds);
+      }
+    });
+
+    update();
+  }
 }
 
 export const playlistsService = new PlaylistsService();

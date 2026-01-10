@@ -311,6 +311,30 @@ export class StudiosService {
       )
       .all(videoId) as Studio[];
   }
+
+  // Bulk Actions
+  async bulkUpdateCreators(studioId: number, input: { creatorIds: number[]; action: 'add' | 'remove' }): Promise<void> {
+    const { creatorIds, action } = input;
+    if (creatorIds.length === 0) return;
+
+    await this.findById(studioId); // Ensure studio exists
+
+    const update = this.db.transaction(() => {
+      if (action === 'add') {
+        const insert = this.db.prepare('INSERT OR IGNORE INTO creator_studios (creator_id, studio_id) VALUES (?, ?)');
+        for (const creatorId of creatorIds) {
+          insert.run(creatorId, studioId);
+        }
+      } else {
+        const deleteStmt = this.db.prepare(
+          `DELETE FROM creator_studios WHERE studio_id = ? AND creator_id IN (${creatorIds.map(() => '?').join(',')})`
+        );
+        deleteStmt.run(studioId, ...creatorIds);
+      }
+    });
+
+    update();
+  }
 }
 
 export const studiosService = new StudiosService();

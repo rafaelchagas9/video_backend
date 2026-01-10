@@ -14,6 +14,7 @@ import {
   playlistVideosResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
+  bulkUpdatePlaylistVideosSchema,
 } from "./playlists.schemas";
 
 export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -187,6 +188,38 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         success: true,
         data: videos as any,
+      });
+    },
+  );
+
+  // Bulk update videos in playlist
+  app.post(
+    "/:id/videos/bulk",
+    {
+      schema: {
+        tags: ["playlists"],
+        summary: "Bulk update videos in playlist",
+        description: "Adds or removes multiple videos for this playlist. For 'add', videos are appended to the end.",
+        params: idParamSchema,
+        body: bulkUpdatePlaylistVideosSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      await playlistsService.bulkUpdateVideos(
+        Number(id),
+        request.user!.id,
+        request.body
+      );
+
+      return reply.send({
+        success: true,
+        message: "Playlist videos updated successfully",
       });
     },
   );

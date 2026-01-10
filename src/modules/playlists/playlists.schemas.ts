@@ -68,3 +68,8 @@ export const errorResponseSchema = z.object({
   success: z.literal(false),
   error: errorSchema,
 });
+
+export const bulkUpdatePlaylistVideosSchema = z.object({
+  videoIds: z.array(z.number().int().positive()).min(1),
+  action: z.enum(['add', 'remove']),
+});

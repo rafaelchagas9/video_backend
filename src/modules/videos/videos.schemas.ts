@@ -298,3 +298,31 @@ export const errorResponseSchema = z.object({
   success: z.literal(false),
   error: errorSchema,
 });
+
+// Bulk Action Schemas
+export const bulkDeleteVideosSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1),
+});
+
+export const bulkUpdateCreatorsSchema = z.object({
+  videoIds: z.array(z.number().int().positive()).min(1),
+  creatorIds: z.array(z.number().int().positive()).min(1),
+  action: z.enum(['add', 'remove']),
+});
+
+export const bulkUpdateTagsSchema = z.object({
+  videoIds: z.array(z.number().int().positive()).min(1),
+  tagIds: z.array(z.number().int().positive()).min(1),
+  action: z.enum(['add', 'remove']),
+});
+
+export const bulkUpdateStudiosSchema = z.object({
+  videoIds: z.array(z.number().int().positive()).min(1),
+  studioIds: z.array(z.number().int().positive()).min(1),
+  action: z.enum(['add', 'remove']),
+});
+
+export const bulkUpdateFavoritesSchema = z.object({
+  videoIds: z.array(z.number().int().positive()).min(1),
+  isFavorite: z.boolean(),
+});

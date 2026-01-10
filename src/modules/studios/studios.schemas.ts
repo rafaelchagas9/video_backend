@@ -117,3 +117,8 @@ export const errorResponseSchema = z.object({
   success: z.literal(false),
   error: errorSchema,
 });
+
+export const bulkUpdateCreatorsSchema = z.object({
+  creatorIds: z.array(z.number().int().positive()).min(1),
+  action: z.enum(['add', 'remove']),
+});
