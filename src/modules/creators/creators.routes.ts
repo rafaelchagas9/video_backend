@@ -23,6 +23,13 @@ import {
   studioListResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
+  bulkPlatformsSchema,
+  bulkSocialLinksSchema,
+  pictureFromUrlSchema,
+  bulkOperationResponseSchema,
+  bulkImportQuerySchema,
+  bulkCreatorImportSchema,
+  bulkImportResponseSchema,
 } from "./creators.schemas";
 
 export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -105,6 +112,39 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: creator,
         message: "Creator created successfully",
+      });
+    },
+  );
+
+  // Bulk import creators
+  app.post(
+    "/bulk",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Bulk import creators",
+        description: "Creates or updates multiple creators with their platforms, social links, and video associations. Use dry_run=true to preview changes without applying.",
+        querystring: bulkImportQuerySchema,
+        body: bulkCreatorImportSchema,
+        response: {
+          200: bulkImportResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { dry_run } = request.query;
+      const { items, mode } = request.body;
+      
+      const result = await creatorsService.bulkImport(items, mode, dry_run);
+
+      return reply.send({
+        success: true,
+        data: result,
+        message: dry_run 
+          ? `Preview: ${result.summary.will_create} to create, ${result.summary.will_update} to update, ${result.summary.errors} errors`
+          : `Imported: ${result.summary.will_create} created, ${result.summary.will_update} updated`,
       });
     },
   );
@@ -437,6 +477,102 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: link,
         message: "Social link added successfully",
+      });
+    },
+  );
+
+  // Bulk upsert platforms
+  app.post(
+    "/:id/platforms/bulk",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Bulk upsert platform profiles",
+        description: "Creates or updates multiple platform profiles for a creator. Upserts by platform_id + username.",
+        params: idParamSchema,
+        body: bulkPlatformsSchema,
+        response: {
+          200: bulkOperationResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await creatorsService.bulkUpsertPlatforms(
+        request.params.id,
+        request.body.items,
+      );
+
+      return reply.send({
+        success: true,
+        data: result,
+        message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
+      });
+    },
+  );
+
+  // Bulk upsert social links
+  app.post(
+    "/:id/social-links/bulk",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Bulk upsert social links",
+        description: "Creates or updates multiple social links for a creator. Upserts by platform_name.",
+        params: idParamSchema,
+        body: bulkSocialLinksSchema,
+        response: {
+          200: bulkOperationResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await creatorsService.bulkUpsertSocialLinks(
+        request.params.id,
+        request.body.items,
+      );
+
+      return reply.send({
+        success: true,
+        data: result,
+        message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
+      });
+    },
+  );
+
+  // Set picture from URL
+  app.post(
+    "/:id/picture-from-url",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Set profile picture from URL",
+        description: "Downloads an image from the given URL and sets it as the creator's profile picture.",
+        params: idParamSchema,
+        body: pictureFromUrlSchema,
+        response: {
+          200: creatorResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const creator = await creatorsService.setPictureFromUrl(
+        request.params.id,
+        request.body.url,
+      );
+
+      return reply.send({
+        success: true,
+        data: creator,
+        message: "Profile picture set from URL successfully",
       });
     },
   );

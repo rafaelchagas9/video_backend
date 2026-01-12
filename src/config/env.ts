@@ -5,6 +5,7 @@ const envSchema = z.object({
   PORT: z.string().default('3000').transform(Number),
   HOST: z.string().default('localhost'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  BASE_URL: z.string().default('http://localhost:3000'),
 
   // Database
   DATABASE_PATH: z.string().default('./data/database.db'),
@@ -26,6 +27,12 @@ const envSchema = z.object({
   THUMBNAIL_FORMAT: z.enum(['webp', 'jpg']).default('webp'),
   THUMBNAIL_QUALITY: z.string().default('80').transform(Number).pipe(z.number().min(1).max(100)),
   THUMBNAIL_POSITION_PERCENT: z.string().default('20').transform(Number).pipe(z.number().min(0).max(100)),
+
+  // Storyboard (Vidstack slider thumbnails)
+  STORYBOARDS_DIR: z.string().default('./data/storyboards'),
+  STORYBOARD_TILE_WIDTH: z.string().default('256').transform(Number),
+  STORYBOARD_TILE_HEIGHT: z.string().default('144').transform(Number),
+  STORYBOARD_INTERVAL_SECONDS: z.string().default('5').transform(Number),
 
   // File Scanning
   DEFAULT_SCAN_INTERVAL_MINUTES: z.string().default('30').transform(Number),

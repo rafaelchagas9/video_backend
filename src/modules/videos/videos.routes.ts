@@ -13,6 +13,12 @@ import { createBookmarkSchema } from "@/modules/bookmarks/bookmarks.types";
 import {
   idParamSchema,
   listVideosQuerySchema,
+  nextVideoQuerySchema,
+  nextVideoResponseSchema,
+  triageQueueQuerySchema,
+  triageQueueResponseSchema,
+  compressionSuggestionsQuerySchema,
+  compressionSuggestionsResponseSchema,
   creatorIdParamSchema,
   tagIdParamSchema,
   studioIdParamSchema,
@@ -38,6 +44,7 @@ import {
   bulkUpdateTagsSchema,
   bulkUpdateStudiosSchema,
   bulkUpdateFavoritesSchema,
+  duplicatesResponseSchema,
 } from "./videos.schemas";
 
 export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -63,14 +70,100 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await videosService.list(
-        request.user!.id,
-         request.query
-        );
+      const result = await videosService.list(request.user!.id, request.query);
 
       return reply.send({
         success: true,
         ...result,
+      });
+    },
+  );
+
+  // Compression suggestions
+  app.get(
+    "/compression-suggestions",
+    {
+      schema: {
+        tags: ["videos", "compression"],
+        summary: "List compression suggestions",
+        description:
+          "Returns a ranked list of videos that could benefit from compression or downscaling.",
+        querystring: compressionSuggestionsQuerySchema,
+        response: {
+          200: compressionSuggestionsResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const suggestions = await videosService.getCompressionSuggestions(
+        request.query,
+      );
+
+      return reply.send({
+        success: true,
+        data: suggestions,
+      });
+    },
+  );
+
+  // Get next/previous video (triage navigation)
+  app.get(
+    "/next",
+    {
+      schema: {
+        tags: ["videos", "triage"],
+        summary: "Get next/previous video",
+        description:
+          "Navigate to next or previous video matching filter criteria with wrap-around support. Useful for triage workflows.",
+        querystring: nextVideoQuerySchema,
+        response: {
+          200: nextVideoResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videosService.getNextVideo(
+        request.user!.id,
+        request.query,
+      );
+
+      return reply.send({
+        success: true,
+        data: result.video,
+        meta: result.meta,
+      });
+    },
+  );
+
+  // Get triage queue (lightweight ID list)
+  app.get(
+    "/triage-queue",
+    {
+      schema: {
+        tags: ["videos", "triage"],
+        summary: "Get triage queue",
+        description:
+          "Returns a lightweight list of video IDs matching filter criteria for client-side navigation. Supports all filter options with configurable limit and offset.",
+        querystring: triageQueueQuerySchema,
+        response: {
+          200: triageQueueResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videosService.getTriageQueue(
+        request.user!.id,
+        request.query,
+      );
+
+      return reply.send({
+        success: true,
+        ids: result.ids,
+        total: result.total,
       });
     },
   );
@@ -196,6 +289,55 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // Get random video
+  app.get(
+    "/random",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Get random video",
+        description:
+          "Returns detailed information about a random available video.",
+        response: {
+          200: videoResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const video = await videosService.getRandomVideo(request.user!.id);
+      return reply.send({
+        success: true,
+        data: video,
+      });
+    },
+  );
+
+  // Get duplicate videos
+  app.get(
+    "/duplicates",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Get duplicate videos",
+        description:
+          "Returns groups of videos that share the same file hash, sorted by total size.",
+        response: {
+          200: duplicatesResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      const duplicates = await videosService.getDuplicates();
+      return reply.send({
+        success: true,
+        data: duplicates,
+      });
+    },
+  );
+
   // Get video by ID
   app.get(
     "/:id",
@@ -215,7 +357,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const video = await videosService.findById(
         request.params.id,
-        request.user!.id
+        request.user!.id,
       );
       return reply.send({
         success: true,
@@ -316,7 +458,8 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["videos"],
         summary: "Stream video",
-        description: "Streams the video file with HTTP range request support. Requires authentication.",
+        description:
+          "Streams the video file with HTTP range request support. Requires authentication.",
         params: idParamSchema,
         response: {
           401: errorResponseSchema,
@@ -326,18 +469,32 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const videoId = Number(id);
       const rangeHeader = request.headers.range;
 
+      // Queue storyboard generation if not already exists/processing
+      const { storyboardsService } = await import(
+        "@/modules/storyboards/storyboards.service"
+      );
+      // Non-blocking: queueGenerate handles deduplication and sequential processing
+      storyboardsService.queueGenerate(videoId);
+
       const result = await streamingService.createStream({
-        videoId: Number(id),
+        videoId,
         rangeHeader,
       });
 
       // Set CORS headers explicitly for streaming
-      reply.header("Access-Control-Allow-Origin", request.headers.origin || "*");
+      reply.header(
+        "Access-Control-Allow-Origin",
+        request.headers.origin || "*",
+      );
       reply.header("Access-Control-Allow-Credentials", "true");
-      reply.header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
-      
+      reply.header(
+        "Access-Control-Expose-Headers",
+        "Content-Range, Accept-Ranges, Content-Length",
+      );
+
       reply.status(result.statusCode);
       reply.headers(result.headers);
 

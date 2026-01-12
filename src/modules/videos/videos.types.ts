@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export interface Video {
   id: number;
@@ -51,7 +51,7 @@ export interface ListVideosOptions {
   directory_id?: number;
   search?: string;
   sort?: string;
-  order?: 'asc' | 'desc';
+  order?: "asc" | "desc";
   include_hidden?: boolean;
 
   // Resolution filters
@@ -88,33 +88,82 @@ export interface ListVideosOptions {
   creatorIds?: number[];
   tagIds?: number[];
   studioIds?: number[];
-  matchMode?: 'any' | 'all';
+  matchMode?: "any" | "all";
 
   // Presence flags
   isFavorite?: boolean;
   hasThumbnail?: boolean;
   isAvailable?: boolean;
+
+  // Relationship presence filters
+  hasTags?: boolean;
+  hasCreator?: boolean;
+  hasStudio?: boolean;
+  hasRating?: boolean;
 }
 
 export interface BulkUpdateCreatorsInput {
   videoIds: number[];
   creatorIds: number[];
-  action: 'add' | 'remove';
+  action: "add" | "remove";
 }
 
 export interface BulkUpdateTagsInput {
   videoIds: number[];
   tagIds: number[];
-  action: 'add' | 'remove';
+  action: "add" | "remove";
 }
 
 export interface BulkUpdateStudiosInput {
   videoIds: number[];
   studioIds: number[];
-  action: 'add' | 'remove';
+  action: "add" | "remove";
 }
 
 export interface BulkUpdateFavoritesInput {
   videoIds: number[];
   isFavorite: boolean;
+}
+
+export interface NextVideoOptions extends ListVideosOptions {
+  currentId: number;
+  direction?: "next" | "previous";
+}
+
+export interface NextVideoResult {
+  video: Video | null;
+  meta: {
+    remaining: number;
+    total_matching: number;
+    has_wrapped: boolean;
+  };
+}
+
+export interface TriageQueueOptions extends ListVideosOptions {
+  queueLimit?: number;
+  queueOffset?: number;
+}
+
+export interface TriageQueueResult {
+  ids: number[];
+  total: number;
+}
+
+export interface CompressionSuggestion {
+  video_id: number;
+  file_name: string;
+  file_size_bytes: number;
+  width: number | null;
+  height: number | null;
+  codec: string | null;
+  bitrate: number | null;
+  fps: number | null;
+  duration_seconds: number | null;
+  total_play_count: number;
+  total_watch_seconds: number;
+  last_played_at: string | null;
+  technical_score: number;
+  usage_score: number;
+  recommended_actions: string[];
+  reasons: string[];
 }

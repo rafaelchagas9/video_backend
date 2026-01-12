@@ -105,9 +105,9 @@ export class TagsService {
     try {
       const result = this.db
         .prepare(
-          'INSERT INTO tags (name, parent_id, description) VALUES (?, ?, ?)'
+          'INSERT INTO tags (name, parent_id, description, color) VALUES (?, ?, ?, ?)'
         )
-        .run(input.name, input.parent_id || null, input.description || null);
+        .run(input.name, input.parent_id || null, input.description || null, input.color || null);
 
       return this.findById(result.lastInsertRowid as number);
     } catch (error: any) {
@@ -155,6 +155,11 @@ export class TagsService {
     if (input.description !== undefined) {
       updates.push('description = ?');
       values.push(input.description);
+    }
+
+    if (input.color !== undefined) {
+      updates.push('color = ?');
+      values.push(input.color);
     }
 
     if (updates.length === 0) {

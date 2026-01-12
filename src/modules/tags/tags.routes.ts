@@ -29,10 +29,11 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["tags"],
         summary: "List all tags",
         description:
-          "Returns all tags. Use ?tree=true to get hierarchical structure.",
+          "Returns all tags. Use ?tree=true to get hierarchical structure. Response shape varies based on tree parameter.",
         querystring: treeQuerySchema,
         response: {
-          200: tagListResponseSchema, // We'll handle the union type manually or use 'fastify' if needed, but let's try strict first
+          // Note: Response schema validation disabled due to conditional response shape
+          // tree=false returns flat list, tree=true returns hierarchical structure
           401: errorResponseSchema,
         },
       },
@@ -40,12 +41,10 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       if (request.query.tree === "true") {
         const tagTree = await tagsService.getTree();
-        // The schema expects tagListResponseSchema (array of tags), but we return tree
-        // We need to bypass the strict schema check for the tree branch or define a union
         return reply.send({
           success: true,
           data: tagTree,
-        } as any);
+        });
       }
 
       const tags = await tagsService.list();

@@ -18,6 +18,7 @@ const tagSchema = z.object({
   name: z.string(),
   parent_id: z.number().nullable(),
   description: z.string().nullable(),
+  color: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -58,7 +59,7 @@ export const tagRecordResponseSchema = z.object({
 
 export const tagListResponseSchema = z.object({
   success: z.literal(true),
-  data: z.array(tagTreeNodeSchema),
+  data: z.array(tagSchema),
 });
 
 export const tagTreeResponseSchema = z.object({

@@ -20,6 +20,7 @@ export function cleanupDatabase(): void {
   try {
     // Delete all data in reverse order of dependencies
     db.exec('DELETE FROM scan_logs');
+    db.exec('DELETE FROM triage_progress');
     db.exec('DELETE FROM bookmarks');
     db.exec('DELETE FROM favorites');
     db.exec('DELETE FROM playlist_videos');

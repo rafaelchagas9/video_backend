@@ -9,6 +9,7 @@ import {
   creatorIdParamSchema,
   videoIdParamSchema,
   linkIdParamSchema,
+  listStudiosQuerySchema,
   createStudioSchema,
   updateStudioSchema,
   createStudioSocialLinkSchema,
@@ -22,6 +23,12 @@ import {
   messageResponseSchema,
   errorResponseSchema,
   bulkUpdateCreatorsSchema,
+  bulkSocialLinksSchema,
+  pictureFromUrlSchema,
+  bulkOperationResponseSchema,
+  bulkImportQuerySchema,
+  bulkStudioImportSchema,
+  bulkStudioImportResponseSchema,
 } from "./studios.schemas";
 
 export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -37,19 +44,20 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "List all studios",
-        description: "Returns a list of all studios.",
+        description: "Returns a paginated, filterable list of studios.",
+        querystring: listStudiosQuerySchema,
         response: {
           200: studioListResponseSchema,
           401: errorResponseSchema,
         },
       },
     },
-    async (_request, reply) => {
-      const studios = await studiosService.list();
+    async (request, reply) => {
+      const result = await studiosService.list(request.query);
 
       return reply.send({
         success: true,
-        data: studios,
+        ...result,
       });
     },
   );
@@ -103,6 +111,39 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: studio,
         message: "Studio created successfully",
+      });
+    },
+  );
+
+  // Bulk import studios
+  app.post(
+    "/bulk",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Bulk import studios",
+        description: "Creates or updates multiple studios with their social links, creators, and video associations. Use dry_run=true to preview changes without applying.",
+        querystring: bulkImportQuerySchema,
+        body: bulkStudioImportSchema,
+        response: {
+          200: bulkStudioImportResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { dry_run } = request.query;
+      const { items, mode } = request.body;
+      
+      const result = await studiosService.bulkImport(items, mode, dry_run);
+
+      return reply.send({
+        success: true,
+        data: result,
+        message: dry_run 
+          ? `Preview: ${result.summary.will_create} to create, ${result.summary.will_update} to update, ${result.summary.errors} errors`
+          : `Imported: ${result.summary.will_create} created, ${result.summary.will_update} updated`,
       });
     },
   );
@@ -293,6 +334,70 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: link,
         message: "Social link added successfully",
+      });
+    },
+  );
+
+  // Bulk upsert social links
+  app.post(
+    "/:id/social-links/bulk",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Bulk upsert social links",
+        description: "Creates or updates multiple social links for a studio. Upserts by platform_name.",
+        params: idParamSchema,
+        body: bulkSocialLinksSchema,
+        response: {
+          200: bulkOperationResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await studiosService.bulkUpsertSocialLinks(
+        request.params.id,
+        request.body.items,
+      );
+
+      return reply.send({
+        success: true,
+        data: result,
+        message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
+      });
+    },
+  );
+
+  // Set picture from URL
+  app.post(
+    "/:id/picture-from-url",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Set profile picture from URL",
+        description: "Downloads an image from the given URL and sets it as the studio's profile picture.",
+        params: idParamSchema,
+        body: pictureFromUrlSchema,
+        response: {
+          200: studioResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const studio = await studiosService.setPictureFromUrl(
+        request.params.id,
+        request.body.url,
+      );
+
+      return reply.send({
+        success: true,
+        data: studio,
+        message: "Profile picture set from URL successfully",
       });
     },
   );

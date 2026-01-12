@@ -1,6 +1,7 @@
 import { getDatabase } from '@/config/database';
 import { NotFoundError, ConflictError } from '@/utils/errors';
 import { env } from '@/config/env';
+import { logger } from '@/utils/logger';
 import { writeFileSync, unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
@@ -12,7 +13,13 @@ import type {
   CreateSocialLinkInput,
   UpdateSocialLinkInput,
   ListCreatorsOptions,
-  PaginatedCreators
+  PaginatedCreators,
+  BulkPlatformItem,
+  BulkSocialLinkItem,
+  BulkOperationResult,
+  BulkCreatorImportItem,
+  BulkImportPreviewItem,
+  BulkImportResult
 } from './creators.types';
 import type { Video } from '@/modules/videos/videos.types';
 import type {
@@ -38,35 +45,64 @@ export class CreatorsService {
       maxVideoCount,
       hasProfilePicture,
       studioIds,
+      missing,
+      complete,
     } = options;
 
     const offset = (page - 1) * limit;
 
-    // Determine required JOINs
-    const needsVideoCountJoin = minVideoCount !== undefined || maxVideoCount !== undefined || sort === 'video_count';
+    // Always need these subqueries for enhanced response
+    const videoCountSubquery = `
+      LEFT JOIN (
+        SELECT creator_id, COUNT(*) as video_count 
+        FROM video_creators 
+        GROUP BY creator_id
+      ) vc ON c.id = vc.creator_id
+    `;
+    
+    const platformCountSubquery = `
+      LEFT JOIN (
+        SELECT creator_id, COUNT(*) as platform_count 
+        FROM creator_platforms 
+        GROUP BY creator_id
+      ) pc ON c.id = pc.creator_id
+    `;
+    
+    const socialLinkCountSubquery = `
+      LEFT JOIN (
+        SELECT creator_id, COUNT(*) as social_link_count 
+        FROM creator_social_links 
+        GROUP BY creator_id
+      ) sc ON c.id = sc.creator_id
+    `;
+
     const needsStudioJoin = studioIds && studioIds.length > 0;
+    const needsPlatformSearchJoin = !!search;
 
     // Build FROM clause with JOINs
-    let fromClause = 'FROM creators c';
-
-    // Video count subquery JOIN
-    if (needsVideoCountJoin) {
-      fromClause += '\nLEFT JOIN (SELECT creator_id, COUNT(*) as video_count FROM video_creators GROUP BY creator_id) vc ON c.id = vc.creator_id';
-    }
+    let fromClause = `FROM creators c
+      ${videoCountSubquery}
+      ${platformCountSubquery}
+      ${socialLinkCountSubquery}`;
 
     // Studio relationship JOIN
     if (needsStudioJoin) {
       fromClause += '\nINNER JOIN creator_studios cs ON c.id = cs.creator_id';
     }
 
+    // Platform search JOIN (for username matching)
+    if (needsPlatformSearchJoin) {
+      fromClause += '\nLEFT JOIN creator_platforms cp_search ON c.id = cp_search.creator_id';
+    }
+
     // Build WHERE clause
     const whereClauses: string[] = [];
     const whereParams: any[] = [];
 
-    // Search filter (name)
+    // Search filter (name OR platform username)
     if (search) {
-      whereClauses.push('c.name LIKE ?');
-      whereParams.push(`%${search}%`);
+      whereClauses.push('(c.name LIKE ? OR cp_search.username LIKE ?)');
+      whereParams.push(`%${search}%`, `%${search}%`);
     }
 
     // Profile picture presence
@@ -92,14 +128,56 @@ export class CreatorsService {
       whereParams.push(...studioIds!);
     }
 
+    // Missing filter
+    if (missing) {
+      switch (missing) {
+        case 'picture':
+          whereClauses.push('c.profile_picture_path IS NULL');
+          break;
+        case 'platform':
+          whereClauses.push('COALESCE(pc.platform_count, 0) = 0');
+          break;
+        case 'social':
+          whereClauses.push('COALESCE(sc.social_link_count, 0) = 0');
+          break;
+        case 'linked':
+          whereClauses.push('COALESCE(vc.video_count, 0) = 0');
+          break;
+        case 'any':
+          // Incomplete: missing picture OR (missing platform AND social) OR missing linked videos
+          whereClauses.push(`(
+            c.profile_picture_path IS NULL 
+            OR (COALESCE(pc.platform_count, 0) = 0 AND COALESCE(sc.social_link_count, 0) = 0)
+            OR COALESCE(vc.video_count, 0) = 0
+          )`);
+          break;
+      }
+    }
+
+    // Complete filter
+    if (complete !== undefined) {
+      // Complete: has picture AND (has platform OR social) AND has videos
+      const completenessCondition = `(
+        c.profile_picture_path IS NOT NULL 
+        AND (COALESCE(pc.platform_count, 0) > 0 OR COALESCE(sc.social_link_count, 0) > 0)
+        AND COALESCE(vc.video_count, 0) > 0
+      )`;
+      
+      if (complete) {
+        whereClauses.push(completenessCondition);
+      } else {
+        whereClauses.push(`NOT ${completenessCondition}`);
+      }
+    }
+
     const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    // GROUP BY if studio join (to avoid duplicates)
-    const groupByClause = needsStudioJoin ? 'GROUP BY c.id' : '';
+    // GROUP BY to handle platform search join duplicates
+    const groupByClause = needsPlatformSearchJoin || needsStudioJoin ? 'GROUP BY c.id' : '';
 
     // Get total count
     const countQuery = `
-      SELECT COUNT(${needsStudioJoin ? 'DISTINCT c.id' : '*'}) as count
+      SELECT COUNT(DISTINCT c.id) as count
       ${fromClause}
       ${whereClause}
     `;
@@ -109,7 +187,7 @@ export class CreatorsService {
     const totalPages = Math.ceil(total / limit);
 
     // Get creators with sorting and pagination
-    const validSortColumns = ['name', 'created_at', 'video_count'];
+    const validSortColumns = ['name', 'created_at', 'updated_at', 'video_count'];
     const sortColumn = validSortColumns.includes(sort) ? sort : 'name';
 
     // Map sort column to actual column name
@@ -118,12 +196,18 @@ export class CreatorsService {
       sortExpression = 'COALESCE(vc.video_count, 0)';
     } else if (sortColumn === 'created_at') {
       sortExpression = 'c.created_at';
+    } else if (sortColumn === 'updated_at') {
+      sortExpression = 'c.updated_at';
     }
 
     const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
 
     const selectQuery = `
-      SELECT ${needsStudioJoin ? 'DISTINCT' : ''} c.*${needsVideoCountJoin ? ', COALESCE(vc.video_count, 0) as video_count' : ''}
+      SELECT 
+        c.*,
+        COALESCE(vc.video_count, 0) as linked_video_count,
+        COALESCE(pc.platform_count, 0) as platform_count,
+        COALESCE(sc.social_link_count, 0) as social_link_count
       ${fromClause}
       ${whereClause}
       ${groupByClause}
@@ -131,9 +215,30 @@ export class CreatorsService {
       LIMIT ? OFFSET ?
     `;
 
-    const creators = this.db
+    const rawCreators = this.db
       .prepare(selectQuery)
-      .all(...whereParams, limit, offset) as Creator[];
+      .all(...whereParams, limit, offset) as any[];
+
+    // Compute completeness for each creator
+    const creators = rawCreators.map(creator => {
+      const hasPicture = creator.profile_picture_path !== null;
+      const hasPlatformOrSocial = creator.platform_count > 0 || creator.social_link_count > 0;
+      const hasVideos = creator.linked_video_count > 0;
+      
+      const missingFields: string[] = [];
+      if (!hasPicture) missingFields.push('picture');
+      if (!hasPlatformOrSocial) missingFields.push('platform_or_social');
+      if (!hasVideos) missingFields.push('linked_videos');
+
+      return {
+        ...creator,
+        has_profile_picture: hasPicture,
+        completeness: {
+          is_complete: hasPicture && hasPlatformOrSocial && hasVideos,
+          missing_fields: missingFields,
+        },
+      };
+    });
 
     return {
       data: creators,
@@ -211,7 +316,20 @@ export class CreatorsService {
   }
 
   async delete(id: number): Promise<void> {
-    await this.findById(id); // Ensure exists
+    const creator = await this.findById(id); // Ensure exists
+
+    // Delete profile picture file if exists
+    if (creator.profile_picture_path) {
+      try {
+        if (existsSync(creator.profile_picture_path)) {
+          unlinkSync(creator.profile_picture_path);
+        }
+      } catch (error) {
+        logger.warn({ error, path: creator.profile_picture_path }, 'Failed to delete creator profile picture file');
+        // Continue with database deletion even if file deletion fails
+      }
+    }
+
     this.db.prepare('DELETE FROM creators WHERE id = ?').run(id);
   }
 
@@ -529,6 +647,427 @@ export class CreatorsService {
          ORDER BY s.name ASC`
       )
       .all(creatorId) as Studio[];
+  }
+
+  // Bulk Operation Methods
+  async bulkUpsertPlatforms(creatorId: number, items: BulkPlatformItem[]): Promise<BulkOperationResult<CreatorPlatform>> {
+    await this.findById(creatorId); // Ensure creator exists
+
+    const created: CreatorPlatform[] = [];
+    const updated: CreatorPlatform[] = [];
+    const errors: Array<{ index: number; error: string }> = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      try {
+        // Check if exists by platform_id + username
+        const existing = this.db
+          .prepare(
+            `SELECT id FROM creator_platforms 
+             WHERE creator_id = ? AND platform_id = ? AND username = ?`
+          )
+          .get(creatorId, item.platform_id, item.username) as { id: number } | undefined;
+
+        if (existing) {
+          // Update existing
+          this.db
+            .prepare(
+              `UPDATE creator_platforms 
+               SET profile_url = ?, is_primary = ?, updated_at = datetime('now') 
+               WHERE id = ?`
+            )
+            .run(item.profile_url, item.is_primary ? 1 : 0, existing.id);
+          
+          updated.push(await this.findPlatformProfileById(existing.id));
+        } else {
+          // Create new
+          const result = this.db
+            .prepare(
+              `INSERT INTO creator_platforms (creator_id, platform_id, username, profile_url, is_primary)
+               VALUES (?, ?, ?, ?, ?)`
+            )
+            .run(creatorId, item.platform_id, item.username, item.profile_url, item.is_primary ? 1 : 0);
+          
+          created.push(await this.findPlatformProfileById(result.lastInsertRowid as number));
+        }
+      } catch (error: any) {
+        errors.push({ index: i, error: error.message || 'Unknown error' });
+      }
+    }
+
+    return { created, updated, errors };
+  }
+
+  async bulkUpsertSocialLinks(creatorId: number, items: BulkSocialLinkItem[]): Promise<BulkOperationResult<SocialLink>> {
+    await this.findById(creatorId); // Ensure creator exists
+
+    const created: SocialLink[] = [];
+    const updated: SocialLink[] = [];
+    const errors: Array<{ index: number; error: string }> = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      try {
+        // Check if exists by platform_name + url
+        const existing = this.db
+          .prepare(
+            `SELECT id FROM creator_social_links 
+             WHERE creator_id = ? AND platform_name = ? AND url = ?`
+          )
+          .get(creatorId, item.platform_name, item.url) as { id: number } | undefined;
+
+        if (existing) {
+          // Already exists with same data, add to updated
+          updated.push(await this.findSocialLinkById(existing.id));
+        } else {
+          // Check if exists by platform_name only (update url)
+          const existingByPlatform = this.db
+            .prepare(
+              `SELECT id FROM creator_social_links 
+               WHERE creator_id = ? AND platform_name = ?`
+            )
+            .get(creatorId, item.platform_name) as { id: number } | undefined;
+
+          if (existingByPlatform) {
+            // Update URL
+            this.db
+              .prepare(`UPDATE creator_social_links SET url = ? WHERE id = ?`)
+              .run(item.url, existingByPlatform.id);
+            updated.push(await this.findSocialLinkById(existingByPlatform.id));
+          } else {
+            // Create new
+            const result = this.db
+              .prepare(
+                `INSERT INTO creator_social_links (creator_id, platform_name, url)
+                 VALUES (?, ?, ?)`
+              )
+              .run(creatorId, item.platform_name, item.url);
+            
+            created.push(await this.findSocialLinkById(result.lastInsertRowid as number));
+          }
+        }
+      } catch (error: any) {
+        errors.push({ index: i, error: error.message || 'Unknown error' });
+      }
+    }
+
+    return { created, updated, errors };
+  }
+
+  async setPictureFromUrl(creatorId: number, url: string): Promise<Creator> {
+    const creator = await this.findById(creatorId);
+
+    // Download image from URL
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.startsWith('image/')) {
+      throw new Error('URL does not point to a valid image');
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    
+    // Validate minimum size
+    if (buffer.length < 100) {
+      throw new Error('Downloaded image is too small');
+    }
+
+    // Determine extension from content type
+    let ext = 'jpg';
+    if (contentType.includes('png')) ext = 'png';
+    else if (contentType.includes('webp')) ext = 'webp';
+    else if (contentType.includes('gif')) ext = 'gif';
+
+    // Ensure directory exists
+    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
+      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
+    }
+
+    // Delete old picture if exists
+    if (creator.profile_picture_path && existsSync(creator.profile_picture_path)) {
+      unlinkSync(creator.profile_picture_path);
+    }
+
+    // Generate unique filename
+    const newFilename = `creator_${creatorId}_${Date.now()}.${ext}`;
+    const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
+
+    // Save file
+    writeFileSync(filePath, buffer);
+
+    // Update database
+    this.db
+      .prepare(`UPDATE creators SET profile_picture_path = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(filePath, creatorId);
+
+    return this.findById(creatorId);
+  }
+
+  // Bulk Import with Preview
+  async bulkImport(items: BulkCreatorImportItem[], mode: 'merge' | 'replace', dryRun: boolean): Promise<BulkImportResult> {
+    const previewItems: BulkImportPreviewItem[] = [];
+    let willCreate = 0;
+    let willUpdate = 0;
+    let errors = 0;
+
+    // First pass: validate and compute preview
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const validationErrors: string[] = [];
+      const missingDependencies: string[] = [];
+      let existingCreator: Creator | null = null;
+      let action: 'create' | 'update' = 'create';
+
+      // Check if updating existing creator
+      if (item.id) {
+        try {
+          existingCreator = await this.findById(item.id);
+          action = 'update';
+        } catch {
+          validationErrors.push(`Creator with id ${item.id} not found`);
+        }
+      } else {
+        // Check if creator with same name exists
+        const existing = this.db
+          .prepare('SELECT * FROM creators WHERE name = ?')
+          .get(item.name) as Creator | undefined;
+        if (existing) {
+          existingCreator = existing;
+          action = 'update';
+        }
+      }
+
+      // Validate video IDs exist
+      if (item.link_video_ids && item.link_video_ids.length > 0) {
+        for (const videoId of item.link_video_ids) {
+          const video = this.db.prepare('SELECT id FROM videos WHERE id = ?').get(videoId);
+          if (!video) {
+            missingDependencies.push(`Video id ${videoId} not found`);
+          }
+        }
+      }
+
+      // Validate platform IDs exist
+      if (item.platforms && item.platforms.length > 0) {
+        for (const platform of item.platforms) {
+          const p = this.db.prepare('SELECT id FROM platforms WHERE id = ?').get(platform.platform_id);
+          if (!p) {
+            missingDependencies.push(`Platform id ${platform.platform_id} not found`);
+          }
+        }
+      }
+
+      // Compute changes
+      const changes: BulkImportPreviewItem['changes'] = {};
+
+      if (existingCreator) {
+        if (existingCreator.name !== item.name) {
+          changes.name = { from: existingCreator.name, to: item.name };
+        }
+        if (item.description !== undefined && existingCreator.description !== (item.description ?? null)) {
+          changes.description = { from: existingCreator.description, to: item.description ?? null };
+        }
+        if (item.profile_picture_url) {
+          changes.profile_picture = { action: 'set' };
+        }
+
+        // Compute platform changes
+        if (item.platforms) {
+          const existingPlatforms = await this.getPlatformProfiles(existingCreator.id);
+          let add = 0, update = 0, remove = 0;
+          
+          for (const p of item.platforms) {
+            const existing = existingPlatforms.find(ep => ep.platform_id === p.platform_id);
+            if (existing) {
+              if (existing.username !== p.username || existing.profile_url !== p.profile_url) {
+                update++;
+              }
+            } else {
+              add++;
+            }
+          }
+          
+          if (mode === 'replace') {
+            remove = existingPlatforms.filter(ep => 
+              !item.platforms!.some(p => p.platform_id === ep.platform_id)
+            ).length;
+          }
+          
+          if (add > 0 || update > 0 || remove > 0) {
+            changes.platforms = { add, update, remove: mode === 'replace' ? remove : undefined };
+          }
+        }
+
+        // Compute social link changes
+        if (item.social_links) {
+          const existingLinks = await this.getSocialLinks(existingCreator.id);
+          let add = 0, update = 0, remove = 0;
+          
+          for (const sl of item.social_links) {
+            const existing = existingLinks.find(el => el.platform_name === sl.platform_name);
+            if (existing) {
+              if (existing.url !== sl.url) {
+                update++;
+              }
+            } else {
+              add++;
+            }
+          }
+          
+          if (mode === 'replace') {
+            remove = existingLinks.filter(el => 
+              !item.social_links!.some(sl => sl.platform_name === el.platform_name)
+            ).length;
+          }
+          
+          if (add > 0 || update > 0 || remove > 0) {
+            changes.social_links = { add, update, remove: mode === 'replace' ? remove : undefined };
+          }
+        }
+
+        // Compute video link changes
+        if (item.link_video_ids) {
+          const existingVideos = await this.getVideos(existingCreator.id);
+          const existingVideoIds = existingVideos.map(v => v.id);
+          const add = item.link_video_ids.filter(id => !existingVideoIds.includes(id)).length;
+          const remove = mode === 'replace' 
+            ? existingVideoIds.filter(id => !item.link_video_ids!.includes(id)).length 
+            : undefined;
+          
+          if (add > 0 || (remove && remove > 0)) {
+            changes.videos = { add, remove };
+          }
+        }
+      } else {
+        // New creator
+        changes.name = { from: null, to: item.name };
+        if (item.description) {
+          changes.description = { from: null, to: item.description };
+        }
+        if (item.profile_picture_url) {
+          changes.profile_picture = { action: 'set' };
+        }
+        if (item.platforms && item.platforms.length > 0) {
+          changes.platforms = { add: item.platforms.length, update: 0 };
+        }
+        if (item.social_links && item.social_links.length > 0) {
+          changes.social_links = { add: item.social_links.length, update: 0 };
+        }
+        if (item.link_video_ids && item.link_video_ids.length > 0) {
+          changes.videos = { add: item.link_video_ids.length };
+        }
+      }
+
+      const hasErrors = validationErrors.length > 0 || missingDependencies.length > 0;
+      if (hasErrors) errors++;
+      else if (action === 'create') willCreate++;
+      else willUpdate++;
+
+      previewItems.push({
+        index: i,
+        action,
+        resolved_id: existingCreator?.id ?? null,
+        name: item.name,
+        validation_errors: validationErrors,
+        changes,
+        missing_dependencies: missingDependencies,
+      });
+    }
+
+    // If not dry run and no errors, apply changes
+    if (!dryRun && errors === 0) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const preview = previewItems[i];
+        let creatorId: number;
+
+        if (preview.action === 'create') {
+          const creator = await this.create({ name: item.name, description: item.description });
+          creatorId = creator.id;
+          preview.resolved_id = creatorId;
+        } else {
+          creatorId = preview.resolved_id!;
+          if (preview.changes.name || preview.changes.description !== undefined) {
+            await this.update(creatorId, { 
+              name: preview.changes.name?.to ?? undefined, 
+              description: item.description 
+            });
+          }
+        }
+
+        // Set profile picture from URL
+        if (item.profile_picture_url) {
+          try {
+            await this.setPictureFromUrl(creatorId, item.profile_picture_url);
+          } catch (error: any) {
+            logger.warn({ error, creatorId, url: item.profile_picture_url }, 'Failed to set profile picture from URL');
+          }
+        }
+
+        // Handle platforms
+        if (item.platforms && item.platforms.length > 0) {
+          if (mode === 'replace') {
+            // Delete existing platforms not in new list
+            const existing = await this.getPlatformProfiles(creatorId);
+            for (const ep of existing) {
+              if (!item.platforms.some(p => p.platform_id === ep.platform_id)) {
+                await this.deletePlatformProfile(ep.id);
+              }
+            }
+          }
+          await this.bulkUpsertPlatforms(creatorId, item.platforms);
+        }
+
+        // Handle social links
+        if (item.social_links && item.social_links.length > 0) {
+          if (mode === 'replace') {
+            // Delete existing links not in new list
+            const existing = await this.getSocialLinks(creatorId);
+            for (const el of existing) {
+              if (!item.social_links.some(sl => sl.platform_name === el.platform_name)) {
+                await this.deleteSocialLink(el.id);
+              }
+            }
+          }
+          await this.bulkUpsertSocialLinks(creatorId, item.social_links);
+        }
+
+        // Handle video links
+        if (item.link_video_ids && item.link_video_ids.length > 0) {
+          if (mode === 'replace') {
+            // Remove existing video links not in new list
+            const existingVideos = await this.getVideos(creatorId);
+            for (const v of existingVideos) {
+              if (!item.link_video_ids.includes(v.id)) {
+                await this.removeFromVideo(v.id, creatorId);
+              }
+            }
+          }
+          // Add new video links
+          for (const videoId of item.link_video_ids) {
+            try {
+              await this.addToVideo(videoId, creatorId);
+            } catch {
+              // Ignore duplicates
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      success: errors === 0,
+      dry_run: dryRun,
+      items: previewItems,
+      summary: {
+        will_create: willCreate,
+        will_update: willUpdate,
+        errors,
+      },
+    };
   }
 }
 

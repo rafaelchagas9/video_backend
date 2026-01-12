@@ -53,7 +53,10 @@ export async function buildServer() {
   });
 
   await fastify.register(cors, {
-    origin: env.NODE_ENV === "development" ? true : ["http://localhost:3000", "http://localhost:5173"],
+    origin:
+      env.NODE_ENV === "development"
+        ? true
+        : [env.BASE_URL, "http://localhost:5173"],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Range"],
@@ -66,7 +69,6 @@ export async function buildServer() {
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
   });
-
 
   await fastify.register(rateLimit, {
     max: 10000, // Very high limit for private single-user app
@@ -85,7 +87,7 @@ export async function buildServer() {
       },
       servers: [
         {
-          url: `http://${env.HOST}:${env.PORT}`,
+          url: env.BASE_URL,
           description: "Development server",
         },
       ],
@@ -104,6 +106,7 @@ export async function buildServer() {
         { name: "backup", description: "Database backup and export" },
         { name: "conversion", description: "Video conversion and transcoding" },
         { name: "scheduler", description: "Scan scheduling" },
+        { name: "storyboards", description: "Slider preview thumbnails" },
         { name: "system", description: "System health and status" },
       ],
     },
@@ -123,7 +126,7 @@ export async function buildServer() {
   // Multipart form data support (for file uploads)
   await fastify.register(multipart, {
     limits: {
-      fileSize: 5 * 1024 * 1024, // 5MB max file size for profile pictures
+      fileSize: 50 * 1024 * 1024, // 50MB max file size for profile pictures
       files: 1, // Only one file per request
     },
   });
@@ -202,7 +205,15 @@ export async function buildServer() {
       const { bookmarksRoutes } =
         await import("./modules/bookmarks/bookmarks.routes");
       const { backupRoutes } = await import("./modules/backup/backup.routes");
-      const { conversionRoutes } = await import("./modules/conversion/conversion.routes");
+      const { conversionRoutes } =
+        await import("./modules/conversion/conversion.routes");
+      const { triageRoutes } = await import("./modules/triage/triage.routes");
+      const { videoStatsRoutes } =
+        await import("./modules/video-stats/video-stats.routes");
+      const { settingsRoutes } =
+        await import("./modules/settings/settings.routes");
+      const { storyboardsRoutes } =
+        await import("./modules/storyboards/storyboards.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -217,6 +228,10 @@ export async function buildServer() {
       await instance.register(bookmarksRoutes, { prefix: "/bookmarks" });
       await instance.register(backupRoutes, { prefix: "/backup" });
       await instance.register(conversionRoutes, { prefix: "/" }); // Conversion routes handle /videos/:id/convert and /conversions/:id paths
+      await instance.register(triageRoutes, { prefix: "/users" }); // Triage progress routes under /users
+      await instance.register(videoStatsRoutes, { prefix: "/videos" });
+      await instance.register(settingsRoutes, { prefix: "/settings" });
+      await instance.register(storyboardsRoutes, { prefix: "/" }); // Storyboards routes handle /videos/:id/storyboard.* paths
     },
     { prefix: API_PREFIX },
   );
@@ -229,8 +244,9 @@ export async function buildServer() {
 
     // Register WebSocket service and start conversion queue
     const { websocketService } = await import("./modules/websocket/websocket");
-    const { conversionService } = await import("./modules/conversion/conversion.service");
-    
+    const { conversionService } =
+      await import("./modules/conversion/conversion.service");
+
     await websocketService.register(fastify);
     await conversionService.startQueue();
   }

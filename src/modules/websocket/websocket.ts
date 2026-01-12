@@ -1,10 +1,11 @@
 /**
  * WebSocket service for real-time event broadcasting
  */
-import type { FastifyInstance } from 'fastify';
-import type { WebSocket } from '@fastify/websocket';
-import { logger } from '@/utils/logger';
-import { getDatabase } from '@/config/database';
+import type { FastifyInstance } from "fastify";
+import type { WebSocket } from "@fastify/websocket";
+import { logger } from "@/utils/logger";
+import { getDatabase } from "@/config/database";
+import { videoStatsService } from "@/modules/video-stats/video-stats.service";
 
 interface ClientConnection {
   socket: WebSocket;
@@ -20,10 +21,10 @@ class WebSocketService {
    */
   async register(fastify: FastifyInstance): Promise<void> {
     // Register WebSocket route
-    fastify.get('/ws', { websocket: true }, (socket, request) => {
+    fastify.get("/ws", { websocket: true }, (socket, request) => {
       // Try to get user from session cookie
       const userId = this.getUserFromRequest(request);
-      
+
       const connection: ClientConnection = {
         socket,
         userId,
@@ -31,36 +32,44 @@ class WebSocketService {
       };
 
       this.clients.set(socket, connection);
-      logger.info({ userId, totalClients: this.clients.size }, 'WebSocket client connected');
+      logger.info(
+        { userId, totalClients: this.clients.size },
+        "WebSocket client connected",
+      );
 
       // Send welcome message
       this.sendToSocket(socket, {
-        type: 'connected',
-        message: 'WebSocket connection established',
+        type: "connected",
+        message: "WebSocket connection established",
         timestamp: new Date().toISOString(),
       });
 
-      socket.on('message', (data: Buffer | string) => {
+      socket.on("message", (data: Buffer | string) => {
         try {
           const message = JSON.parse(data.toString());
-          this.handleMessage(socket, message);
+          this.handleMessage(socket, message).catch((error: unknown) => {
+            logger.error({ error }, "Failed to handle WebSocket message");
+          });
         } catch {
-          logger.debug('Received non-JSON WebSocket message');
+          logger.debug("Received non-JSON WebSocket message");
         }
       });
 
-      socket.on('close', () => {
+      socket.on("close", () => {
         this.clients.delete(socket);
-        logger.info({ userId, totalClients: this.clients.size }, 'WebSocket client disconnected');
+        logger.info(
+          { userId, totalClients: this.clients.size },
+          "WebSocket client disconnected",
+        );
       });
 
-      socket.on('error', (error: Error) => {
-        logger.error({ error }, 'WebSocket error');
+      socket.on("error", (error: Error) => {
+        logger.error({ error }, "WebSocket error");
         this.clients.delete(socket);
       });
     });
 
-    logger.info('WebSocket service registered at /ws');
+    logger.info("WebSocket service registered at /ws");
   }
 
   /**
@@ -72,9 +81,11 @@ class WebSocketService {
       if (!sessionId) return null;
 
       const db = getDatabase();
-      const session = db.prepare(
-        'SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime("now")'
-      ).get(sessionId) as { user_id: number } | undefined;
+      const session = db
+        .prepare(
+          'SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime("now")',
+        )
+        .get(sessionId) as { user_id: number } | undefined;
 
       return session?.user_id ?? null;
     } catch {
@@ -85,10 +96,39 @@ class WebSocketService {
   /**
    * Handle incoming WebSocket messages
    */
-  private handleMessage(socket: WebSocket, message: any): void {
+  private async handleMessage(socket: WebSocket, message: any): Promise<void> {
     // Ping/pong for keep-alive
-    if (message.type === 'ping') {
-      this.sendToSocket(socket, { type: 'pong', timestamp: new Date().toISOString() });
+    if (message?.type === "ping") {
+      this.sendToSocket(socket, {
+        type: "pong",
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (message?.type === "video:watch") {
+      const connection = this.clients.get(socket);
+      if (!connection?.userId) return;
+
+      const payload = message.payload ?? {};
+      const videoId = Number(payload.video_id);
+      const watchedSeconds = Number(payload.watched_seconds);
+      const lastPositionRaw = payload.last_position_seconds;
+      const lastPositionSeconds =
+        lastPositionRaw === undefined ? undefined : Number(lastPositionRaw);
+
+      if (!Number.isFinite(videoId) || videoId <= 0) return;
+      if (!Number.isFinite(watchedSeconds) || watchedSeconds <= 0) return;
+      if (
+        lastPositionSeconds !== undefined &&
+        !Number.isFinite(lastPositionSeconds)
+      )
+        return;
+
+      await videoStatsService.recordWatch(connection.userId, videoId, {
+        watched_seconds: watchedSeconds,
+        last_position_seconds: lastPositionSeconds,
+      });
     }
   }
 
@@ -97,11 +137,12 @@ class WebSocketService {
    */
   private sendToSocket(socket: WebSocket, data: any): void {
     try {
-      if (socket.readyState === 1) { // WebSocket.OPEN
+      if (socket.readyState === 1) {
+        // WebSocket.OPEN
         socket.send(JSON.stringify(data));
       }
     } catch (error) {
-      logger.error({ error }, 'Failed to send WebSocket message');
+      logger.error({ error }, "Failed to send WebSocket message");
     }
   }
 
@@ -114,16 +155,17 @@ class WebSocketService {
 
     for (const [socket] of this.clients) {
       try {
-        if (socket.readyState === 1) { // WebSocket.OPEN
+        if (socket.readyState === 1) {
+          // WebSocket.OPEN
           socket.send(message);
           sent++;
         }
       } catch (error) {
-        logger.error({ error }, 'Failed to broadcast to client');
+        logger.error({ error }, "Failed to broadcast to client");
       }
     }
 
-    logger.debug({ type: data.type, sentTo: sent }, 'Broadcast sent');
+    logger.debug({ type: data.type, sentTo: sent }, "Broadcast sent");
   }
 
   /**
@@ -141,12 +183,15 @@ class WebSocketService {
             sent++;
           }
         } catch (error) {
-          logger.error({ error }, 'Failed to broadcast to client');
+          logger.error({ error }, "Failed to broadcast to client");
         }
       }
     }
 
-    logger.debug({ type: data.type, sentTo: sent }, 'Authenticated broadcast sent');
+    logger.debug(
+      { type: data.type, sentTo: sent },
+      "Authenticated broadcast sent",
+    );
   }
 
   /**

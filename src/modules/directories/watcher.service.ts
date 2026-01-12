@@ -197,8 +197,43 @@ export class WatcherService {
         throw error;
       }
     } finally {
+      // Process any queued storyboards (this is safe to await here as it handles its own errors)
+      // We do this in finally to ensure we process even if scan had partial errors,
+      // but only if we have compiled a list of new videos
+      await this.processStoryboardQueue();
+      
       this.scanningDirectories.delete(directoryId);
     }
+  }
+
+  // Queue to track new videos during a scan run
+  private newVideoIds: number[] = [];
+
+  private async processStoryboardQueue() {
+    if (this.newVideoIds.length === 0) return;
+
+    logger.info(
+      { count: this.newVideoIds.length },
+      "Queueing post-scan storyboard generation...",
+    );
+
+    const { storyboardsService } = await import(
+      "@/modules/storyboards/storyboards.service"
+    );
+
+    // Add all new videos to the centralized queue
+    // The queue handles deduplication and sequential processing
+    for (const videoId of this.newVideoIds) {
+      storyboardsService.queueGenerate(videoId);
+    }
+
+    logger.info(
+      { count: this.newVideoIds.length },
+      "Videos queued for storyboard generation",
+    );
+    
+    // Clear local queue
+    this.newVideoIds = [];
   }
 
   private async findVideoFiles(
@@ -233,6 +268,7 @@ export class WatcherService {
     const fileName = basename(filePath);
     const fileStartTime = Date.now();
     let videoId: number;
+    let isNewVideo = false;
 
     // Check if video already exists
     const dbCheckStart = Date.now();
@@ -427,11 +463,12 @@ export class WatcherService {
             metadata.audio_codec,
           ) as { id: number };
         videoId = result.id;
+        isNewVideo = true;
         logger.info({ videoId, filePath }, "Video indexed");
       }
     }
 
-    // Check for thumbnail and generate if missing
+    // Check for regular thumbnail and generate if missing
     const hasThumbnail = this.db
       .prepare("SELECT 1 FROM thumbnails WHERE video_id = ?")
       .get(videoId);
@@ -444,6 +481,11 @@ export class WatcherService {
           "Failed to generate thumbnail during indexing",
         );
       });
+    }
+
+    // If new video, add to storyboard queue
+    if (isNewVideo) {
+      this.newVideoIds.push(videoId);
     }
 
     const totalFileDuration = Date.now() - fileStartTime;

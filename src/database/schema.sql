@@ -71,6 +71,44 @@ CREATE INDEX IF NOT EXISTS idx_videos_directory ON videos(directory_id);
 CREATE INDEX IF NOT EXISTS idx_videos_file_path ON videos(file_path);
 CREATE INDEX IF NOT EXISTS idx_videos_file_hash ON videos(file_hash);
 
+-- Video statistics (per-user watch data)
+CREATE TABLE IF NOT EXISTS video_stats (
+    user_id INTEGER NOT NULL,
+    video_id INTEGER NOT NULL,
+    play_count INTEGER DEFAULT 0,
+    total_watch_seconds REAL DEFAULT 0,
+    session_watch_seconds REAL DEFAULT 0,
+    session_play_counted BOOLEAN DEFAULT 0,
+    last_position_seconds REAL,
+    last_played_at DATETIME,
+    last_watch_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (user_id, video_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_stats_video ON video_stats(video_id);
+CREATE INDEX IF NOT EXISTS idx_video_stats_user ON video_stats(user_id);
+CREATE INDEX IF NOT EXISTS idx_video_stats_last_played ON video_stats(last_played_at);
+
+-- App settings
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO app_settings (key, value) VALUES
+    ('min_watch_seconds', '60'),
+    ('short_video_watch_seconds', '10'),
+    ('short_video_duration_seconds', '60'),
+    ('downscale_inactive_days', '90'),
+    ('watch_session_gap_minutes', '30'),
+    ('max_suggestions', '200');
+
 -- Creators table
 CREATE TABLE IF NOT EXISTS creators (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +136,7 @@ CREATE TABLE IF NOT EXISTS tags (
     name TEXT NOT NULL,
     parent_id INTEGER,
     description TEXT,
+    color TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
