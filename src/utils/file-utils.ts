@@ -1,8 +1,8 @@
-import { xxh3 } from '@node-rs/xxhash';
-import { createReadStream, existsSync } from 'fs';
-import { stat, open } from 'fs/promises';
-import { extname } from 'path';
-import { SUPPORTED_VIDEO_FORMATS, HASH_ALGORITHM } from '@/config/constants';
+import { xxh3 } from "@node-rs/xxhash";
+import { createReadStream, existsSync } from "fs";
+import { stat, open } from "fs/promises";
+import { extname } from "path";
+import { SUPPORTED_VIDEO_FORMATS } from "@/config/constants";
 
 // Threshold for using partial hashing (10MB)
 const FULL_HASH_THRESHOLD = 10 * 1024 * 1024;
@@ -69,21 +69,21 @@ async function computeFullHash(filePath: string): Promise<string> {
       highWaterMark: 256 * 1024, // 256KB chunks - optimal for HDD with xxHash
     });
 
-    stream.on('data', (chunk) => {
+    stream.on("data", (chunk) => {
       // Update hasher with each chunk (no buffering needed)
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       hasher.update(buffer);
     });
 
-    stream.on('end', () => {
+    stream.on("end", () => {
       // Get final 64-bit hash as BigInt
       const hash = hasher.digest();
       // Convert bigint to hex string (16 characters for 64-bit)
       // Pad to 32 chars to match database field expectations
-      resolve(hash.toString(16).padStart(32, '0'));
+      resolve(hash.toString(16).padStart(32, "0"));
     });
 
-    stream.on('error', reject);
+    stream.on("error", reject);
   });
 }
 
@@ -101,7 +101,7 @@ async function computePartialHash(
   filePath: string,
   fileSize: number,
 ): Promise<string> {
-  const file = await open(filePath, 'r');
+  const file = await open(filePath, "r");
 
   try {
     // Read first 4MB
@@ -129,7 +129,7 @@ async function computePartialHash(
     // Compute XXH3-128 hash
     const hash = xxh3.xxh128(combinedBuffer);
     // Convert bigint to hex string (32 characters for 128-bit)
-    return hash.toString(16).padStart(32, '0');
+    return hash.toString(16).padStart(32, "0");
   } finally {
     await file.close();
   }
@@ -140,10 +140,10 @@ export function fileExists(filePath: string): boolean {
 }
 
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 Bytes';
+  if (bytes === 0) return "0 Bytes";
 
   const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;

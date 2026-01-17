@@ -18,6 +18,20 @@ export const videoIdParamSchema = z.object({
   video_id: z.coerce.number().int().positive(),
 });
 
+const parseNullableNumber = (val: unknown) => {
+  if (val === null || val === undefined) {
+    return null;
+  }
+  if (typeof val === "number") {
+    return val;
+  }
+  if (typeof val === "string" && val.trim() !== "") {
+    const parsed = Number.parseFloat(val);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
 // Response schemas
 const playlistSchema = z.object({
   id: z.number(),
@@ -26,13 +40,14 @@ const playlistSchema = z.object({
   description: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+  thumbnail_url: z.string().nullable().optional(),
 });
 
 const playlistVideoSchema = z.object({
   id: z.number(),
   file_name: z.string(),
   title: z.string().nullable(),
-  duration_seconds: z.number().nullable(),
+  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
   position: z.number(),
   thumbnail_id: z.number().nullable(),
   thumbnail_url: z.string().nullable(),
@@ -71,5 +86,5 @@ export const errorResponseSchema = z.object({
 
 export const bulkUpdatePlaylistVideosSchema = z.object({
   videoIds: z.array(z.number().int().positive()).min(1),
-  action: z.enum(['add', 'remove']),
+  action: z.enum(["add", "remove"]),
 });

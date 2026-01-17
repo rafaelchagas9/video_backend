@@ -1,6 +1,17 @@
-import { copyFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, statSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
-import { getDatabase, closeDatabase } from "@/config/database";
+import { db } from "@/config/drizzle";
+import {
+  usersTable,
+  watchedDirectoriesTable,
+  videosTable,
+  creatorsTable,
+  tagsTable,
+  ratingsTable,
+  playlistsTable,
+  favoritesTable,
+  bookmarksTable,
+} from "@/database/schema";
 import { env } from "@/config/env";
 import { NotFoundError, ValidationError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
@@ -9,10 +20,6 @@ import type { BackupInfo, ExportData } from "./backup.types";
 const BACKUP_DIR = resolve(process.cwd(), "./data/backups");
 
 export class BackupService {
-  private get db() {
-    return getDatabase();
-  }
-
   /**
    * Ensure backup directory exists
    */
@@ -23,24 +30,30 @@ export class BackupService {
   }
 
   /**
-   * Create a new database backup
+   * Create a new database backup using pg_dump
    */
   async createBackup(): Promise<BackupInfo> {
     this.ensureBackupDir();
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `backup-${timestamp}.db`;
+    const filename = `backup-${timestamp}.sql`;
     const backupPath = join(BACKUP_DIR, filename);
-    const dbPath = resolve(process.cwd(), env.DATABASE_PATH);
 
     try {
-      // SQLite backup - checkpoint WAL and copy
-      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      copyFileSync(dbPath, backupPath);
+      const { execSync } = await import("child_process");
+
+      // Build pg_dump command using POSTGRES_* env vars
+      // Use PGPASSWORD to avoid exposing password in process list
+      const pgDumpCommand = `PGPASSWORD='${env.POSTGRES_PASSWORD}' pg_dump -h ${env.POSTGRES_HOST} -p ${env.POSTGRES_PORT} -U ${env.POSTGRES_USER} -F p -d ${env.POSTGRES_DB} -f "${backupPath}"`;
+
+      execSync(pgDumpCommand, { stdio: "pipe" });
 
       const stats = statSync(backupPath);
 
-      logger.info({ filename, sizeBytes: stats.size }, "Database backup created");
+      logger.info(
+        { filename, sizeBytes: stats.size },
+        "Database backup created",
+      );
 
       return {
         filename,
@@ -50,7 +63,9 @@ export class BackupService {
       };
     } catch (error) {
       logger.error({ error }, "Failed to create backup");
-      throw new ValidationError("Failed to create database backup");
+      throw new ValidationError(
+        "Failed to create database backup. Ensure pg_dump is available.",
+      );
     }
   }
 
@@ -60,23 +75,30 @@ export class BackupService {
   listBackups(): BackupInfo[] {
     this.ensureBackupDir();
 
-    const files = readdirSync(BACKUP_DIR).filter((f) => f.endsWith(".db"));
+    const files = readdirSync(BACKUP_DIR).filter(
+      (f) => f.endsWith(".sql") || f.endsWith(".db"),
+    );
 
-    return files.map((filename) => {
-      const fullPath = join(BACKUP_DIR, filename);
-      const stats = statSync(fullPath);
+    return files
+      .map((filename) => {
+        const fullPath = join(BACKUP_DIR, filename);
+        const stats = statSync(fullPath);
 
-      return {
-        filename,
-        path: fullPath,
-        sizeBytes: stats.size,
-        createdAt: stats.mtime.toISOString(),
-      };
-    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        return {
+          filename,
+          path: fullPath,
+          sizeBytes: stats.size,
+          createdAt: stats.mtime.toISOString(),
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
   }
 
   /**
-   * Restore from a backup file
+   * Restore from a backup file using psql
    */
   async restoreBackup(filename: string): Promise<void> {
     const backupPath = join(BACKUP_DIR, filename);
@@ -85,22 +107,21 @@ export class BackupService {
       throw new NotFoundError(`Backup not found: ${filename}`);
     }
 
-    const dbPath = resolve(process.cwd(), env.DATABASE_PATH);
-
     try {
-      // Close current database connection
-      closeDatabase();
+      const { execSync } = await import("child_process");
 
-      // Copy backup over current database
-      copyFileSync(backupPath, dbPath);
+      // Build psql command using POSTGRES_* env vars
+      // Use PGPASSWORD to avoid exposing password in process list
+      const psqlCommand = `PGPASSWORD='${env.POSTGRES_PASSWORD}' psql -h ${env.POSTGRES_HOST} -p ${env.POSTGRES_PORT} -U ${env.POSTGRES_USER} -d ${env.POSTGRES_DB} -f "${backupPath}"`;
 
-      // Force reconnection
-      getDatabase();
+      execSync(psqlCommand, { stdio: "pipe" });
 
       logger.info({ filename }, "Database restored from backup");
     } catch (error) {
       logger.error({ error, filename }, "Failed to restore backup");
-      throw new ValidationError("Failed to restore database from backup");
+      throw new ValidationError(
+        "Failed to restore database from backup. Ensure psql is available.",
+      );
     }
   }
 
@@ -121,25 +142,53 @@ export class BackupService {
   /**
    * Export entire database as JSON
    */
-  exportToJson(): ExportData {
-    const tables = {
-      users: this.db.prepare("SELECT id, username, created_at, updated_at FROM users").all(),
-      directories: this.db.prepare("SELECT * FROM watched_directories").all(),
-      videos: this.db.prepare("SELECT * FROM videos").all(),
-      creators: this.db.prepare("SELECT * FROM creators").all(),
-      tags: this.db.prepare("SELECT * FROM tags").all(),
-      ratings: this.db.prepare("SELECT * FROM ratings").all(),
-      playlists: this.db.prepare("SELECT * FROM playlists").all(),
-      favorites: this.db.prepare("SELECT * FROM favorites").all(),
-      bookmarks: this.db.prepare("SELECT * FROM bookmarks").all(),
-    };
+  async exportToJson(): Promise<ExportData> {
+    // Use Drizzle to export data
+    const [
+      users,
+      directories,
+      videos,
+      creators,
+      tags,
+      ratings,
+      playlists,
+      favorites,
+      bookmarks,
+    ] = await Promise.all([
+      db
+        .select({
+          id: usersTable.id,
+          username: usersTable.username,
+          createdAt: usersTable.createdAt,
+          updatedAt: usersTable.updatedAt,
+        })
+        .from(usersTable),
+      db.select().from(watchedDirectoriesTable),
+      db.select().from(videosTable),
+      db.select().from(creatorsTable),
+      db.select().from(tagsTable),
+      db.select().from(ratingsTable),
+      db.select().from(playlistsTable),
+      db.select().from(favoritesTable),
+      db.select().from(bookmarksTable),
+    ]);
 
     logger.info("Database exported to JSON");
 
     return {
       exportedAt: new Date().toISOString(),
       version: "0.1.0",
-      tables,
+      tables: {
+        users,
+        directories,
+        videos,
+        creators,
+        tags,
+        ratings,
+        playlists,
+        favorites,
+        bookmarks,
+      },
     };
   }
 }

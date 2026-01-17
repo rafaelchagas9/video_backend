@@ -199,7 +199,8 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["playlists"],
         summary: "Bulk update videos in playlist",
-        description: "Adds or removes multiple videos for this playlist. For 'add', videos are appended to the end.",
+        description:
+          "Adds or removes multiple videos for this playlist. For 'add', videos are appended to the end.",
         params: idParamSchema,
         body: bulkUpdatePlaylistVideosSchema,
         response: {
@@ -210,11 +211,11 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
+      const { id } = request.params as { id: number };
       await playlistsService.bulkUpdateVideos(
-        Number(id),
+        id,
         request.user!.id,
-        request.body
+        request.body,
       );
 
       return reply.send({

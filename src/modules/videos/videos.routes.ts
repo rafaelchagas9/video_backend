@@ -2,9 +2,13 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { videosService } from "./videos.service";
+import { videosSearchService } from "./videos.search.service";
+import { videosSuggestionsService } from "./videos.suggestions.service";
+import { videosMetadataService } from "./videos.metadata.service";
+import { videosBulkService } from "./videos.bulk.service";
 import { streamingService } from "./streaming.service";
-import { creatorsService } from "@/modules/creators/creators.service";
-import { studiosService } from "@/modules/studios/studios.service";
+import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
+import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
 import { tagsService } from "@/modules/tags/tags.service";
 import { ratingsService } from "@/modules/ratings/ratings.service";
 import { bookmarksService } from "@/modules/bookmarks/bookmarks.service";
@@ -44,6 +48,8 @@ import {
   bulkUpdateTagsSchema,
   bulkUpdateStudiosSchema,
   bulkUpdateFavoritesSchema,
+  bulkConditionalApplySchema,
+  bulkConditionalApplyResponseSchema,
   duplicatesResponseSchema,
 } from "./videos.schemas";
 
@@ -70,7 +76,10 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await videosService.list(request.user!.id, request.query);
+      const result = await videosSearchService.list(
+        request.user!.id,
+        request.query,
+      );
 
       return reply.send({
         success: true,
@@ -96,9 +105,8 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const suggestions = await videosService.getCompressionSuggestions(
-        request.query,
-      );
+      const suggestions =
+        await videosSuggestionsService.getCompressionSuggestions(request.query);
 
       return reply.send({
         success: true,
@@ -125,7 +133,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await videosService.getNextVideo(
+      const result = await videosSearchService.getNextVideo(
         request.user!.id,
         request.query,
       );
@@ -155,7 +163,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await videosService.getTriageQueue(
+      const result = await videosSearchService.getTriageQueue(
         request.user!.id,
         request.query,
       );
@@ -184,7 +192,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.bulkDelete(request.body.ids);
+      await videosBulkService.bulkDelete(request.body.ids);
 
       return reply.send({
         success: true,
@@ -208,7 +216,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.bulkUpdateCreators(request.body);
+      await videosBulkService.bulkUpdateCreators(request.body);
 
       return reply.send({
         success: true,
@@ -232,7 +240,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.bulkUpdateTags(request.body);
+      await videosBulkService.bulkUpdateTags(request.body);
 
       return reply.send({
         success: true,
@@ -256,7 +264,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.bulkUpdateStudios(request.body);
+      await videosBulkService.bulkUpdateStudios(request.body);
 
       return reply.send({
         success: true,
@@ -280,11 +288,51 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.bulkUpdateFavorites(request.user!.id, request.body);
+      await videosBulkService.bulkUpdateFavorites(
+        request.user!.id,
+        request.body,
+      );
 
       return reply.send({
         success: true,
         message: "Favorites updated successfully",
+      });
+    },
+  );
+
+  // Bulk conditional apply (apply actions to videos matching filter criteria)
+  app.post(
+    "/bulk/conditional-apply",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Bulk apply actions with filter",
+        description:
+          "Applies creator, tag, and studio changes to all videos matching the provided filter criteria. Useful for bulk operations based on directory, tags, or other filters.",
+        body: bulkConditionalApplySchema,
+        response: {
+          200: bulkConditionalApplyResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { filter, actions } = request.body;
+
+      const result = await videosBulkService.bulkConditionalApply(
+        request.user!.id,
+        filter || {},
+        actions || {},
+      );
+
+      return reply.send({
+        success: true,
+        data: {
+          matched: result.matched,
+          affected: result.affected,
+          errors: result.errors,
+          details: result.details,
+        },
       });
     },
   );
@@ -330,7 +378,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const duplicates = await videosService.getDuplicates();
+      const duplicates = await videosBulkService.getDuplicates();
       return reply.send({
         success: true,
         data: duplicates,
@@ -452,6 +500,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   // Stream video with range request support (requires authentication)
+  // Note: Response schema intentionally omits 200/206 because streaming returns raw bytes, not JSON
   app.get(
     "/:id/stream",
     {
@@ -461,21 +510,17 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         description:
           "Streams the video file with HTTP range request support. Requires authentication.",
         params: idParamSchema,
-        response: {
-          401: errorResponseSchema,
-          404: errorResponseSchema,
-        },
+        // Only define error responses - success returns a stream, not JSON
       },
     },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const videoId = Number(id);
+      const { id } = request.params as { id: number };
+      const videoId = id;
       const rangeHeader = request.headers.range;
 
       // Queue storyboard generation if not already exists/processing
-      const { storyboardsService } = await import(
-        "@/modules/storyboards/storyboards.service"
-      );
+      const { storyboardsService } =
+        await import("@/modules/storyboards/storyboards.service");
       // Non-blocking: queueGenerate handles deduplication and sequential processing
       storyboardsService.queueGenerate(videoId);
 
@@ -496,8 +541,10 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       );
 
       reply.status(result.statusCode);
-      reply.headers(result.headers);
-
+      // Set each header individually (reply.headers() doesn't work as expected in Fastify)
+      Object.entries(result.headers).forEach(([name, value]) => {
+        reply.header(name, String(value));
+      });
       return reply.send(result.stream);
     },
   );
@@ -522,7 +569,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       await videosService.findById(request.params.id);
-      const creators = await creatorsService.getCreatorsForVideo(
+      const creators = await creatorsRelationshipsService.getCreatorsForVideo(
         request.params.id,
       );
 
@@ -553,7 +600,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await creatorsService.addToVideo(
+      await creatorsRelationshipsService.addToVideo(
         request.params.id,
         request.body.creator_id,
       );
@@ -582,7 +629,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await creatorsService.removeFromVideo(
+      await creatorsRelationshipsService.removeFromVideo(
         request.params.id,
         request.params.creator_id,
       );
@@ -700,7 +747,9 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const metadata = await videosService.getMetadata(request.params.id);
+      const metadata = await videosMetadataService.getMetadata(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -728,7 +777,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.setMetadata(
+      await videosMetadataService.setMetadata(
         request.params.id,
         request.body.key,
         request.body.value,
@@ -758,7 +807,10 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await videosService.deleteMetadata(request.params.id, request.params.key);
+      await videosMetadataService.deleteMetadata(
+        request.params.id,
+        request.params.key,
+      );
 
       return reply.send({
         success: true,
@@ -939,7 +991,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await studiosService.linkVideo(
+      await studiosRelationshipsService.linkVideo(
         request.params.studio_id,
         request.params.id,
       );
@@ -968,7 +1020,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await studiosService.unlinkVideo(
+      await studiosRelationshipsService.unlinkVideo(
         request.params.studio_id,
         request.params.id,
       );

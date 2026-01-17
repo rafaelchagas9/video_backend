@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export interface Playlist {
   id: number;
@@ -7,6 +7,7 @@ export interface Playlist {
   description: string | null;
   created_at: string;
   updated_at: string;
+  thumbnail_url?: string | null;
 }
 
 export interface PlaylistVideo {
@@ -36,7 +37,7 @@ export const reorderPlaylistSchema = z.object({
     z.object({
       video_id: z.number().int().positive(),
       position: z.number().int().min(0),
-    })
+    }),
   ),
 });
 

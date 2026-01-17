@@ -11,6 +11,8 @@ export interface ConversionJob {
   preset: string;
   target_resolution: string | null;
   codec: string;
+  delete_original: boolean;
+  batch_id: string | null;
   output_path: string | null;
   output_size_bytes: number | null;
   progress_percent: number;
@@ -23,6 +25,8 @@ export interface ConversionJob {
 export interface CreateConversionJobInput {
   video_id: number;
   preset: string;
+  deleteOriginal?: boolean;
+  batchId?: string;
 }
 
 export interface ConversionJobWithVideo extends ConversionJob {
@@ -39,16 +43,24 @@ export type ConversionEventType =
   | 'conversion:started'
   | 'conversion:progress'
   | 'conversion:completed'
-  | 'conversion:failed';
+  | 'conversion:failed'
+  | 'conversion:batch_completed';
 
 export interface ConversionEvent {
   type: ConversionEventType;
-  jobId: number;
-  videoId: number;
-  preset: string;
-  progress?: number;
-  outputPath?: string;
-  error?: string;
+  message: {
+    jobId: number;
+    videoId: number;
+    preset: string;
+    progress?: number;
+    outputPath?: string;
+    error?: string;
+    stats?: {
+      total: number;
+      completed: number;
+      failed: number;
+    };
+  };
 }
 
 /**
@@ -58,6 +70,8 @@ export interface QueueJobPayload {
   jobId: number;
   videoId: number;
   preset: string;
+  deleteOriginal?: boolean;
+  batchId?: string;
   inputPath: string;
   outputPath: string;
   createdAt: string;

@@ -17,13 +17,15 @@ export interface Video {
   title: string | null;
   description: string | null;
   themes: string | null;
-  is_available: number;
+  is_available: boolean;
   last_verified_at: string | null;
   indexed_at: string;
   created_at: string;
   updated_at: string;
   is_favorite: boolean;
   thumbnail_id?: number | null;
+  thumbnail_url?: string | null;
+  thumbnail_base64?: string | null;
 }
 
 export interface VideoMetadata {
@@ -89,6 +91,7 @@ export interface ListVideosOptions {
   tagIds?: number[];
   studioIds?: number[];
   matchMode?: "any" | "all";
+  ids?: number[];
 
   // Presence flags
   isFavorite?: boolean;
@@ -166,4 +169,6 @@ export interface CompressionSuggestion {
   usage_score: number;
   recommended_actions: string[];
   reasons: string[];
+  thumbnail_id?: number | null;
+  thumbnail_url?: string | null;
 }

@@ -8,13 +8,28 @@ export const videoIdParamSchema = z.object({
   video_id: z.coerce.number().int().positive(),
 });
 
+const parseNullableNumber = (val: unknown) => {
+  if (val === null || val === undefined) {
+    return null;
+  }
+  if (typeof val === "number") {
+    return val;
+  }
+  if (typeof val === "string" && val.trim() !== "") {
+    const parsed = Number.parseFloat(val);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
 // Response schemas
 const favoriteVideoSchema = z.object({
   id: z.number(),
   file_name: z.string(),
   title: z.string().nullable(),
-  duration_seconds: z.number().nullable(),
+  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
   added_at: z.string(),
+  thumbnail_url: z.string().nullable(),
 });
 
 const errorSchema = z.object({

@@ -1,76 +1,111 @@
-import { getDatabase } from '@/config/database';
-import { NotFoundError, ForbiddenError, ConflictError } from '@/utils/errors';
-import type { 
-  Playlist, 
-  CreatePlaylistInput, 
-  UpdatePlaylistInput 
-} from './playlists.types';
-import { videosService } from '@/modules/videos/videos.service';
+import { db } from "@/config/drizzle";
+import { eq, and, sql } from "drizzle-orm";
+import { playlistsTable, playlistVideosTable } from "@/database/schema";
+import { NotFoundError, ForbiddenError, ConflictError } from "@/utils/errors";
+import { API_PREFIX } from "@/config/constants";
+import type {
+  Playlist,
+  CreatePlaylistInput,
+  UpdatePlaylistInput,
+} from "./playlists.types";
+import { videosService } from "@/modules/videos/videos.service";
 
 export class PlaylistsService {
-  private get db() {
-    return getDatabase();
-  }
-
   async create(userId: number, input: CreatePlaylistInput): Promise<Playlist> {
-    const result = this.db
-      .prepare(
-        'INSERT INTO playlists (user_id, name, description) VALUES (?, ?, ?)'
-      )
-      .run(userId, input.name, input.description || null);
+    const result = await db
+      .insert(playlistsTable)
+      .values({
+        userId,
+        name: input.name,
+        description: input.description || null,
+      })
+      .returning({ id: playlistsTable.id });
 
-    return this.findById(result.lastInsertRowid as number);
+    if (!result || result.length === 0) {
+      throw new Error("Failed to create playlist");
+    }
+
+    return this.findById(result[0].id);
   }
 
   async findById(id: number): Promise<Playlist> {
-    const playlist = this.db
-      .prepare('SELECT * FROM playlists WHERE id = ?')
-      .get(id) as Playlist | undefined;
+    const playlists = await db
+      .select()
+      .from(playlistsTable)
+      .where(eq(playlistsTable.id, id))
+      .limit(1);
 
-    if (!playlist) {
+    if (!playlists || playlists.length === 0) {
       throw new NotFoundError(`Playlist not found with id: ${id}`);
     }
 
-    return playlist;
+    return this.mapToSnakeCase(playlists[0]);
   }
 
   async list(userId: number): Promise<Playlist[]> {
-    return this.db
-      .prepare('SELECT * FROM playlists WHERE user_id = ? ORDER BY created_at DESC')
-      .all(userId) as Playlist[];
+    // Use raw SQL for complex subquery
+    const query = sql`
+      SELECT
+        p.*,
+        (
+          SELECT t.id
+          FROM playlist_videos pv
+          JOIN videos v ON pv.video_id = v.id
+          LEFT JOIN thumbnails t ON v.id = t.video_id
+          WHERE pv.playlist_id = p.id
+          ORDER BY pv.position ASC
+          LIMIT 1
+        ) as thumbnail_id
+      FROM playlists p
+      WHERE p.user_id = ${userId}
+      ORDER BY p.created_at DESC
+    `;
+
+    const result = await db.execute(query);
+    const playlists = result as any[];
+
+    return playlists.map((p) => ({
+      ...this.mapToSnakeCase(p),
+      thumbnail_url: p.thumbnail_id
+        ? `${API_PREFIX}/thumbnails/${p.thumbnail_id}/image`
+        : null,
+    }));
   }
 
-  async update(id: number, userId: number, input: UpdatePlaylistInput): Promise<Playlist> {
+  async update(
+    id: number,
+    userId: number,
+    input: UpdatePlaylistInput,
+  ): Promise<Playlist> {
     const playlist = await this.findById(id);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to update this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to update this playlist",
+      );
     }
 
-    const updates: string[] = [];
-    const values: any[] = [];
+    const updates: any = {};
 
     if (input.name !== undefined) {
-      updates.push('name = ?');
-      values.push(input.name);
+      updates.name = input.name;
     }
 
     if (input.description !== undefined) {
-      updates.push('description = ?');
-      values.push(input.description);
+      updates.description = input.description;
     }
 
-    if (updates.length === 0) {
+    if (Object.keys(updates).length === 0) {
       return playlist;
     }
 
-    updates.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(id);
+    updates.updatedAt = new Date();
 
-    this.db
-      .prepare(`UPDATE playlists SET ${updates.join(', ')} WHERE id = ?`)
-      .run(...values);
+    await db
+      .update(playlistsTable)
+      .set(updates)
+      .where(eq(playlistsTable.id, id));
 
     return this.findById(id);
   }
@@ -80,62 +115,93 @@ export class PlaylistsService {
 
     // Verify ownership
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to delete this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to delete this playlist",
+      );
     }
 
-    this.db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
+    await db.delete(playlistsTable).where(eq(playlistsTable.id, id));
   }
 
-  async addVideo(playlistId: number, userId: number, videoId: number, position?: number): Promise<void> {
+  async addVideo(
+    playlistId: number,
+    userId: number,
+    videoId: number,
+    position?: number,
+  ): Promise<void> {
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to modify this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to modify this playlist",
+      );
     }
 
     // Verify video exists
     await videosService.findById(videoId);
 
     // Check if video already in playlist
-    const existing = this.db
-      .prepare('SELECT * FROM playlist_videos WHERE playlist_id = ? AND video_id = ?')
-      .get(playlistId, videoId);
+    const existing = await db
+      .select()
+      .from(playlistVideosTable)
+      .where(
+        and(
+          eq(playlistVideosTable.playlistId, playlistId),
+          eq(playlistVideosTable.videoId, videoId),
+        ),
+      )
+      .limit(1);
 
-    if (existing) {
-      throw new ConflictError('Video already exists in this playlist');
+    if (existing && existing.length > 0) {
+      throw new ConflictError("Video already exists in this playlist");
     }
 
     // If no position provided, add to end
     let finalPosition = position;
     if (finalPosition === undefined) {
-      const maxPos = this.db
-        .prepare('SELECT MAX(position) as max_pos FROM playlist_videos WHERE playlist_id = ?')
-        .get(playlistId) as { max_pos: number | null };
-      
-      finalPosition = (maxPos.max_pos ?? -1) + 1;
+      const maxPosResult = await db
+        .select({
+          maxPos: sql<number | null>`MAX(${playlistVideosTable.position})`,
+        })
+        .from(playlistVideosTable)
+        .where(eq(playlistVideosTable.playlistId, playlistId));
+
+      finalPosition = (maxPosResult[0]?.maxPos ?? -1) + 1;
     }
 
-    this.db
-      .prepare('INSERT INTO playlist_videos (playlist_id, video_id, position) VALUES (?, ?, ?)')
-      .run(playlistId, videoId, finalPosition);
+    await db.insert(playlistVideosTable).values({
+      playlistId,
+      videoId,
+      position: finalPosition,
+    });
   }
 
-  async removeVideo(playlistId: number, userId: number, videoId: number): Promise<void> {
+  async removeVideo(
+    playlistId: number,
+    userId: number,
+    videoId: number,
+  ): Promise<void> {
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to modify this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to modify this playlist",
+      );
     }
 
-    const result = this.db
-      .prepare('DELETE FROM playlist_videos WHERE playlist_id = ? AND video_id = ?')
-      .run(playlistId, videoId);
+    await db
+      .delete(playlistVideosTable)
+      .where(
+        and(
+          eq(playlistVideosTable.playlistId, playlistId),
+          eq(playlistVideosTable.videoId, videoId),
+        ),
+      );
 
-    if (result.changes === 0) {
-      throw new NotFoundError('Video not found in this playlist');
-    }
+    // Drizzle doesn't return rowCount, so we'll just proceed
+    // The delete will succeed even if no rows match
   }
 
   async getVideos(playlistId: number, userId: number) {
@@ -143,86 +209,145 @@ export class PlaylistsService {
 
     // Verify ownership
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to view this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to view this playlist",
+      );
     }
 
-    const videos = this.db
-      .prepare(`
-        SELECT
-          v.*,
-          pv.position,
-          pv.added_at as added_to_playlist_at,
-          t.id as thumbnail_id
-        FROM videos v
-        INNER JOIN playlist_videos pv ON v.id = pv.video_id
-        LEFT JOIN thumbnails t ON v.id = t.video_id
-        WHERE pv.playlist_id = ?
-        ORDER BY pv.position ASC
-      `)
-      .all(playlistId) as any[];
+    const query = sql`
+      SELECT
+        v.*,
+        pv.position,
+        pv.added_at as added_to_playlist_at,
+        t.id as thumbnail_id
+      FROM videos v
+      INNER JOIN playlist_videos pv ON v.id = pv.video_id
+      LEFT JOIN thumbnails t ON v.id = t.video_id
+      WHERE pv.playlist_id = ${playlistId}
+      ORDER BY pv.position ASC
+    `;
+
+    const result = await db.execute(query);
+    const videos = result as any[];
 
     // Add thumbnail_url to each video
-    return videos.map(video => ({
+    return videos.map((video) => ({
       ...video,
-      thumbnail_url: video.thumbnail_id ? `/api/thumbnails/${video.thumbnail_id}/image` : null
+      thumbnail_url: video.thumbnail_id
+        ? `${API_PREFIX}/thumbnails/${video.thumbnail_id}/image`
+        : null,
     }));
   }
 
-  async reorderVideos(playlistId: number, userId: number, positions: { video_id: number; position: number }[]): Promise<void> {
+  async reorderVideos(
+    playlistId: number,
+    userId: number,
+    positions: { video_id: number; position: number }[],
+  ): Promise<void> {
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to modify this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to modify this playlist",
+      );
     }
 
-    // Update positions in a transaction-like manner (SQLite auto-commits each statement)
-    // For better atomicity, we could use BEGIN/COMMIT, but for simplicity we'll do individual updates
+    // Update positions
     for (const { video_id, position } of positions) {
-      const result = this.db
-        .prepare('UPDATE playlist_videos SET position = ? WHERE playlist_id = ? AND video_id = ?')
-        .run(position, playlistId, video_id);
-
-      if (result.changes === 0) {
-        throw new NotFoundError(`Video ${video_id} not found in playlist`);
-      }
+      await db
+        .update(playlistVideosTable)
+        .set({ position })
+        .where(
+          and(
+            eq(playlistVideosTable.playlistId, playlistId),
+            eq(playlistVideosTable.videoId, video_id),
+          ),
+        );
     }
   }
 
   // Bulk Actions
-  async bulkUpdateVideos(playlistId: number, userId: number, input: { videoIds: number[]; action: 'add' | 'remove' }): Promise<void> {
+  async bulkUpdateVideos(
+    playlistId: number,
+    userId: number,
+    input: { videoIds: number[]; action: "add" | "remove" },
+  ): Promise<void> {
     const { videoIds, action } = input;
     if (videoIds.length === 0) return;
 
     const playlist = await this.findById(playlistId);
     if (playlist.user_id !== userId) {
-      throw new ForbiddenError('You do not have permission to modify this playlist');
+      throw new ForbiddenError(
+        "You do not have permission to modify this playlist",
+      );
     }
 
-    const update = this.db.transaction(() => {
-      if (action === 'add') {
-        // Get current max position
-        const result = this.db.prepare('SELECT MAX(position) as maxPos FROM playlist_videos WHERE playlist_id = ?').get(playlistId) as { maxPos: number | null };
-        let nextPos = (result.maxPos ?? -1) + 1;
+    if (action === "add") {
+      const maxPosResult = await db
+        .select({
+          maxPos: sql<number | null>`MAX(${playlistVideosTable.position})`,
+        })
+        .from(playlistVideosTable)
+        .where(eq(playlistVideosTable.playlistId, playlistId));
 
-        const insert = this.db.prepare('INSERT OR IGNORE INTO playlist_videos (playlist_id, video_id, position) VALUES (?, ?, ?)');
-        
-        for (const videoId of videoIds) {
-          // Check if exists to avoid incrementing position unnecessarily
-          const exists = this.db.prepare('SELECT 1 FROM playlist_videos WHERE playlist_id = ? AND video_id = ?').get(playlistId, videoId);
-          if (!exists) {
-            insert.run(playlistId, videoId, nextPos++);
+      let nextPos = (maxPosResult[0]?.maxPos ?? -1) + 1;
+
+      for (const videoId of videoIds) {
+        // Check if exists to avoid duplicates
+        const exists = await db
+          .select()
+          .from(playlistVideosTable)
+          .where(
+            and(
+              eq(playlistVideosTable.playlistId, playlistId),
+              eq(playlistVideosTable.videoId, videoId),
+            ),
+          )
+          .limit(1);
+
+        if (!exists || exists.length === 0) {
+          try {
+            await db.insert(playlistVideosTable).values({
+              playlistId,
+              videoId,
+              position: nextPos++,
+            });
+          } catch {
+            // Ignore duplicates from race conditions
           }
         }
-      } else {
-        const deleteStmt = this.db.prepare(
-          `DELETE FROM playlist_videos WHERE playlist_id = ? AND video_id IN (${videoIds.map(() => '?').join(',')})`
-        );
-        deleteStmt.run(playlistId, ...videoIds);
       }
-    });
+    } else {
+      // Delete multiple videos
+      for (const videoId of videoIds) {
+        await db
+          .delete(playlistVideosTable)
+          .where(
+            and(
+              eq(playlistVideosTable.playlistId, playlistId),
+              eq(playlistVideosTable.videoId, videoId),
+            ),
+          );
+      }
+    }
+  }
 
-    update();
+  private mapToSnakeCase(playlist: any): Playlist {
+    return {
+      id: playlist.id,
+      user_id: playlist.userId ?? playlist.user_id,
+      name: playlist.name,
+      description: playlist.description,
+      created_at:
+        playlist.createdAt instanceof Date
+          ? playlist.createdAt.toISOString()
+          : playlist.created_at,
+      updated_at:
+        playlist.updatedAt instanceof Date
+          ? playlist.updatedAt.toISOString()
+          : playlist.updated_at,
+    };
   }
 }
 

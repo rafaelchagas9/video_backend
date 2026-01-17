@@ -1,4 +1,5 @@
-import { getDatabase } from "@/config/database";
+import { db } from "@/config/drizzle";
+import { appSettingsTable } from "@/database/schema";
 import type { AppSetting, SettingValue } from "./settings.types";
 
 const DEFAULT_SETTINGS: Record<string, SettingValue> = {
@@ -11,18 +12,15 @@ const DEFAULT_SETTINGS: Record<string, SettingValue> = {
 };
 
 export class SettingsService {
-  private get db() {
-    return getDatabase();
-  }
-
-  private ensureDefaults(): void {
-    const insert = this.db.prepare(
-      `INSERT OR IGNORE INTO app_settings (key, value, updated_at)
-       VALUES (?, ?, datetime('now'))`,
-    );
-
+  private async ensureDefaults(): Promise<void> {
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-      insert.run(key, String(value));
+      await db
+        .insert(appSettingsTable)
+        .values({
+          key,
+          value: String(value),
+        })
+        .onConflictDoNothing();
     }
   }
 
@@ -43,31 +41,26 @@ export class SettingsService {
   }
 
   async getAll(): Promise<AppSetting[]> {
-    this.ensureDefaults();
+    await this.ensureDefaults();
 
-    const rows = this.db
-      .prepare(
-        "SELECT key, value, updated_at FROM app_settings ORDER BY key ASC",
-      )
-      .all() as {
-      key: string;
-      value: string;
-      updated_at: string;
-    }[];
+    const rows = await db.query.appSettingsTable.findMany({
+      orderBy: (settings, { asc }) => [asc(settings.key)],
+    });
 
     return rows.map((row) => ({
       key: row.key,
       value: this.parseSettingValue(row.key, row.value),
-      updated_at: row.updated_at,
+      updated_at: row.updatedAt.toISOString(),
     }));
   }
 
   async getValue(key: string): Promise<SettingValue> {
-    this.ensureDefaults();
+    await this.ensureDefaults();
 
-    const row = this.db
-      .prepare("SELECT key, value FROM app_settings WHERE key = ?")
-      .get(key) as { key: string; value: string } | undefined;
+    const row = await db.query.appSettingsTable.findFirst({
+      where: (settings, { eq }) => eq(settings.key, key),
+      columns: { key: true, value: true },
+    });
 
     if (!row) {
       const defaultValue = Object.prototype.hasOwnProperty.call(
@@ -76,12 +69,13 @@ export class SettingsService {
       )
         ? DEFAULT_SETTINGS[key]
         : "";
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO app_settings (key, value, updated_at)
-           VALUES (?, ?, datetime('now'))`,
-        )
-        .run(key, String(defaultValue));
+      await db
+        .insert(appSettingsTable)
+        .values({
+          key,
+          value: String(defaultValue),
+        })
+        .onConflictDoNothing();
       return defaultValue;
     }
 
@@ -104,26 +98,28 @@ export class SettingsService {
   async updateValues(
     values: Record<string, SettingValue>,
   ): Promise<AppSetting[]> {
-    this.ensureDefaults();
+    await this.ensureDefaults();
 
     const entries = Object.entries(values);
     if (entries.length === 0) return this.getAll();
 
-    const update = this.db.transaction(() => {
-      const stmt = this.db.prepare(
-        `INSERT INTO app_settings (key, value, updated_at)
-         VALUES (?, ?, datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET
-           value = excluded.value,
-           updated_at = datetime('now')`,
-      );
-
+    await db.transaction(async (tx) => {
       for (const [key, value] of entries) {
-        stmt.run(key, String(value));
+        await tx
+          .insert(appSettingsTable)
+          .values({
+            key,
+            value: String(value),
+          })
+          .onConflictDoUpdate({
+            target: appSettingsTable.key,
+            set: {
+              value: String(value),
+              updatedAt: new Date(),
+            },
+          });
       }
     });
-
-    update();
 
     return this.getAll();
   }

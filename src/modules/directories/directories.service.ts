@@ -1,24 +1,18 @@
-import { existsSync } from 'fs';
-import { stat, access, constants } from 'fs/promises';
-import { resolve } from 'path';
-import { getDatabase } from '@/config/database';
-import {
-  NotFoundError,
-  ValidationError,
-  ConflictError,
-} from '@/utils/errors';
+import { existsSync } from "fs";
+import { stat, access, constants } from "fs/promises";
+import { resolve } from "path";
+import { db } from "@/config/drizzle";
+import { watchedDirectoriesTable, videosTable } from "@/database/schema";
+import { eq, count, sql } from "drizzle-orm";
+import { NotFoundError, ValidationError, ConflictError } from "@/utils/errors";
 import type {
   CreateDirectoryInput,
   UpdateDirectoryInput,
   Directory,
   DirectoryStats,
-} from './directories.types';
+} from "./directories.types";
 
 export class DirectoriesService {
-  private get db() {
-    return getDatabase();
-  }
-
   async create(input: CreateDirectoryInput): Promise<Directory> {
     // Normalize path
     const normalizedPath = resolve(input.path);
@@ -38,105 +32,117 @@ export class DirectoriesService {
       // Check read permissions
       await access(normalizedPath, constants.R_OK);
     } catch (error: any) {
-      if (error.code === 'EACCES') {
+      if (error.code === "EACCES") {
         throw new ValidationError(
-          `No read permission for directory: ${normalizedPath}`
+          `No read permission for directory: ${normalizedPath}`,
         );
       }
       throw error;
     }
 
     // Check if already registered
-    const existing = this.db
-      .prepare('SELECT id FROM watched_directories WHERE path = ?')
-      .get(normalizedPath);
+    const existing = await db.query.watchedDirectoriesTable.findFirst({
+      where: (dirs, { eq }) => eq(dirs.path, normalizedPath),
+      columns: { id: true },
+    });
 
     if (existing) {
-      throw new ConflictError(`Directory already registered: ${normalizedPath}`);
+      throw new ConflictError(
+        `Directory already registered: ${normalizedPath}`,
+      );
     }
 
     // Create directory record
-    const result = this.db
-      .prepare(
-        `INSERT INTO watched_directories (path, auto_scan, scan_interval_minutes)
-         VALUES (?, ?, ?)
-         RETURNING id, path, is_active, auto_scan, scan_interval_minutes,
-                   last_scan_at, added_at, updated_at`
-      )
-      .get(
-        normalizedPath,
-        input.auto_scan ? 1 : 0,
-        input.scan_interval_minutes
-      ) as Directory;
+    const [result] = await db
+      .insert(watchedDirectoriesTable)
+      .values({
+        path: normalizedPath,
+        autoScan: input.auto_scan ?? true,
+        scanIntervalMinutes: input.scan_interval_minutes ?? 30,
+      })
+      .returning();
 
-    return result;
+    if (!result) {
+      throw new Error("Failed to create directory record");
+    }
+
+    return {
+      id: result.id,
+      path: result.path,
+      is_active: result.isActive,
+      auto_scan: result.autoScan,
+      scan_interval_minutes: result.scanIntervalMinutes,
+      last_scan_at: result.lastScanAt?.toISOString() ?? null,
+      added_at: result.addedAt.toISOString(),
+      updated_at: result.updatedAt.toISOString(),
+    };
   }
 
   async findAll(): Promise<Directory[]> {
-    return this.db
-      .prepare(
-        `SELECT id, path, is_active, auto_scan, scan_interval_minutes,
-                last_scan_at, added_at, updated_at
-         FROM watched_directories
-         ORDER BY added_at DESC`
-      )
-      .all() as Directory[];
+    const results = await db.query.watchedDirectoriesTable.findMany({
+      orderBy: (dirs, { desc }) => [desc(dirs.addedAt)],
+    });
+
+    return results.map((dir) => ({
+      id: dir.id,
+      path: dir.path,
+      is_active: dir.isActive,
+      auto_scan: dir.autoScan,
+      scan_interval_minutes: dir.scanIntervalMinutes,
+      last_scan_at: dir.lastScanAt?.toISOString() ?? null,
+      added_at: dir.addedAt.toISOString(),
+      updated_at: dir.updatedAt.toISOString(),
+    }));
   }
 
   async findById(id: number): Promise<Directory> {
-    const directory = this.db
-      .prepare(
-        `SELECT id, path, is_active, auto_scan, scan_interval_minutes,
-                last_scan_at, added_at, updated_at
-         FROM watched_directories
-         WHERE id = ?`
-      )
-      .get(id) as Directory | undefined;
+    const directory = await db.query.watchedDirectoriesTable.findFirst({
+      where: (dirs, { eq }) => eq(dirs.id, id),
+    });
 
     if (!directory) {
       throw new NotFoundError(`Directory not found with id: ${id}`);
     }
 
-    return directory;
+    return {
+      id: directory.id,
+      path: directory.path,
+      is_active: directory.isActive,
+      auto_scan: directory.autoScan,
+      scan_interval_minutes: directory.scanIntervalMinutes,
+      last_scan_at: directory.lastScanAt?.toISOString() ?? null,
+      added_at: directory.addedAt.toISOString(),
+      updated_at: directory.updatedAt.toISOString(),
+    };
   }
 
   async update(id: number, input: UpdateDirectoryInput): Promise<Directory> {
     await this.findById(id); // Ensure exists
 
-    const updates: string[] = [];
-    const values: any[] = [];
+    const updateData: Partial<typeof watchedDirectoriesTable.$inferInsert> = {};
 
     if (input.is_active !== undefined) {
-      updates.push('is_active = ?');
-      values.push(input.is_active ? 1 : 0);
+      updateData.isActive = input.is_active;
     }
 
     if (input.auto_scan !== undefined) {
-      updates.push('auto_scan = ?');
-      values.push(input.auto_scan ? 1 : 0);
+      updateData.autoScan = input.auto_scan;
     }
 
     if (input.scan_interval_minutes !== undefined) {
-      updates.push('scan_interval_minutes = ?');
-      values.push(input.scan_interval_minutes);
+      updateData.scanIntervalMinutes = input.scan_interval_minutes;
     }
 
-    updates.push("updated_at = datetime('now')");
-
-    if (updates.length === 1) {
-      // Only updated_at changed
+    if (Object.keys(updateData).length === 0) {
       return this.findById(id);
     }
 
-    values.push(id);
+    updateData.updatedAt = new Date();
 
-    this.db
-      .prepare(
-        `UPDATE watched_directories
-         SET ${updates.join(', ')}
-         WHERE id = ?`
-      )
-      .run(...values);
+    await db
+      .update(watchedDirectoriesTable)
+      .set(updateData)
+      .where(eq(watchedDirectoriesTable.id, id));
 
     return this.findById(id);
   }
@@ -144,36 +150,37 @@ export class DirectoriesService {
   async delete(id: number): Promise<void> {
     await this.findById(id); // Ensure exists
 
-    this.db
-      .prepare('DELETE FROM watched_directories WHERE id = ?')
-      .run(id);
+    await db
+      .delete(watchedDirectoriesTable)
+      .where(eq(watchedDirectoriesTable.id, id));
   }
 
   async getStats(id: number): Promise<DirectoryStats> {
     await this.findById(id); // Ensure exists
 
-    const stats = this.db
-      .prepare(
-        `SELECT
-           ? as directory_id,
-           COUNT(*) as total_videos,
-           COALESCE(SUM(file_size_bytes), 0) as total_size_bytes,
-           SUM(CASE WHEN is_available = 1 THEN 1 ELSE 0 END) as available_videos,
-           SUM(CASE WHEN is_available = 0 THEN 1 ELSE 0 END) as unavailable_videos
-         FROM videos
-         WHERE directory_id = ?`
-      )
-      .get(id, id) as DirectoryStats;
+    const [stats] = await db
+      .select({
+        directory_id: sql<number>`${id}`,
+        total_videos: count(),
+        total_size_bytes: sql<number>`COALESCE(SUM(${videosTable.fileSizeBytes}), 0)`,
+        available_videos: sql<number>`SUM(CASE WHEN ${videosTable.isAvailable} = true THEN 1 ELSE 0 END)`,
+        unavailable_videos: sql<number>`SUM(CASE WHEN ${videosTable.isAvailable} = false THEN 1 ELSE 0 END)`,
+      })
+      .from(videosTable)
+      .where(eq(videosTable.directoryId, id));
+
+    if (!stats) {
+      throw new Error("Failed to get directory stats");
+    }
 
     return stats;
   }
 
   async updateLastScanTime(id: number): Promise<void> {
-    this.db
-      .prepare(
-        "UPDATE watched_directories SET last_scan_at = datetime('now') WHERE id = ?"
-      )
-      .run(id);
+    await db
+      .update(watchedDirectoriesTable)
+      .set({ lastScanAt: new Date() })
+      .where(eq(watchedDirectoriesTable.id, id));
   }
 }
 

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export const createDirectorySchema = z.object({
   path: z.string().min(1),
@@ -18,8 +18,8 @@ export type UpdateDirectoryInput = z.infer<typeof updateDirectorySchema>;
 export interface Directory {
   id: number;
   path: string;
-  is_active: number;
-  auto_scan: number;
+  is_active: boolean;
+  auto_scan: boolean;
   scan_interval_minutes: number;
   last_scan_at: string | null;
   added_at: string;

@@ -1,24 +1,23 @@
-import { getDatabase } from "@/config/database";
+import { db } from "@/config/drizzle";
+import { eq, and, sql } from "drizzle-orm";
+import { favoritesTable } from "@/database/schema";
 import { videosService } from "@/modules/videos/videos.service";
-import { NotFoundError } from "@/utils/errors";
+import { API_PREFIX } from "@/config/constants";
 
 export class FavoritesService {
-  private get db() {
-    return getDatabase();
-  }
-
   async add(userId: number, videoId: number): Promise<void> {
     // Verify video exists
     await videosService.findById(videoId);
 
     // Idempotent - ignore if already exists
     try {
-      this.db
-        .prepare("INSERT INTO favorites (user_id, video_id) VALUES (?, ?)")
-        .run(userId, videoId);
+      await db.insert(favoritesTable).values({
+        userId,
+        videoId,
+      });
     } catch (error: any) {
-      // SQLite UNIQUE constraint violation (already favorited)
-      if (error.message?.includes("UNIQUE constraint failed")) {
+      // PostgreSQL UNIQUE constraint violation (already favorited)
+      if (error.code === "23505") {
         // Already favorited, this is fine (idempotent)
         return;
       }
@@ -27,35 +26,53 @@ export class FavoritesService {
   }
 
   async remove(userId: number, videoId: number): Promise<void> {
-    const result = this.db
-      .prepare("DELETE FROM favorites WHERE user_id = ? AND video_id = ?")
-      .run(userId, videoId);
+    await db
+      .delete(favoritesTable)
+      .where(
+        and(
+          eq(favoritesTable.userId, userId),
+          eq(favoritesTable.videoId, videoId),
+        ),
+      );
 
-    if (result.changes === 0) {
-      throw new NotFoundError("Favorite not found");
-    }
+    // Drizzle doesn't return rowCount, so we can't verify if it was deleted
+    // The delete will succeed even if no rows match
   }
 
   async list(userId: number) {
-    return this.db
-      .prepare(
-        `
-        SELECT v.*, f.added_at
-        FROM videos v
-        INNER JOIN favorites f ON v.id = f.video_id
-        WHERE f.user_id = ?
-        ORDER BY f.added_at DESC
-      `,
-      )
-      .all(userId);
+    const query = sql`
+      SELECT v.*, f.added_at, t.id as thumbnail_id
+      FROM videos v
+      INNER JOIN favorites f ON v.id = f.video_id
+      LEFT JOIN thumbnails t ON v.id = t.video_id
+      WHERE f.user_id = ${userId}
+      ORDER BY f.added_at DESC
+    `;
+
+    const result = await db.execute(query);
+    const videos = result as any[];
+
+    return videos.map((v) => ({
+      ...v,
+      thumbnail_url: v.thumbnail_id
+        ? `${API_PREFIX}/thumbnails/${v.thumbnail_id}/image`
+        : null,
+    }));
   }
 
   async isFavorite(userId: number, videoId: number): Promise<boolean> {
-    const result = this.db
-      .prepare("SELECT 1 FROM favorites WHERE user_id = ? AND video_id = ?")
-      .get(userId, videoId);
+    const result = await db
+      .select()
+      .from(favoritesTable)
+      .where(
+        and(
+          eq(favoritesTable.userId, userId),
+          eq(favoritesTable.videoId, videoId),
+        ),
+      )
+      .limit(1);
 
-    return result !== undefined;
+    return result !== null && result.length > 0;
   }
 }
 

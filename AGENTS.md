@@ -8,7 +8,11 @@ This document provides essential information for AI agents and developers workin
 
 - **Start Dev Server**: `bun dev` (auto-reloads on change)
 - **Start Production**: `bun start`
-- **Database Migrations**: `bun db:migrate`
+- **Generate Migrations**: `bun db:generate` (generates Drizzle migrations from schema)
+- **Run Migrations**: `bun db:migrate` (applies pending migrations)
+- **Push Schema**: `bun db:push` (push schema changes directly - dev only)
+- **Database Studio**: `bun db:studio` (opens Drizzle Studio GUI)
+- **Apply SQL Migration**: `bun db:apply-migration <file>` (run raw SQL migration)
 
 ### Testing & Quality
 
@@ -17,6 +21,7 @@ This document provides essential information for AI agents and developers workin
 - **Run Tests by Pattern**: `bun test --filter "should register"`
 - **Linting**: `bunx eslint .`
 - **Type Checking**: `bunx tsc --noEmit`
+- **Important**: Do not run unit tests as they are currently broken.
 
 ## 🏗 Architecture & Patterns
 
@@ -30,20 +35,58 @@ Each feature in `src/modules/` should follow this file naming convention:
 - `*.schemas.ts`: Zod validation schemas.
 - `*.middleware.ts`: Feature-specific middleware (e.g., auth).
 
-### Database Access (Bun SQLite)
+### Database Access (PostgreSQL + Drizzle ORM)
 
-**CRITICAL**: Always use a getter to access the database reference in services. Do NOT cache it as a property.
+This project uses **PostgreSQL** with **Drizzle ORM**. Import the database from `@/config/drizzle`:
 
 ```typescript
-// ✅ Correct
-export class MyService {
-  private get db() {
-    return getDatabase();
-  }
-}
+import { db } from "@/config/drizzle";
+import { usersTable } from "@/database/schema";
+import { eq } from "drizzle-orm";
+
+// Simple query
+const user = await db.query.usersTable.findFirst({
+  where: (users, { eq }) => eq(users.id, userId),
+});
+
+// Insert with returning
+const [newUser] = await db.insert(usersTable).values({ name }).returning();
+
+// Update
+await db.update(usersTable).set({ name }).where(eq(usersTable.id, userId));
+
+// Delete
+await db.delete(usersTable).where(eq(usersTable.id, userId));
 ```
 
-_Why_: Tests close/reopen the database between suites; cached references become stale.
+**For complex queries**, use the `sql` template tag:
+
+```typescript
+import { sql } from "drizzle-orm";
+
+const results = await db.execute(sql`
+  SELECT c.*, COUNT(vc.video_id) as video_count
+  FROM creators c
+  LEFT JOIN video_creators vc ON c.id = vc.creator_id
+  WHERE c.name LIKE ${`%${search}%`}
+  GROUP BY c.id
+  LIMIT ${limit}
+`);
+```
+
+### Schema Definition
+
+Schemas are defined in `src/database/schema/` using Drizzle's pg-core:
+
+```typescript
+import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+
+export const usersTable = pgTable("users", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+```
 
 ### Path Aliases
 
@@ -53,12 +96,14 @@ Use the following aliases for imports:
 - `@/modules/*` -> `src/modules/*`
 - `@/utils/*` -> `src/utils/*`
 - `@/config/*` -> `src/config/*`
+- `@/database/*` -> `src/database/*`
 
 ### Error Handling
 
 - Custom errors MUST extend `AppError`.
 - MUST include `Object.setPrototypeOf(this, MyCustomError.prototype)` in the constructor.
 - Global error handler is in `src/server.ts` and MUST be registered before routes.
+- PostgreSQL error codes: `23505` (unique violation), `23503` (foreign key violation).
 
 ### Validation & Logging
 
@@ -90,19 +135,30 @@ Use the following aliases for imports:
 - Integration tests should use Fastify's `.inject()` for HTTP simulation.
 - Use `setupTestServer()`, `cleanupTestServer()`, and `cleanupDatabase()` from `tests/helpers/test-utils.ts`.
 - Ensure tests are isolated by cleaning the database in `beforeEach`.
+- **Note**: Test utilities need to be updated for PostgreSQL (currently broken).
 
 ## ⚙️ Environment Configuration
 
-- `DATABASE_PATH`: Path to SQLite database file.
+### Required PostgreSQL Variables
+
+- `POSTGRES_HOST`: PostgreSQL host (default: localhost)
+- `POSTGRES_PORT`: PostgreSQL port (default: 5432)
+- `POSTGRES_DB`: Database name (default: video_streaming_db)
+- `POSTGRES_USER`: Database user (required)
+- `POSTGRES_PASSWORD`: Database password (required)
+- `POSTGRES_MAX_CONNECTIONS`: Max pool connections (default: 20)
+
+### Other Configuration
+
 - `SESSION_SECRET`: Minimum 32 characters for cookie signing.
 - `FFMPEG_PATH` & `FFPROBE_PATH`: Paths to FFmpeg binaries.
 - See `.env.example` for all available options.
 
 ## 📝 Implementation Status & Roadmap
 
-- **Completed**: Auth, Directory scanning, Metadata extraction, Video CRUD, Streaming, Creators, Tags, Ratings, Playlists, Favorites, Bookmarks, Thumbnails, Backup, Scheduler.
+- **Completed**: Auth, Directory scanning, Metadata extraction, Video CRUD, Streaming, Creators, Tags, Ratings, Playlists, Favorites, Bookmarks, Thumbnails, Backup, Scheduler, Stats, Conversion, Triage, Auto-tagging.
 - **In Progress**: Swagger documentation (infrastructure ready, schemas pending).
-- **Pending**: Advanced analytics, Transcoding (future scope).
+- **Pending**: Advanced analytics, Transcoding (future scope), Test suite migration to PostgreSQL.
 
 ## 🛠 Useful File Utilities
 

@@ -4,6 +4,9 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { studiosService } from "./studios.service";
+import { studiosSocialService } from "./studios.social.service";
+import { studiosRelationshipsService } from "./studios.relationships.service";
+import { studiosBulkService } from "./studios.bulk.service";
 import {
   idParamSchema,
   creatorIdParamSchema,
@@ -29,6 +32,12 @@ import {
   bulkImportQuerySchema,
   bulkStudioImportSchema,
   bulkStudioImportResponseSchema,
+  autocompleteQuerySchema,
+  autocompleteResponseSchema,
+  recentQuerySchema,
+  recentResponseSchema,
+  quickCreateStudioSchema,
+  quickCreateResponseSchema,
 } from "./studios.schemas";
 
 export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -122,7 +131,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "Bulk import studios",
-        description: "Creates or updates multiple studios with their social links, creators, and video associations. Use dry_run=true to preview changes without applying.",
+        description:
+          "Creates or updates multiple studios with their social links, creators, and video associations. Use dry_run=true to preview changes without applying.",
         querystring: bulkImportQuerySchema,
         body: bulkStudioImportSchema,
         response: {
@@ -135,13 +145,13 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { dry_run } = request.query;
       const { items, mode } = request.body;
-      
-      const result = await studiosService.bulkImport(items, mode, dry_run);
+
+      const result = await studiosBulkService.bulkImport(items, mode, dry_run);
 
       return reply.send({
         success: true,
         data: result,
-        message: dry_run 
+        message: dry_run
           ? `Preview: ${result.summary.will_create} to create, ${result.summary.will_update} to update, ${result.summary.errors} errors`
           : `Imported: ${result.summary.will_create} created, ${result.summary.will_update} updated`,
       });
@@ -213,7 +223,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "Upload profile picture",
-        description: "Uploads a profile picture for the studio. Accepts JPEG, PNG, or WebP images.",
+        description:
+          "Uploads a profile picture for the studio. Accepts JPEG, PNG, or WebP images.",
         params: idParamSchema,
       },
     },
@@ -231,8 +242,9 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const buffer = await data.toBuffer();
-      const studio = await studiosService.uploadProfilePicture(
-        request.params.id,
+      const { id } = request.params as { id: number };
+      const studio = await studiosSocialService.uploadProfilePicture(
+        id,
         buffer,
         data.filename,
       );
@@ -252,25 +264,31 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "Get profile picture",
-        description: "Serves the studio's profile picture or default avatar if none is set.",
+        description:
+          "Serves the studio's profile picture or default avatar if none is set.",
         params: idParamSchema,
       },
     },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const studio = await studiosService.findById(Number(id));
+      const { id } = request.params as { id: number };
+      const studio = await studiosService.findById(id);
 
       let filePath: string;
       let contentType: string;
 
       if (!studio.profile_picture_path) {
         // Return default profile picture
-        filePath = join(process.cwd(), 'public', 'studio.png');
-        contentType = 'image/png';
+        filePath = join(process.cwd(), "public", "studio.png");
+        contentType = "image/png";
       } else {
         filePath = studio.profile_picture_path;
-        const ext = filePath.split('.').pop()?.toLowerCase();
-        contentType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        const ext = filePath.split(".").pop()?.toLowerCase();
+        contentType =
+          ext === "png"
+            ? "image/png"
+            : ext === "webp"
+              ? "image/webp"
+              : "image/jpeg";
       }
 
       reply.header("Content-Type", contentType);
@@ -296,7 +314,9 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const studio = await studiosService.deleteProfilePicture(request.params.id);
+      const studio = await studiosSocialService.deleteProfilePicture(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -325,7 +345,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const link = await studiosService.addSocialLink(
+      const link = await studiosSocialService.addSocialLink(
         request.params.id,
         request.body,
       );
@@ -345,7 +365,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "Bulk upsert social links",
-        description: "Creates or updates multiple social links for a studio. Upserts by platform_name.",
+        description:
+          "Creates or updates multiple social links for a studio. Upserts by platform_name.",
         params: idParamSchema,
         body: bulkSocialLinksSchema,
         response: {
@@ -357,7 +378,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await studiosService.bulkUpsertSocialLinks(
+      const result = await studiosSocialService.bulkUpsertSocialLinks(
         request.params.id,
         request.body.items,
       );
@@ -377,7 +398,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "Set profile picture from URL",
-        description: "Downloads an image from the given URL and sets it as the studio's profile picture.",
+        description:
+          "Downloads an image from the given URL and sets it as the studio's profile picture.",
         params: idParamSchema,
         body: pictureFromUrlSchema,
         response: {
@@ -389,7 +411,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const studio = await studiosService.setPictureFromUrl(
+      const studio = await studiosSocialService.setPictureFromUrl(
         request.params.id,
         request.body.url,
       );
@@ -419,7 +441,9 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const links = await studiosService.getSocialLinks(request.params.id);
+      const links = await studiosSocialService.getSocialLinks(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -447,9 +471,9 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { linkId } = request.params as { linkId: string };
-      const link = await studiosService.updateSocialLink(
-        Number(linkId),
+      const { linkId } = request.params as { linkId: number };
+      const link = await studiosSocialService.updateSocialLink(
+        linkId,
         request.body,
       );
 
@@ -478,8 +502,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { linkId } = request.params as { linkId: string };
-      await studiosService.deleteSocialLink(Number(linkId));
+      const { linkId } = request.params as { linkId: number };
+      await studiosSocialService.deleteSocialLink(linkId);
 
       return reply.send({
         success: true,
@@ -506,8 +530,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
-      await studiosService.bulkUpdateCreators(Number(id), request.body);
+      const { id } = request.params as { id: number };
+      await studiosRelationshipsService.bulkUpdateCreators(id, request.body);
 
       return reply.send({
         success: true,
@@ -534,8 +558,11 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id, creatorId } = request.params as { id: string; creatorId: string };
-      await studiosService.linkCreator(Number(id), Number(creatorId));
+      const { id, creatorId } = request.params as {
+        id: number;
+        creatorId: number;
+      };
+      await studiosRelationshipsService.linkCreator(id, creatorId);
 
       return reply.send({
         success: true,
@@ -561,7 +588,9 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const creators = await studiosService.getCreators(request.params.id);
+      const creators = await studiosRelationshipsService.getCreators(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -577,7 +606,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["studios"],
         summary: "Unlink creator from studio",
-        description: "Removes the association between a creator and this studio.",
+        description:
+          "Removes the association between a creator and this studio.",
         params: creatorIdParamSchema,
         response: {
           200: messageResponseSchema,
@@ -587,8 +617,11 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id, creatorId } = request.params as { id: string; creatorId: string };
-      await studiosService.unlinkCreator(Number(id), Number(creatorId));
+      const { id, creatorId } = request.params as {
+        id: number;
+        creatorId: number;
+      };
+      await studiosRelationshipsService.unlinkCreator(id, creatorId);
 
       return reply.send({
         success: true,
@@ -615,8 +648,8 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id, videoId } = request.params as { id: string; videoId: string };
-      await studiosService.linkVideo(Number(id), Number(videoId));
+      const { id, videoId } = request.params as { id: number; videoId: number };
+      await studiosRelationshipsService.linkVideo(id, videoId);
 
       return reply.send({
         success: true,
@@ -642,7 +675,9 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const videos = await studiosService.getVideos(request.params.id);
+      const videos = await studiosRelationshipsService.getVideos(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -668,12 +703,99 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id, videoId } = request.params as { id: string; videoId: string };
-      await studiosService.unlinkVideo(Number(id), Number(videoId));
+      const { id, videoId } = request.params as { id: number; videoId: number };
+      await studiosRelationshipsService.unlinkVideo(id, videoId);
 
       return reply.send({
         success: true,
         message: "Video unlinked from studio successfully",
+      });
+    },
+  );
+
+  // Autocomplete studios by name
+  app.get(
+    "/autocomplete",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Autocomplete studio names",
+        description:
+          "Returns a list of studios matching the search query. Useful for type-ahead selection in tagging UI.",
+        querystring: autocompleteQuerySchema,
+        response: {
+          200: autocompleteResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { q, limit } = request.query;
+
+      const studios = await studiosService.autocomplete(q, limit);
+
+      return reply.send({
+        success: true,
+        data: studios,
+      });
+    },
+  );
+
+  // Get recent studios
+  app.get(
+    "/recent",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Get recently created studios",
+        description:
+          "Returns a list of recently created studios, ordered by creation date descending.",
+        querystring: recentQuerySchema,
+        response: {
+          200: recentResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { limit } = request.query;
+
+      const studios = await studiosService.getRecent(limit);
+
+      return reply.send({
+        success: true,
+        data: studios,
+      });
+    },
+  );
+
+  // Quick create studio (minimal fields)
+  app.post(
+    "/quick-create",
+    {
+      schema: {
+        tags: ["studios"],
+        summary: "Quick create a studio",
+        description:
+          "Creates a new studio with just a name and optional description. Useful for rapid tagging workflows.",
+        body: quickCreateStudioSchema,
+        response: {
+          201: quickCreateResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { name, description } = request.body;
+
+      const studio = await studiosService.quickCreate(name, description);
+
+      return reply.status(201).send({
+        success: true,
+        data: studio,
+        message: "Studio created successfully",
       });
     },
   );

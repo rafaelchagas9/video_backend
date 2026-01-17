@@ -1,13 +1,13 @@
 /**
  * Redis-backed job queue for video conversion using Bun's native Redis client
  */
-import { redis } from 'bun';
-import { logger } from '@/utils/logger';
-import { env } from '@/config/env';
-import type { QueueJobPayload } from './conversion.types';
+import { redis } from "bun";
+import { logger } from "@/utils/logger";
+import { env } from "@/config/env";
+import type { QueueJobPayload } from "./conversion.types";
 
-const QUEUE_KEY = 'conversion:jobs';
-const PROCESSING_KEY = 'conversion:processing';
+const QUEUE_KEY = "conversion:jobs";
+const PROCESSING_KEY = "conversion:processing";
 
 export class ConversionQueue {
   private isProcessing = false;
@@ -16,7 +16,7 @@ export class ConversionQueue {
   private processor: ((job: QueueJobPayload) => Promise<void>) | null = null;
 
   constructor() {
-    this.concurrency = env.CONVERSION_MAX_CONCURRENT;
+    this.concurrency = Math.max(1, env.CONVERSION_MAX_CONCURRENT);
   }
 
   /**
@@ -24,9 +24,12 @@ export class ConversionQueue {
    */
   async enqueue(payload: QueueJobPayload): Promise<void> {
     const jobData = JSON.stringify(payload);
-    await redis.send('LPUSH', [QUEUE_KEY, jobData]);
-    logger.info({ jobId: payload.jobId, preset: payload.preset }, 'Job enqueued');
-    
+    await redis.send("LPUSH", [QUEUE_KEY, jobData]);
+    logger.info(
+      { jobId: payload.jobId, preset: payload.preset },
+      "Job enqueued",
+    );
+
     // Trigger processing if not already running
     this.processNext();
   }
@@ -43,13 +46,13 @@ export class ConversionQueue {
    */
   async start(): Promise<void> {
     if (this.isProcessing) {
-      logger.warn('Queue is already processing');
+      logger.warn("Queue is already processing");
       return;
     }
 
     this.isProcessing = true;
-    logger.info({ concurrency: this.concurrency }, 'Conversion queue started');
-    
+    logger.info({ concurrency: this.concurrency }, "Conversion queue started");
+
     // Process any existing jobs
     this.processNext();
   }
@@ -59,7 +62,7 @@ export class ConversionQueue {
    */
   stop(): void {
     this.isProcessing = false;
-    logger.info('Conversion queue stopped');
+    logger.info("Conversion queue stopped");
   }
 
   /**
@@ -71,8 +74,8 @@ export class ConversionQueue {
 
     try {
       // Get next job from queue (non-blocking)
-      const jobData = await redis.send('RPOP', [QUEUE_KEY]) as string | null;
-      
+      const jobData = (await redis.send("RPOP", [QUEUE_KEY])) as string | null;
+
       if (!jobData) {
         return; // No jobs in queue
       }
@@ -83,7 +86,7 @@ export class ConversionQueue {
       // Process job asynchronously
       this.runJob(payload)
         .catch((error) => {
-          logger.error({ error, jobId: payload.jobId }, 'Job processing error');
+          logger.error({ error, jobId: payload.jobId }, "Job processing error");
         })
         .finally(() => {
           this.activeJobs--;
@@ -96,7 +99,7 @@ export class ConversionQueue {
         this.processNext();
       }
     } catch (error) {
-      logger.error({ error }, 'Failed to get next job from queue');
+      logger.error({ error }, "Failed to get next job from queue");
     }
   }
 
@@ -104,10 +107,13 @@ export class ConversionQueue {
    * Run a single job
    */
   private async runJob(payload: QueueJobPayload): Promise<void> {
-    logger.info({ jobId: payload.jobId }, 'Processing job');
+    logger.info({ jobId: payload.jobId }, "Processing job");
 
     // Mark as processing in Redis
-    await redis.set(`${PROCESSING_KEY}:${payload.jobId}`, JSON.stringify(payload));
+    await redis.set(
+      `${PROCESSING_KEY}:${payload.jobId}`,
+      JSON.stringify(payload),
+    );
 
     try {
       await this.processor!(payload);
@@ -125,7 +131,7 @@ export class ConversionQueue {
     activeJobs: number;
     isProcessing: boolean;
   }> {
-    const queueLength = await redis.send('LLEN', [QUEUE_KEY]) as number;
+    const queueLength = (await redis.send("LLEN", [QUEUE_KEY])) as number;
     return {
       queueLength,
       activeJobs: this.activeJobs,
@@ -137,9 +143,9 @@ export class ConversionQueue {
    * Clear all pending jobs
    */
   async clear(): Promise<number> {
-    const count = await redis.send('LLEN', [QUEUE_KEY]) as number;
+    const count = (await redis.send("LLEN", [QUEUE_KEY])) as number;
     await redis.del(QUEUE_KEY);
-    logger.info({ count }, 'Queue cleared');
+    logger.info({ count }, "Queue cleared");
     return count;
   }
 }

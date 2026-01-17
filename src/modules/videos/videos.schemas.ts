@@ -33,6 +33,20 @@ const parseBooleanQuery = (val: unknown) => {
   return undefined;
 };
 
+const parseNullableNumber = (val: unknown) => {
+  if (val === null || val === undefined) {
+    return null;
+  }
+  if (typeof val === "number") {
+    return val;
+  }
+  if (typeof val === "string" && val.trim() !== "") {
+    const parsed = Number.parseFloat(val);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
 export const listVideosQuerySchema = z
   .object({
     // Existing pagination and search
@@ -213,7 +227,7 @@ const videoSchema = z.object({
   directory_id: z.number(),
   file_size_bytes: z.number(),
   file_hash: z.string().nullable(),
-  duration_seconds: z.number().nullable(),
+  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
   width: z.number().nullable(),
   height: z.number().nullable(),
   codec: z.string().nullable(),
@@ -223,7 +237,7 @@ const videoSchema = z.object({
   title: z.string().nullable(),
   description: z.string().nullable(),
   themes: z.string().nullable(),
-  is_available: z.number(),
+  is_available: z.boolean(),
   last_verified_at: z.string().nullable(),
   indexed_at: z.string(),
   created_at: z.string(),
@@ -427,7 +441,7 @@ const compressionSuggestionSchema = z.object({
   codec: z.string().nullable(),
   bitrate: z.number().nullable(),
   fps: z.number().nullable(),
-  duration_seconds: z.number().nullable(),
+  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
   total_play_count: z.number(),
   total_watch_seconds: z.number(),
   last_played_at: z.string().nullable(),
@@ -435,6 +449,8 @@ const compressionSuggestionSchema = z.object({
   usage_score: z.number(),
   recommended_actions: z.array(z.string()),
   reasons: z.array(z.string()),
+  thumbnail_id: z.number().nullable().optional(),
+  thumbnail_url: z.string().nullable().optional(),
 });
 
 export const compressionSuggestionsResponseSchema = z.object({
@@ -461,4 +477,36 @@ const duplicateGroupSchema = z.object({
 export const duplicatesResponseSchema = z.object({
   success: z.literal(true),
   data: z.array(duplicateGroupSchema),
+});
+
+// Bulk conditional apply
+const bulkConditionalActionsSchema = z.object({
+  addCreatorIds: z.array(z.number().int().positive()).optional(),
+  removeCreatorIds: z.array(z.number().int().positive()).optional(),
+  addTagIds: z.array(z.number().int().positive()).optional(),
+  removeTagIds: z.array(z.number().int().positive()).optional(),
+  addStudioIds: z.array(z.number().int().positive()).optional(),
+  removeStudioIds: z.array(z.number().int().positive()).optional(),
+});
+
+export const bulkConditionalApplySchema = z.object({
+  filter: listVideosQuerySchema.optional(),
+  actions: bulkConditionalActionsSchema,
+});
+
+export const bulkConditionalApplyResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    matched: z.number(),
+    affected: z.number(),
+    errors: z.number(),
+    details: z.object({
+      creators_added: z.number(),
+      creators_removed: z.number(),
+      tags_added: z.number(),
+      tags_removed: z.number(),
+      studios_added: z.number(),
+      studios_removed: z.number(),
+    }),
+  }),
 });

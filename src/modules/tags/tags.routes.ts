@@ -4,12 +4,13 @@ import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { tagsService } from "./tags.service";
 import {
   idParamSchema,
-  treeQuerySchema,
+  listTagsQuerySchema,
   createTagSchema,
   updateTagSchema,
   tagResponseSchema,
   tagRecordResponseSchema,
   tagListResponseSchema,
+  tagSimpleListResponseSchema,
   tagVideosResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
@@ -21,7 +22,7 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
   // All routes require authentication
   app.addHook("preHandler", authenticateUser);
 
-  // List all tags (optionally as tree)
+  // List all tags (optionally as tree with pagination)
   app.get(
     "/",
     {
@@ -29,28 +30,20 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["tags"],
         summary: "List all tags",
         description:
-          "Returns all tags. Use ?tree=true to get hierarchical structure. Response shape varies based on tree parameter.",
-        querystring: treeQuerySchema,
+          "Returns tags with pagination and search. Use ?tree=true to get hierarchical structure with pagination at root level.",
+        querystring: listTagsQuerySchema,
         response: {
-          // Note: Response schema validation disabled due to conditional response shape
-          // tree=false returns flat list, tree=true returns hierarchical structure
+          200: tagListResponseSchema,
           401: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      if (request.query.tree === "true") {
-        const tagTree = await tagsService.getTree();
-        return reply.send({
-          success: true,
-          data: tagTree,
-        });
-      }
-
-      const tags = await tagsService.list();
+      const result = await tagsService.list(request.query);
       return reply.send({
         success: true,
-        data: tags,
+        data: result.data,
+        pagination: result.pagination,
       });
     },
   );
@@ -173,7 +166,7 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
         description: "Returns all direct children of a tag.",
         params: idParamSchema,
         response: {
-          200: tagListResponseSchema,
+          200: tagSimpleListResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },

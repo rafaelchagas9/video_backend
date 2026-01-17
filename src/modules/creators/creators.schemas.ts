@@ -5,17 +5,20 @@ export {
   createCreatorSchema,
   updateCreatorSchema,
   createSocialLinkSchema,
-  updateSocialLinkSchema
+  updateSocialLinkSchema,
 } from "./creators.types";
 export {
   createCreatorPlatformSchema,
-  updateCreatorPlatformSchema
+  updateCreatorPlatformSchema,
 } from "@/modules/platforms/platforms.types";
 
 // Helper to parse comma-separated IDs
 const parseCommaSeparatedIds = (val: unknown) => {
-  if (typeof val === 'string' && val.trim().length > 0) {
-    return val.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+  if (typeof val === "string" && val.trim().length > 0) {
+    return val
+      .split(",")
+      .map((id) => parseInt(id.trim()))
+      .filter((id) => !isNaN(id));
   }
   if (Array.isArray(val)) {
     return val;
@@ -23,37 +26,63 @@ const parseCommaSeparatedIds = (val: unknown) => {
   return undefined;
 };
 
+const parseNullableNumber = (val: unknown) => {
+  if (val === null || val === undefined) {
+    return null;
+  }
+  if (typeof val === "number") {
+    return val;
+  }
+  if (typeof val === "string" && val.trim() !== "") {
+    const parsed = Number.parseFloat(val);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
 // Request schemas
 export const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
-export const listCreatorsQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(100).default(20),
-  search: z.string().optional(),
-  sort: z.enum(['name', 'created_at', 'updated_at', 'video_count']).default('name'),
-  order: z.enum(['asc', 'desc']).default('asc'),
-  minVideoCount: z.coerce.number().int().min(0).optional(),
-  maxVideoCount: z.coerce.number().int().min(0).optional(),
-  hasProfilePicture: z.coerce.boolean().optional(),
-  studioIds: z.preprocess(
-    parseCommaSeparatedIds,
-    z.array(z.number().int().positive()).optional()
-  ).optional(),
-  missing: z.enum(['picture', 'platform', 'social', 'linked', 'any']).optional(),
-  complete: z.coerce.boolean().optional(),
-}).refine(
-  (data) => {
-    if (data.minVideoCount !== undefined && data.maxVideoCount !== undefined && data.minVideoCount > data.maxVideoCount) {
-      return false;
-    }
-    return true;
-  },
-  {
-    message: "minVideoCount cannot be greater than maxVideoCount",
-  }
-);
+export const listCreatorsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(100).default(20),
+    search: z.string().optional(),
+    sort: z
+      .enum(["name", "created_at", "updated_at", "video_count"])
+      .default("name"),
+    order: z.enum(["asc", "desc"]).default("asc"),
+    minVideoCount: z.coerce.number().int().min(0).optional(),
+    maxVideoCount: z.coerce.number().int().min(0).optional(),
+    hasProfilePicture: z.coerce.boolean().optional(),
+    studioIds: z
+      .preprocess(
+        parseCommaSeparatedIds,
+        z.array(z.number().int().positive()).optional(),
+      )
+      .optional(),
+    missing: z
+      .enum(["picture", "platform", "social", "linked", "any"])
+      .optional(),
+    complete: z.coerce.boolean().optional(),
+  })
+  .refine(
+    (data) => {
+      if (
+        data.minVideoCount !== undefined &&
+        data.maxVideoCount !== undefined &&
+        data.minVideoCount > data.maxVideoCount
+      ) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: "minVideoCount cannot be greater than maxVideoCount",
+    },
+  );
 
 // Completeness schema
 const completenessSchema = z.object({
@@ -114,9 +143,9 @@ const videoSchema = z.object({
   file_name: z.string(),
   directory_id: z.number(),
   file_size_bytes: z.number(),
-  duration_seconds: z.number().nullable(),
+  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
   title: z.string().nullable(),
-  is_available: z.number(),
+  is_available: z.boolean(),
   created_at: z.string(),
 });
 
@@ -214,10 +243,12 @@ export const bulkOperationResponseSchema = z.object({
   data: z.object({
     created: z.array(z.any()),
     updated: z.array(z.any()),
-    errors: z.array(z.object({
-      index: z.number(),
-      error: z.string(),
-    })),
+    errors: z.array(
+      z.object({
+        index: z.number(),
+        error: z.string(),
+      }),
+    ),
   }),
   message: z.string().optional(),
 });
@@ -239,22 +270,40 @@ export const bulkCreatorImportItemSchema = z.object({
 
 export const bulkCreatorImportSchema = z.object({
   items: z.array(bulkCreatorImportItemSchema).min(1).max(100),
-  mode: z.enum(['merge', 'replace']).default('merge'),
+  mode: z.enum(["merge", "replace"]).default("merge"),
 });
 
 export const bulkImportPreviewItemSchema = z.object({
   index: z.number(),
-  action: z.enum(['create', 'update']),
+  action: z.enum(["create", "update"]),
   resolved_id: z.number().nullable(),
   name: z.string(),
   validation_errors: z.array(z.string()),
   changes: z.object({
     name: z.object({ from: z.string().nullable(), to: z.string() }).optional(),
-    description: z.object({ from: z.string().nullable(), to: z.string().nullable() }).optional(),
-    profile_picture: z.object({ action: z.enum(['set', 'unchanged']) }).optional(),
-    platforms: z.object({ add: z.number(), update: z.number(), remove: z.number().optional() }).optional(),
-    social_links: z.object({ add: z.number(), update: z.number(), remove: z.number().optional() }).optional(),
-    videos: z.object({ add: z.number(), remove: z.number().optional() }).optional(),
+    description: z
+      .object({ from: z.string().nullable(), to: z.string().nullable() })
+      .optional(),
+    profile_picture: z
+      .object({ action: z.enum(["set", "unchanged"]) })
+      .optional(),
+    platforms: z
+      .object({
+        add: z.number(),
+        update: z.number(),
+        remove: z.number().optional(),
+      })
+      .optional(),
+    social_links: z
+      .object({
+        add: z.number(),
+        update: z.number(),
+        remove: z.number().optional(),
+      })
+      .optional(),
+    videos: z
+      .object({ add: z.number(), remove: z.number().optional() })
+      .optional(),
   }),
   missing_dependencies: z.array(z.string()),
 });
@@ -273,3 +322,35 @@ export const bulkImportResponseSchema = z.object({
   message: z.string().optional(),
 });
 
+// Autocomplete schemas
+export const autocompleteQuerySchema = z.object({
+  q: z.string().min(1).max(100),
+  limit: z.coerce.number().int().positive().max(50).default(10),
+});
+
+export const autocompleteResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(creatorSchema),
+});
+
+// Recent creators schemas
+export const recentQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(50).default(10),
+});
+
+export const recentResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(creatorSchema),
+});
+
+// Quick create schemas
+export const quickCreateCreatorSchema = z.object({
+  name: z.string().min(1).max(255),
+  description: z.string().max(2000).optional(),
+});
+
+export const quickCreateResponseSchema = z.object({
+  success: z.literal(true),
+  data: creatorSchema,
+  message: z.string(),
+});

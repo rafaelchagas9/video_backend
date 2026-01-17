@@ -15,8 +15,8 @@ export const idParamSchema = z.object({
 const directorySchema = z.object({
   id: z.number(),
   path: z.string(),
-  is_active: z.number(),
-  auto_scan: z.number(),
+  is_active: z.boolean(),
+  auto_scan: z.boolean(),
   scan_interval_minutes: z.number(),
   last_scan_at: z.string().nullable(),
   added_at: z.string(),

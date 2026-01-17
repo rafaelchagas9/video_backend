@@ -4,6 +4,10 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { creatorsService } from "./creators.service";
+import { creatorsPlatformsService } from "./creators.platforms.service";
+import { creatorsSocialService } from "./creators.social.service";
+import { creatorsRelationshipsService } from "./creators.relationships.service";
+import { creatorsBulkService } from "./creators.bulk.service";
 import {
   idParamSchema,
   listCreatorsQuerySchema,
@@ -30,6 +34,12 @@ import {
   bulkImportQuerySchema,
   bulkCreatorImportSchema,
   bulkImportResponseSchema,
+  autocompleteQuerySchema,
+  autocompleteResponseSchema,
+  recentQuerySchema,
+  recentResponseSchema,
+  quickCreateCreatorSchema,
+  quickCreateResponseSchema,
 } from "./creators.schemas";
 
 export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -123,7 +133,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Bulk import creators",
-        description: "Creates or updates multiple creators with their platforms, social links, and video associations. Use dry_run=true to preview changes without applying.",
+        description:
+          "Creates or updates multiple creators with their platforms, social links, and video associations. Use dry_run=true to preview changes without applying.",
         querystring: bulkImportQuerySchema,
         body: bulkCreatorImportSchema,
         response: {
@@ -136,13 +147,13 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { dry_run } = request.query;
       const { items, mode } = request.body;
-      
-      const result = await creatorsService.bulkImport(items, mode, dry_run);
+
+      const result = await creatorsBulkService.bulkImport(items, mode, dry_run);
 
       return reply.send({
         success: true,
         data: result,
-        message: dry_run 
+        message: dry_run
           ? `Preview: ${result.summary.will_create} to create, ${result.summary.will_update} to update, ${result.summary.errors} errors`
           : `Imported: ${result.summary.will_create} created, ${result.summary.will_update} updated`,
       });
@@ -224,7 +235,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const videos = await creatorsService.getVideos(request.params.id);
+      const videos = await creatorsRelationshipsService.getVideos(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -240,7 +253,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Upload profile picture",
-        description: "Uploads a profile picture for the creator. Accepts JPEG, PNG, or WebP images.",
+        description:
+          "Uploads a profile picture for the creator. Accepts JPEG, PNG, or WebP images.",
         params: idParamSchema,
       },
     },
@@ -258,8 +272,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const buffer = await data.toBuffer();
-      const creator = await creatorsService.uploadProfilePicture(
-        request.params.id,
+      const { id } = request.params as { id: number };
+      const creator = await creatorsSocialService.uploadProfilePicture(
+        id,
         buffer,
         data.filename,
       );
@@ -279,7 +294,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Get profile picture",
-        description: "Serves the creator's profile picture or default avatar if none is set.",
+        description:
+          "Serves the creator's profile picture or default avatar if none is set.",
         params: idParamSchema,
       },
     },
@@ -292,12 +308,17 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
 
       if (!creator.profile_picture_path) {
         // Return default profile picture
-        filePath = join(process.cwd(), 'public', 'pfp.png');
-        contentType = 'image/png';
+        filePath = join(process.cwd(), "public", "pfp.png");
+        contentType = "image/png";
       } else {
         filePath = creator.profile_picture_path;
-        const ext = filePath.split('.').pop()?.toLowerCase();
-        contentType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        const ext = filePath.split(".").pop()?.toLowerCase();
+        contentType =
+          ext === "png"
+            ? "image/png"
+            : ext === "webp"
+              ? "image/webp"
+              : "image/jpeg";
       }
 
       reply.header("Content-Type", contentType);
@@ -323,7 +344,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const creator = await creatorsService.deleteProfilePicture(request.params.id);
+      const creator = await creatorsSocialService.deleteProfilePicture(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -340,7 +363,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Add platform profile",
-        description: "Adds a platform profile for the creator (e.g., Patreon, OnlyFans).",
+        description:
+          "Adds a platform profile for the creator (e.g., Patreon, OnlyFans).",
         params: idParamSchema,
         body: createCreatorPlatformSchema,
         response: {
@@ -352,7 +376,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const profile = await creatorsService.addPlatformProfile(
+      const profile = await creatorsPlatformsService.addPlatformProfile(
         request.params.id,
         request.body,
       );
@@ -382,7 +406,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const profiles = await creatorsService.getPlatformProfiles(request.params.id);
+      const profiles = await creatorsPlatformsService.getPlatformProfiles(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -410,7 +436,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { platformId } = request.params as { platformId: string };
-      const profile = await creatorsService.updatePlatformProfile(
+      const profile = await creatorsPlatformsService.updatePlatformProfile(
         Number(platformId),
         request.body,
       );
@@ -440,7 +466,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { platformId } = request.params as { platformId: string };
-      await creatorsService.deletePlatformProfile(Number(platformId));
+      await creatorsPlatformsService.deletePlatformProfile(Number(platformId));
 
       return reply.send({
         success: true,
@@ -468,7 +494,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const link = await creatorsService.addSocialLink(
+      const link = await creatorsSocialService.addSocialLink(
         request.params.id,
         request.body,
       );
@@ -488,7 +514,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Bulk upsert platform profiles",
-        description: "Creates or updates multiple platform profiles for a creator. Upserts by platform_id + username.",
+        description:
+          "Creates or updates multiple platform profiles for a creator. Upserts by platform_id + username.",
         params: idParamSchema,
         body: bulkPlatformsSchema,
         response: {
@@ -500,7 +527,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await creatorsService.bulkUpsertPlatforms(
+      const result = await creatorsPlatformsService.bulkUpsertPlatforms(
         request.params.id,
         request.body.items,
       );
@@ -520,7 +547,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Bulk upsert social links",
-        description: "Creates or updates multiple social links for a creator. Upserts by platform_name.",
+        description:
+          "Creates or updates multiple social links for a creator. Upserts by platform_name.",
         params: idParamSchema,
         body: bulkSocialLinksSchema,
         response: {
@@ -532,7 +560,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await creatorsService.bulkUpsertSocialLinks(
+      const result = await creatorsSocialService.bulkUpsertSocialLinks(
         request.params.id,
         request.body.items,
       );
@@ -552,7 +580,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Set profile picture from URL",
-        description: "Downloads an image from the given URL and sets it as the creator's profile picture.",
+        description:
+          "Downloads an image from the given URL and sets it as the creator's profile picture.",
         params: idParamSchema,
         body: pictureFromUrlSchema,
         response: {
@@ -564,7 +593,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const creator = await creatorsService.setPictureFromUrl(
+      const creator = await creatorsSocialService.setPictureFromUrl(
         request.params.id,
         request.body.url,
       );
@@ -594,7 +623,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const links = await creatorsService.getSocialLinks(request.params.id);
+      const links = await creatorsSocialService.getSocialLinks(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -622,7 +653,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { linkId } = request.params as { linkId: string };
-      const link = await creatorsService.updateSocialLink(
+      const link = await creatorsSocialService.updateSocialLink(
         Number(linkId),
         request.body,
       );
@@ -652,7 +683,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { linkId } = request.params as { linkId: string };
-      await creatorsService.deleteSocialLink(Number(linkId));
+      await creatorsSocialService.deleteSocialLink(Number(linkId));
 
       return reply.send({
         success: true,
@@ -678,8 +709,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id, studioId } = request.params as { id: string; studioId: string };
-      await creatorsService.linkStudio(Number(id), Number(studioId));
+      const { id, studioId } = request.params as {
+        id: string;
+        studioId: string;
+      };
+      await creatorsRelationshipsService.linkStudio(
+        Number(id),
+        Number(studioId),
+      );
 
       return reply.send({
         success: true,
@@ -705,7 +742,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const studios = await creatorsService.getStudios(request.params.id);
+      const studios = await creatorsRelationshipsService.getStudios(
+        request.params.id,
+      );
 
       return reply.send({
         success: true,
@@ -730,12 +769,105 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { id, studioId } = request.params as { id: string; studioId: string };
-      await creatorsService.unlinkStudio(Number(id), Number(studioId));
+      const { id, studioId } = request.params as {
+        id: string;
+        studioId: string;
+      };
+      await creatorsRelationshipsService.unlinkStudio(
+        Number(id),
+        Number(studioId),
+      );
 
       return reply.send({
         success: true,
         message: "Creator unlinked from studio successfully",
+      });
+    },
+  );
+
+  // Autocomplete creators by name
+  app.get(
+    "/autocomplete",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Autocomplete creator names",
+        description:
+          "Returns a list of creators matching the search query. Useful for type-ahead selection in tagging UI.",
+        querystring: autocompleteQuerySchema,
+        response: {
+          200: autocompleteResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { q, limit } = request.query;
+
+      const creators = await creatorsService.autocomplete(q, limit);
+
+      return reply.send({
+        success: true,
+        data: creators,
+      });
+    },
+  );
+
+  // Get recent creators
+  app.get(
+    "/recent",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Get recently created creators",
+        description:
+          "Returns a list of recently created creators, ordered by creation date descending.",
+        querystring: recentQuerySchema,
+        response: {
+          200: recentResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { limit } = request.query;
+
+      const creators = await creatorsService.getRecent(limit);
+
+      return reply.send({
+        success: true,
+        data: creators,
+      });
+    },
+  );
+
+  // Quick create creator (minimal fields)
+  app.post(
+    "/quick-create",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Quick create a creator",
+        description:
+          "Creates a new creator with just a name and optional description. Useful for rapid tagging workflows.",
+        body: quickCreateCreatorSchema,
+        response: {
+          201: quickCreateResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { name, description } = request.body;
+
+      const creator = await creatorsService.quickCreate(name, description);
+
+      return reply.status(201).send({
+        success: true,
+        data: creator,
+        message: "Creator created successfully",
       });
     },
   );

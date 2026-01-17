@@ -134,6 +134,11 @@ CREATE INDEX IF NOT EXISTS idx_video_creators_creator ON video_creators(creator_
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    -- Configuration
+    -- target_resolution TEXT,
+    -- codec TEXT NOT NULL,
+    -- delete_original BOOLEAN DEFAULT 0,
+    -- batch_id TEXT,
     parent_id INTEGER,
     description TEXT,
     color TEXT,
@@ -276,3 +281,98 @@ CREATE TABLE IF NOT EXISTS scan_logs (
 
 CREATE INDEX IF NOT EXISTS idx_scan_logs_directory ON scan_logs(directory_id);
 CREATE INDEX IF NOT EXISTS idx_scan_logs_started ON scan_logs(started_at);
+
+-- Conversion Jobs
+CREATE TABLE IF NOT EXISTS conversion_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL,
+    status TEXT NOT NULL, -- pending, processing, completed, failed, cancelled
+    preset TEXT NOT NULL,
+    target_resolution TEXT,
+    codec TEXT NOT NULL,
+    output_path TEXT,
+    output_size_bytes INTEGER,
+    progress_percent INTEGER DEFAULT 0,
+    error_message TEXT,
+    
+    -- Configuration
+    delete_original BOOLEAN DEFAULT 0,
+    batch_id TEXT,
+
+    started_at DATETIME,
+    completed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversion_jobs_video ON conversion_jobs(video_id);
+CREATE INDEX IF NOT EXISTS idx_conversion_jobs_status ON conversion_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_conversion_jobs_batch ON conversion_jobs(batch_id);
+
+-- Storage statistics snapshots (hourly)
+CREATE TABLE IF NOT EXISTS stats_storage_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    total_video_size_bytes INTEGER NOT NULL,
+    total_video_count INTEGER NOT NULL,
+    thumbnails_size_bytes INTEGER NOT NULL DEFAULT 0,
+    storyboards_size_bytes INTEGER NOT NULL DEFAULT 0,
+    profile_pictures_size_bytes INTEGER NOT NULL DEFAULT 0,
+    converted_size_bytes INTEGER NOT NULL DEFAULT 0,
+    database_size_bytes INTEGER NOT NULL DEFAULT 0,
+    directory_breakdown TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_stats_storage_created ON stats_storage_snapshots(created_at);
+
+-- Library statistics snapshots (daily)
+CREATE TABLE IF NOT EXISTS stats_library_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    total_video_count INTEGER NOT NULL,
+    available_video_count INTEGER NOT NULL,
+    unavailable_video_count INTEGER NOT NULL,
+    total_size_bytes INTEGER NOT NULL,
+    average_size_bytes INTEGER NOT NULL,
+    total_duration_seconds REAL NOT NULL,
+    average_duration_seconds REAL NOT NULL,
+    resolution_breakdown TEXT,
+    codec_breakdown TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_stats_library_created ON stats_library_snapshots(created_at);
+
+-- Content organization statistics snapshots (daily)
+CREATE TABLE IF NOT EXISTS stats_content_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    videos_without_tags INTEGER NOT NULL,
+    videos_without_creators INTEGER NOT NULL,
+    videos_without_ratings INTEGER NOT NULL,
+    videos_without_thumbnails INTEGER NOT NULL,
+    videos_without_storyboards INTEGER NOT NULL,
+    total_tags INTEGER NOT NULL,
+    total_creators INTEGER NOT NULL,
+    total_studios INTEGER NOT NULL,
+    total_playlists INTEGER NOT NULL,
+    top_tags TEXT,
+    top_creators TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_stats_content_created ON stats_content_snapshots(created_at);
+
+-- Usage/watch statistics snapshots (daily)
+CREATE TABLE IF NOT EXISTS stats_usage_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    total_watch_time_seconds REAL NOT NULL,
+    total_play_count INTEGER NOT NULL,
+    unique_videos_watched INTEGER NOT NULL,
+    videos_never_watched INTEGER NOT NULL,
+    average_completion_rate REAL,
+    top_watched TEXT,
+    activity_by_hour TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_stats_usage_created ON stats_usage_snapshots(created_at);

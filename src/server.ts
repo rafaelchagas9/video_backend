@@ -107,6 +107,7 @@ export async function buildServer() {
         { name: "conversion", description: "Video conversion and transcoding" },
         { name: "scheduler", description: "Scan scheduling" },
         { name: "storyboards", description: "Slider preview thumbnails" },
+        { name: "stats", description: "System and library statistics" },
         { name: "system", description: "System health and status" },
       ],
     },
@@ -214,6 +215,9 @@ export async function buildServer() {
         await import("./modules/settings/settings.routes");
       const { storyboardsRoutes } =
         await import("./modules/storyboards/storyboards.routes");
+      const { statsRoutes } = await import("./modules/stats/stats.routes");
+      const { taggingRulesRoutes } =
+        await import("./modules/tagging-rules/tagging-rules.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -232,6 +236,8 @@ export async function buildServer() {
       await instance.register(videoStatsRoutes, { prefix: "/videos" });
       await instance.register(settingsRoutes, { prefix: "/settings" });
       await instance.register(storyboardsRoutes, { prefix: "/" }); // Storyboards routes handle /videos/:id/storyboard.* paths
+      await instance.register(statsRoutes, { prefix: "/stats" });
+      await instance.register(taggingRulesRoutes, { prefix: "/tagging-rules" });
     },
     { prefix: API_PREFIX },
   );

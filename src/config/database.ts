@@ -1,78 +1,140 @@
-import { Database } from 'bun:sqlite';
-import { readFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname, resolve } from 'path';
-import { env } from './env';
+import { Pool } from "pg";
+import type { PoolClient, QueryResult } from "pg";
+import { env } from "./env";
 
-let db: Database | null = null;
+let pool: Pool | null = null;
 
-export function getDatabase(): Database {
-  // Check if database is open and valid
-  if (db) {
-    try {
-      // Test if database is still open by running a simple query
-      db.prepare('SELECT 1').get();
-      return db;
-    } catch (error) {
-      // Database is closed, reset it
-      db = null;
-    }
-  }
-
-  const dbPath = resolve(process.cwd(), env.DATABASE_PATH);
-  const dbDir = dirname(dbPath);
-
-  // Ensure database directory exists
-  if (!existsSync(dbDir)) {
-    mkdirSync(dbDir, { recursive: true });
-  }
-
-  // Initialize database connection
-  db = new Database(dbPath, {
-    strict: true,
-    create: true,
+/**
+ * PostgreSQL Connection Pool Configuration
+ */
+function createPool(): Pool {
+  return new Pool({
+    host: env.POSTGRES_HOST,
+    port: env.POSTGRES_PORT,
+    database: env.POSTGRES_DB,
+    user: env.POSTGRES_USER,
+    password: env.POSTGRES_PASSWORD,
+    max: env.POSTGRES_MAX_CONNECTIONS,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
   });
-
-  // Enable foreign keys
-  db.exec('PRAGMA foreign_keys = ON');
-
-  // Optimize SQLite for single-user scenario
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA synchronous = NORMAL');
-  db.exec('PRAGMA cache_size = -64000'); // 64MB cache
-
-  // Run migrations if database is new
-  initializeSchema();
-
-  return db;
 }
 
-function initializeSchema(): void {
-  if (!db) {
-    throw new Error('Database not initialized');
+/**
+ * Get PostgreSQL connection pool
+ * Returns a pool that can be used to query the database
+ */
+export function getDatabase(): Pool {
+  if (!pool) {
+    pool = createPool();
+
+    // Set up event handlers
+    pool.on("error", (err) => {
+      console.error("Unexpected error on idle PostgreSQL client", err);
+    });
+
+    pool.on("connect", () => {
+      console.log("New PostgreSQL client connected");
+    });
+
+    console.log("PostgreSQL connection pool initialized");
   }
 
-  const schemaPath = resolve(process.cwd(), 'src/database/schema.sql');
-
-  if (!existsSync(schemaPath)) {
-    throw new Error(`Schema file not found at ${schemaPath}`);
-  }
-
-  const schema = readFileSync(schemaPath, 'utf-8');
-
-  // Execute schema (create tables if they don't exist)
-  db.exec(schema);
-
-  console.log('Database schema initialized');
+  return pool;
 }
 
-export function closeDatabase(): void {
-  if (db) {
-    db.close();
-    db = null;
+/**
+ * Execute a query with parameters
+ * Usage: await query('SELECT * FROM users WHERE id = $1', [userId])
+ */
+export async function query<
+  T extends Record<string, unknown> = Record<string, unknown>,
+>(text: string, params?: unknown[]): Promise<QueryResult<T>> {
+  const db = getDatabase();
+  return db.query<T>(text, params);
+}
+
+/**
+ * Execute a query and return first row or null
+ * Usage: const user = await queryOne('SELECT * FROM users WHERE id = $1', [userId])
+ */
+export async function queryOne<
+  T extends Record<string, unknown> = Record<string, unknown>,
+>(text: string, params?: unknown[]): Promise<T | null> {
+  const result = await query<T>(text, params);
+  return result.rows[0] || null;
+}
+
+/**
+ * Execute a query and return all rows
+ * Usage: const users = await queryAll('SELECT * FROM users')
+ */
+export async function queryAll<
+  T extends Record<string, unknown> = Record<string, unknown>,
+>(text: string, params?: unknown[]): Promise<T[]> {
+  const result = await query<T>(text, params);
+  return result.rows;
+}
+
+/**
+ * Execute a query within a transaction
+ * Usage:
+ * await transaction(async (client) => {
+ *   await client.query('INSERT INTO users (name) VALUES ($1)', ['Alice']);
+ *   await client.query('INSERT INTO profiles (user_id) VALUES ($1)', [userId]);
+ * });
+ */
+export async function transaction<T>(
+  callback: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const db = getDatabase();
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Close database connection pool
+ */
+export async function closeDatabase(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
+    console.log("PostgreSQL connection pool closed");
+  }
+}
+
+/**
+ * Test database connection
+ */
+export async function testConnection(): Promise<boolean> {
+  try {
+    const db = getDatabase();
+    const result = await db.query("SELECT 1 as test");
+    return result.rows[0].test === 1;
+  } catch (error) {
+    console.error("Database connection test failed:", error);
+    return false;
   }
 }
 
 // Graceful shutdown
-process.on('SIGINT', closeDatabase);
-process.on('SIGTERM', closeDatabase);
-process.on('exit', closeDatabase);
+process.on("SIGINT", async () => {
+  await closeDatabase();
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  await closeDatabase();
+  process.exit(0);
+});

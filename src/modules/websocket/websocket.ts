@@ -4,7 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import { logger } from "@/utils/logger";
-import { getDatabase } from "@/config/database";
+import { db } from "@/config/drizzle";
 import { videoStatsService } from "@/modules/video-stats/video-stats.service";
 
 interface ClientConnection {
@@ -21,9 +21,9 @@ class WebSocketService {
    */
   async register(fastify: FastifyInstance): Promise<void> {
     // Register WebSocket route
-    fastify.get("/ws", { websocket: true }, (socket, request) => {
+    fastify.get("/ws", { websocket: true }, async (socket, request) => {
       // Try to get user from session cookie
-      const userId = this.getUserFromRequest(request);
+      const userId = await this.getUserFromRequest(request);
 
       const connection: ClientConnection = {
         socket,
@@ -75,19 +75,18 @@ class WebSocketService {
   /**
    * Extract user ID from session cookie
    */
-  private getUserFromRequest(request: any): number | null {
+  private async getUserFromRequest(request: any): Promise<number | null> {
     try {
       const sessionId = request.cookies?.session_id;
       if (!sessionId) return null;
 
-      const db = getDatabase();
-      const session = db
-        .prepare(
-          'SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime("now")',
-        )
-        .get(sessionId) as { user_id: number } | undefined;
+      const session = await db.query.sessionsTable.findFirst({
+        where: (sessions, { eq, and, gt }) =>
+          and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())),
+        columns: { userId: true },
+      });
 
-      return session?.user_id ?? null;
+      return session?.userId ?? null;
     } catch {
       return null;
     }
