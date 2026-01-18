@@ -5,6 +5,9 @@ import { NotFoundError } from "@/utils/errors";
 import { env } from "@/config/env";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { getFaceRecognitionClient } from "@/modules/face-recognition";
+import { cropFaceThumbnail } from "@/utils/image-processing";
+import { logger } from "@/utils/logger";
 import type {
   SocialLink,
   CreateSocialLinkInput,
@@ -209,6 +212,13 @@ export class CreatorsSocialService {
       unlinkSync(creator.profile_picture_path);
     }
 
+    if (
+      creator.face_thumbnail_path &&
+      existsSync(creator.face_thumbnail_path)
+    ) {
+      unlinkSync(creator.face_thumbnail_path);
+    }
+
     // Generate unique filename
     const ext = filename.split(".").pop() || "jpg";
     const newFilename = `creator_${id}_${Date.now()}.${ext}`;
@@ -217,11 +227,14 @@ export class CreatorsSocialService {
     // Save file
     writeFileSync(filePath, fileBuffer);
 
+    const faceThumbnailPath = await this.generateFaceThumbnail(filePath, id);
+
     // Update database
     await db
       .update(creatorsTable)
       .set({
         profilePicturePath: filePath,
+        faceThumbnailPath,
         updatedAt: new Date(),
       })
       .where(eq(creatorsTable.id, id));
@@ -239,10 +252,18 @@ export class CreatorsSocialService {
       unlinkSync(creator.profile_picture_path);
     }
 
+    if (
+      creator.face_thumbnail_path &&
+      existsSync(creator.face_thumbnail_path)
+    ) {
+      unlinkSync(creator.face_thumbnail_path);
+    }
+
     await db
       .update(creatorsTable)
       .set({
         profilePicturePath: null,
+        faceThumbnailPath: null,
         updatedAt: new Date(),
       })
       .where(eq(creatorsTable.id, id));
@@ -292,6 +313,13 @@ export class CreatorsSocialService {
       unlinkSync(creator.profile_picture_path);
     }
 
+    if (
+      creator.face_thumbnail_path &&
+      existsSync(creator.face_thumbnail_path)
+    ) {
+      unlinkSync(creator.face_thumbnail_path);
+    }
+
     // Generate unique filename
     const newFilename = `creator_${creatorId}_${Date.now()}.${ext}`;
     const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
@@ -299,11 +327,17 @@ export class CreatorsSocialService {
     // Save file
     writeFileSync(filePath, buffer);
 
+    const faceThumbnailPath = await this.generateFaceThumbnail(
+      filePath,
+      creatorId,
+    );
+
     // Update database
     await db
       .update(creatorsTable)
       .set({
         profilePicturePath: filePath,
+        faceThumbnailPath,
         updatedAt: new Date(),
       })
       .where(eq(creatorsTable.id, creatorId));
@@ -358,6 +392,15 @@ export class CreatorsSocialService {
       name: creator.name,
       description: creator.description,
       profile_picture_path: creator.profilePicturePath,
+      face_thumbnail_path: creator.faceThumbnailPath,
+      profile_picture_url:
+        (creator.profilePicturePath ?? creator.profile_picture_path)
+          ? `/api/creators/${creator.id}/picture`
+          : undefined,
+      face_thumbnail_url:
+        (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
+          ? `/api/creators/${creator.id}/picture?type=face`
+          : undefined,
       created_at:
         creator.createdAt instanceof Date
           ? creator.createdAt.toISOString()
@@ -367,6 +410,45 @@ export class CreatorsSocialService {
           ? creator.updatedAt.toISOString()
           : creator.updatedAt,
     };
+  }
+
+  private async generateFaceThumbnail(
+    profilePath: string,
+    creatorId: number,
+  ): Promise<string | null> {
+    try {
+      const faceClient = getFaceRecognitionClient();
+      const result = await faceClient.detectFacesFromFile(profilePath);
+
+      if (result.faces.length === 0) {
+        return null;
+      }
+
+      const bestFace = result.faces.reduce((best, current) =>
+        current.det_score > best.det_score ? current : best,
+      );
+
+      const faceDir = join(env.PROFILE_PICTURES_DIR, "faces");
+      if (!existsSync(faceDir)) {
+        mkdirSync(faceDir, { recursive: true });
+      }
+
+      const faceFilename = `creator_${creatorId}_${Date.now()}_face.jpg`;
+      const facePath = join(faceDir, faceFilename);
+
+      await cropFaceThumbnail({
+        inputPath: profilePath,
+        outputPath: facePath,
+        faceBox: bestFace.bbox,
+        imageWidth: result.image_width,
+        imageHeight: result.image_height,
+      });
+
+      return facePath;
+    } catch (error) {
+      logger.warn({ error, creatorId }, "Failed to generate face thumbnail");
+      return null;
+    }
   }
 }
 

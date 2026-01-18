@@ -17,6 +17,7 @@ Uses session-based authentication and serves content via HTTP range requests for
 ## Commands
 
 ### Development
+
 ```bash
 # Start development server with auto-reload
 bun dev
@@ -26,6 +27,7 @@ bun start
 ```
 
 ### Testing
+
 ```bash
 # Run all tests
 bun test
@@ -38,12 +40,15 @@ bun test --filter "should register"
 ```
 
 ### Database
+
 ```bash
-# Run migrations (if migration script exists)
+# Generate and run Drizzle migrations
+bun db:generate
 bun db:migrate
 ```
 
 ### Conversions
+
 ```bash
 # List available presets
 curl http://localhost:3000/api/presets
@@ -88,6 +93,7 @@ The database connection manager (`src/config/database.ts`) validates the connect
 ### Module Structure
 
 Each feature module follows this pattern:
+
 - `*.types.ts` - TypeScript interfaces and types
 - `*.service.ts` - Business logic (uses database getter pattern)
 - `*.routes.ts` - Fastify route definitions
@@ -103,7 +109,7 @@ All custom errors extend `AppError` and include `Object.setPrototypeOf()` calls 
 
 ```typescript
 export class MyCustomError extends AppError {
-  constructor(message = 'Default message') {
+  constructor(message = "Default message") {
     super(statusCode, message);
     Object.setPrototypeOf(this, MyCustomError.prototype); // Required!
   }
@@ -111,6 +117,7 @@ export class MyCustomError extends AppError {
 ```
 
 Error responses follow this format:
+
 ```json
 {
   "success": false,
@@ -130,12 +137,14 @@ Error responses follow this format:
 - Session expiration configured via `SESSION_EXPIRY_HOURS`
 
 **Authentication Middleware**: `src/modules/auth/auth.middleware.ts`
+
 - `authenticateUser` - Throws 401 if not authenticated
 - `optionalAuth` - Sets `request.user` if authenticated, continues otherwise
 
 ### Video Metadata Extraction
 
 Uses `fluent-ffmpeg` with FFprobe to extract:
+
 - Duration, resolution (width/height)
 - Video/audio codecs
 - Bitrate, FPS
@@ -145,10 +154,12 @@ Extraction happens asynchronously during directory scanning. Failed extractions 
 ### Directory Scanning
 
 **Two-phase approach**:
+
 1. Immediate scan when directory is registered
 2. Optional scheduled scans via `node-cron` (not yet implemented)
 
 **Flow**:
+
 1. `DirectoriesService.create()` validates path and creates DB record
 2. `WatcherService.scanDirectory()` recursively finds video files
 3. For each video: compute XXH3-128 hash with collision detection, extract metadata, create DB record
@@ -163,18 +174,21 @@ Uses adjacency list model with `parent_id` self-reference. Tag queries use recur
 ### GPU-Accelerated Video Conversion
 
 **Architecture**:
+
 - Job queue system processes one conversion at a time
 - Uses VAAPI (Video Acceleration API) for GPU encoding
 - Progress tracking via FFmpeg output parsing
 - Real-time WebSocket updates for conversion status
 
 **Presets** (`src/config/presets.ts`):
+
 - 9 presets covering 1080p, 720p, and original resolution
 - Three codecs: H.264 (compatibility), H.265/HEVC (balance), AV1 (best compression)
 - All outputs use MKV container, preserving aspect ratio
 - Quality parameters (QP) tuned for file size optimization
 
 **Conversion Flow**:
+
 1. User submits conversion via `POST /api/videos/:id/convert`
 2. Job created with status `pending`
 3. Queue processes job, updating status to `processing`
@@ -184,12 +198,14 @@ Uses adjacency list model with `parent_id` self-reference. Tag queries use recur
 7. User can download via `GET /api/conversions/:id/download`
 
 **WebSocket Events**:
+
 - `conversion:started` - Job begins processing
 - `conversion:progress` - Real-time progress percentage
 - `conversion:completed` - Job finished successfully
 - `conversion:failed` - Job encountered error
 
 **Important Notes**:
+
 - **CRITICAL**: Requires GPU with VAAPI support (Intel/AMD on Linux)
 - Check VAAPI availability: `vainfo` command should show supported profiles
 - Intel GPUs: Install `intel-media-driver` or `i965-va-driver`
@@ -203,6 +219,7 @@ Uses adjacency list model with `parent_id` self-reference. Tag queries use recur
 ### WebSocket Communication
 
 **Connection**: `ws://[host]:[port]/ws`
+
 - Requires session cookie authentication
 - Service registered at `src/modules/websocket/websocket.ts`
 - Broadcasts conversion events to all connected clients
@@ -211,6 +228,7 @@ Uses adjacency list model with `parent_id` self-reference. Tag queries use recur
 ### Scheduled Directory Scanning
 
 **Scheduler Service** (`src/modules/scheduler/scheduler.service.ts`):
+
 - Uses `node-cron` for periodic scans
 - Scans all directories with `auto_scan = true`
 - Interval configurable per directory via `scan_interval_minutes`
@@ -222,14 +240,16 @@ Uses adjacency list model with `parent_id` self-reference. Tag queries use recur
 Tests use Bun's built-in test runner (`bun:test`). Integration tests in `tests/integration/` use Fastify's `.inject()` for HTTP simulation.
 
 **Test Utilities** (`tests/helpers/test-utils.ts`):
+
 - `setupTestServer()` - Creates and readies a Fastify instance
 - `cleanupTestServer()` - Closes server and database
 - `cleanupDatabase()` - Deletes all data in reverse dependency order
 - `createTestUser()` - Registers and logs in a test user, returns session cookie
 
 **Test Structure**:
+
 ```typescript
-describe('Feature', () => {
+describe("Feature", () => {
   let server: FastifyInstance;
 
   beforeAll(async () => {
@@ -255,23 +275,28 @@ describe('Feature', () => {
 Copy `.env.example` to `.env` and configure:
 
 **Required**:
+
 - `SESSION_SECRET` - Must be at least 32 characters (randomize for production)
 
 **Important Defaults**:
+
 - `DATABASE_PATH=./data/database.db` - SQLite database location
 - `NODE_ENV=development` - Affects logging and error verbosity
 - `SESSION_EXPIRY_HOURS=168` - 7 days
 
 **FFmpeg Paths**: May need adjustment based on system:
+
 - `FFMPEG_PATH=/usr/bin/ffmpeg`
 - `FFPROBE_PATH=/usr/bin/ffprobe`
 
 **Storage Paths**:
+
 - `THUMBNAILS_DIR=./data/thumbnails` - Thumbnail storage
 - `CONVERSIONS_DIR=./data/conversions` - Converted video storage
 - `LOGS_DIR=./logs` - Application logs
 
 **Thumbnail Settings**:
+
 - `THUMBNAIL_SIZE=320x240` - Thumbnail dimensions (width x height)
 - `THUMBNAIL_TIMESTAMP=5.0` - Fallback position in video (seconds, used when duration unavailable)
 - `THUMBNAIL_FORMAT=webp` - Image format (webp or jpg)
@@ -279,6 +304,7 @@ Copy `.env.example` to `.env` and configure:
 - `THUMBNAIL_POSITION_PERCENT=20` - Default position as percentage of video duration (0-100)
 
 **File Scanning**:
+
 - `DEFAULT_SCAN_INTERVAL_MINUTES=30` - Default auto-scan interval
 - `MAX_FILE_SIZE_GB=50` - Maximum video file size to index
 
@@ -287,6 +313,7 @@ Environment validation happens at startup via Zod schema in `src/config/env.ts`.
 ## Implementation Status
 
 **Completed** (Phases 1-7):
+
 - Project foundation with Bun + Fastify
 - Authentication (register, login, logout, sessions)
 - Directory management and registration
@@ -312,33 +339,38 @@ Environment validation happens at startup via Zod schema in `src/config/env.ts`.
 ## Key Patterns
 
 ### Validation
+
 Use Zod schemas and the `validateSchema()` helper from `src/utils/validation.ts`:
 
 ```typescript
-import { validateSchema } from '@/utils/validation';
-import { mySchema } from './my.schemas';
+import { validateSchema } from "@/utils/validation";
+import { mySchema } from "./my.schemas";
 
 const validated = validateSchema(mySchema, data);
 ```
 
 ### Logging
+
 Use the Pino logger from `src/utils/logger.ts`:
 
 ```typescript
-import { logger } from '@/utils/logger';
+import { logger } from "@/utils/logger";
 
-logger.info({ videoId, filePath }, 'Video indexed');
-logger.error({ error }, 'Failed to extract metadata');
+logger.info({ videoId, filePath }, "Video indexed");
+logger.error({ error }, "Failed to extract metadata");
 ```
 
 ### File Utilities
+
 Common file operations in `src/utils/file-utils.ts`:
+
 - `isVideoFile(path)` - Check if file is a supported video format
 - `getFileSize(path)` - Get file size in bytes
 - `computeFileHash(path)` - Compute XXH3 hash (128-bit partial for files >= 10MB, 64-bit full for smaller files)
 - `computeFullHash(path)` - Compute full XXH3-64 streaming hash (used for collision resolution)
 
 **Hash Implementation**:
+
 - Uses XXH3 (xxHash3) via `@node-rs/xxhash` for extremely fast hashing
 - Files < 10MB: full XXH3-64 streaming hash (~5ms)
 - Files >= 10MB: partial XXH3-128 hash sampling 4MB start + 4MB middle + 4MB end + file size (~5-10ms)
@@ -351,12 +383,14 @@ Common file operations in `src/utils/file-utils.ts`:
 ## Module-Specific Patterns
 
 ### Playlists
+
 - Videos are ordered by `position` integer field
 - Adding video without position auto-assigns to end (MAX(position) + 1)
 - Position conflicts can occur during reordering - handle via transaction-like updates
 - `GET /api/playlists/:id/videos` returns videos with `thumbnail_url` field populated from LEFT JOIN with thumbnails table
 
 ### Thumbnails
+
 - **One thumbnail per video** (UNIQUE constraint on `video_id`)
 - **Auto-generated** during directory scan if missing
 - **Format**: WebP by default (configurable: webp or jpg) for 30-40% storage savings
@@ -372,6 +406,7 @@ Common file operations in `src/utils/file-utils.ts`:
 - **Storage**: `file_size_bytes` populated, dimensions parsed from `THUMBNAIL_SIZE` env
 
 ### Conversions
+
 - Jobs are queued and processed sequentially (one at a time)
 - FFmpeg progress parsed from stderr output (timemarks converted to percentage)
 - Cancellation sends SIGTERM to FFmpeg process
@@ -379,6 +414,7 @@ Common file operations in `src/utils/file-utils.ts`:
 - WebSocket broadcasts require active connection - missed updates not queued
 
 ### Backup
+
 - Exports database and optionally includes video files
 - Uses streaming for large file exports
 - Database export via `.backup()` SQLite command
@@ -410,9 +446,11 @@ See `src/database/schema.sql` for complete schema.
 All endpoints are prefixed with `/api`. Full documentation available at `/docs` (Swagger UI).
 
 **Authentication**: `/auth/*`
+
 - Register (once only), login, logout, get current user
 
 **Videos**: `/videos/*`
+
 - CRUD operations, streaming, verification, search/filter
 - `/videos/:id/stream` - HTTP range request streaming
 - `/videos/:id/convert` - Start conversion job
@@ -420,39 +458,50 @@ All endpoints are prefixed with `/api`. Full documentation available at `/docs` 
 - `/videos/:id/thumbnails` - Generate/get thumbnails
 
 **Directories**: `/directories/*`
+
 - Register, update, delete, scan, statistics
 
 **Creators**: `/creators/*`
+
 - CRUD operations, list videos by creator
 
 **Tags**: `/tags/*`
+
 - CRUD operations with parent/child support, list videos by tag
 
 **Ratings**: `/ratings/*`
+
 - CRUD operations, list ratings by video
 
 **Thumbnails**: `/thumbnails/*`
+
 - Generate (auto or manual), serve image, delete
 - `/thumbnails/:id/image` - Serve thumbnail (WebP or JPEG, dynamic content-type)
 - Generation parameters: `timestamp` (seconds) or `positionPercent` (0-100)
 
 **Playlists**: `/playlists/*`
+
 - CRUD operations, add/remove videos, reorder
 - `/playlists/:id/videos` - Get videos in playlist (includes thumbnail URLs)
 
 **Favorites**: `/favorites/*`
+
 - Add/remove favorites, list user favorites
 
 **Bookmarks**: `/bookmarks/*`
+
 - CRUD operations, list bookmarks by video
 
 **Conversions**: `/conversions/*`
+
 - Get job status, cancel, delete, download result
 - `/conversions/:id/download` - Download converted video
 - `/presets` - List available conversion presets
 
 **Backup**: `/backup/*`
+
 - Export database and optionally video files as ZIP
 
 **WebSocket**: `/ws`
+
 - Real-time conversion progress updates

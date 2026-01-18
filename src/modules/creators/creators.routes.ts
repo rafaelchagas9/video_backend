@@ -30,6 +30,7 @@ import {
   bulkPlatformsSchema,
   bulkSocialLinksSchema,
   pictureFromUrlSchema,
+  pictureQuerySchema,
   bulkOperationResponseSchema,
   bulkImportQuerySchema,
   bulkCreatorImportSchema,
@@ -295,31 +296,38 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["creators"],
         summary: "Get profile picture",
         description:
-          "Serves the creator's profile picture or default avatar if none is set.",
+          "Serves the creator's profile picture or default avatar if none is set. Use ?type=face to request the face thumbnail.",
         params: idParamSchema,
+        querystring: pictureQuerySchema,
       },
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const creator = await creatorsService.findById(Number(id));
+      const { type } = request.query as { type?: "face" };
 
       let filePath: string;
       let contentType: string;
 
-      if (!creator.profile_picture_path) {
+      if (type === "face") {
+        filePath =
+          creator.face_thumbnail_path ??
+          creator.profile_picture_path ??
+          join(process.cwd(), "public", "pfp.png");
+      } else if (!creator.profile_picture_path) {
         // Return default profile picture
         filePath = join(process.cwd(), "public", "pfp.png");
-        contentType = "image/png";
       } else {
         filePath = creator.profile_picture_path;
-        const ext = filePath.split(".").pop()?.toLowerCase();
-        contentType =
-          ext === "png"
-            ? "image/png"
-            : ext === "webp"
-              ? "image/webp"
-              : "image/jpeg";
       }
+
+      const ext = filePath.split(".").pop()?.toLowerCase();
+      contentType =
+        ext === "png"
+          ? "image/png"
+          : ext === "webp"
+            ? "image/webp"
+            : "image/jpeg";
 
       reply.header("Content-Type", contentType);
       const buffer = readFileSync(filePath);

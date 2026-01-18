@@ -17,6 +17,7 @@ import { logger } from "@/utils/logger";
 import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
 import { copyFile, unlink, stat, readFile } from "fs/promises";
 import { freemem } from "os";
+import type { ExtractedFrame } from "@/modules/frame-extraction";
 
 interface SpriteSheetOptions {
   inputPath: string;
@@ -271,6 +272,160 @@ export class StoryboardsService {
       .returning();
 
     return this.mapToApiFormat(result[0]);
+  }
+
+  /**
+   * Assemble a storyboard sprite sheet from pre-extracted frames
+   * Used by unified frame extraction workflow
+   */
+  async assembleFromFrames(
+    videoId: number,
+    frames: ExtractedFrame[],
+    videoDuration: number,
+  ): Promise<Storyboard> {
+    // Delete existing storyboard if present
+    const existing = await db
+      .select()
+      .from(storyboardsTable)
+      .where(eq(storyboardsTable.videoId, videoId))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await this.delete(videoId);
+    }
+
+    const tileWidth = env.STORYBOARD_TILE_WIDTH;
+    const tileHeight = env.STORYBOARD_TILE_HEIGHT;
+    const storyboardFormat = env.STORYBOARD_FORMAT;
+    const storyboardQuality = env.STORYBOARD_QUALITY;
+    const tileCount = frames.length;
+
+    if (tileCount === 0) {
+      throw new InternalServerError("No frames provided for storyboard assembly");
+    }
+
+    // Calculate interval from frames
+    const intervalSeconds =
+      frames.length > 1
+        ? frames[1].timestampSeconds - frames[0].timestampSeconds
+        : 10; // fallback
+
+    // Calculate grid dimensions (prefer wider grids)
+    const cols = Math.ceil(Math.sqrt(tileCount * 2));
+    const rows = Math.ceil(tileCount / cols);
+
+    // Generate unique filenames
+    const timestamp = Date.now();
+    const spriteFilename = `storyboard_${videoId}_${timestamp}.${storyboardFormat}`;
+    const vttFilename = `storyboard_${videoId}_${timestamp}.vtt`;
+    const spritePath = join(env.STORYBOARDS_DIR, spriteFilename);
+    const vttPath = join(env.STORYBOARDS_DIR, vttFilename);
+
+    // Assemble frames into sprite sheet using FFmpeg
+    await this.assembleSprite(frames, spritePath, {
+      cols,
+      rows,
+      tileWidth,
+      tileHeight,
+      format: storyboardFormat,
+      quality: storyboardQuality,
+    });
+
+    // Get sprite file size
+    const stats = await stat(spritePath);
+    const spriteSizeBytes = stats.size;
+
+    // Generate VTT file
+    this.generateVttFile(
+      vttPath,
+      videoId,
+      tileWidth,
+      tileHeight,
+      intervalSeconds,
+      tileCount,
+      cols,
+      videoDuration,
+      storyboardFormat,
+    );
+
+    // Insert into database
+    const result = await db
+      .insert(storyboardsTable)
+      .values({
+        videoId,
+        spritePath,
+        vttPath,
+        tileWidth,
+        tileHeight,
+        tileCount,
+        intervalSeconds,
+        spriteSizeBytes,
+      })
+      .returning();
+
+    return this.mapToApiFormat(result[0]);
+  }
+
+  /**
+   * Assemble individual frames into a sprite sheet using FFmpeg tile filter
+   */
+  private async assembleSprite(
+    frames: ExtractedFrame[],
+    outputPath: string,
+    options: {
+      cols: number;
+      rows: number;
+      tileWidth: number;
+      tileHeight: number;
+      format: "webp" | "jpg";
+      quality: number;
+    },
+  ): Promise<void> {
+    const { cols, rows, tileWidth, tileHeight, format, quality } = options;
+
+    // Create input file list for FFmpeg concat demuxer
+    const inputListPath = `${outputPath}.txt`;
+    const inputListContent = frames
+      .map((frame) => `file '${frame.filePath}'`)
+      .join("\n");
+    writeFileSync(inputListPath, inputListContent, "utf-8");
+
+    const qualityOptions = this.getQualityOptions(format, quality);
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg()
+          .input(inputListPath)
+          .inputOptions(["-f", "concat", "-safe", "0"])
+          .outputOptions([
+            "-vf",
+            `scale=${tileWidth}:${tileHeight},tile=${cols}x${rows}`,
+            "-frames:v",
+            "1",
+            "-an",
+            "-sn",
+            "-dn",
+            ...qualityOptions,
+          ])
+          .output(outputPath)
+          .on("end", () => {
+            logger.debug({ outputPath }, "Sprite sheet assembled from frames");
+            resolve();
+          })
+          .on("error", (err) => {
+            logger.error({ error: err, outputPath }, "Failed to assemble sprite sheet");
+            reject(err);
+          })
+          .run();
+      });
+    } finally {
+      // Clean up input list file
+      try {
+        unlinkSync(inputListPath);
+      } catch (error) {
+        logger.warn({ path: inputListPath }, "Failed to clean up input list file");
+      }
+    }
   }
 
   /**

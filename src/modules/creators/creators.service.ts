@@ -38,7 +38,7 @@ export class CreatorsService {
     if (search) {
       const searchPattern = `%${search}%`;
       whereConditions.push(
-        sql`(c.name LIKE ${searchPattern} OR cp_search.username LIKE ${searchPattern})`,
+        sql`(c.name ILIKE ${searchPattern} OR cp_search.username ILIKE ${searchPattern})`,
       );
     }
 
@@ -142,8 +142,7 @@ export class CreatorsService {
         ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
         : sql``;
 
-    const groupByClause =
-      needsPlatformSearchJoin || needsStudioJoin ? sql`GROUP BY c.id` : sql``;
+    const groupByClause = sql`GROUP BY c.id`;
 
     // Get total count
     const countQuery = sql`
@@ -169,7 +168,7 @@ export class CreatorsService {
 
     let sortExpression;
     if (sortColumn === "video_count") {
-      sortExpression = sql`COALESCE(vc.video_count, 0)`;
+      sortExpression = sql`COALESCE(MAX(vc.video_count), 0)`;
     } else if (sortColumn === "created_at") {
       sortExpression = sql`c.created_at`;
     } else if (sortColumn === "updated_at") {
@@ -184,9 +183,9 @@ export class CreatorsService {
     const selectQuery = sql`
       SELECT
         c.*,
-        COALESCE(vc.video_count, 0) as linked_video_count,
-        COALESCE(pc.platform_count, 0) as platform_count,
-        COALESCE(sc.social_link_count, 0) as social_link_count
+        COALESCE(MAX(vc.video_count), 0) as linked_video_count,
+        COALESCE(MAX(pc.platform_count), 0) as platform_count,
+        COALESCE(MAX(sc.social_link_count), 0) as social_link_count
       ${baseFrom}
       ${studioJoin}
       ${platformSearchJoin}
@@ -326,6 +325,19 @@ export class CreatorsService {
       }
     }
 
+    if (creator.face_thumbnail_path) {
+      try {
+        if (existsSync(creator.face_thumbnail_path)) {
+          unlinkSync(creator.face_thumbnail_path);
+        }
+      } catch (error) {
+        logger.warn(
+          { error, path: creator.face_thumbnail_path },
+          "Failed to delete creator face thumbnail file",
+        );
+      }
+    }
+
     await db.delete(creatorsTable).where(eq(creatorsTable.id, id));
   }
 
@@ -357,7 +369,7 @@ export class CreatorsService {
         SELECT creator_id, COUNT(*) as social_link_count
         FROM creator_social_links GROUP BY creator_id
       ) sc ON c.id = sc.creator_id
-      WHERE c.name LIKE ${searchTerm}
+      WHERE c.name ILIKE ${searchTerm}
       ORDER BY c.name ASC
       LIMIT ${limitParam}
     `;
@@ -450,6 +462,16 @@ export class CreatorsService {
       description: creator.description,
       profile_picture_path:
         creator.profilePicturePath ?? creator.profile_picture_path,
+      face_thumbnail_path:
+        creator.faceThumbnailPath ?? creator.face_thumbnail_path ?? null,
+      profile_picture_url:
+        (creator.profilePicturePath ?? creator.profile_picture_path)
+          ? `/api/creators/${creator.id}/picture`
+          : undefined,
+      face_thumbnail_url:
+        (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
+          ? `/api/creators/${creator.id}/picture?type=face`
+          : undefined,
       created_at: toISOString(creator.createdAt ?? creator.created_at),
       updated_at: toISOString(creator.updatedAt ?? creator.updated_at),
       // Pass through any additional fields (for enhanced creators)

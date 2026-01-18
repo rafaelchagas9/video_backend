@@ -1,0 +1,2 @@
+DELETE FROM "video_creators" a USING "video_creators" b WHERE a.ctid < b.ctid AND a.video_id = b.video_id AND a.creator_id = b.creator_id;
+ALTER TABLE "video_creators" ADD CONSTRAINT "video_creators_video_id_creator_id_pk" PRIMARY KEY("video_id","creator_id");

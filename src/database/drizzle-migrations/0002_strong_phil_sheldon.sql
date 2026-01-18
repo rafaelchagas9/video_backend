@@ -1,0 +1,1 @@
+ALTER TABLE "video_stats" ADD CONSTRAINT "video_stats_user_video_unique" UNIQUE("user_id","video_id");

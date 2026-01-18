@@ -1,6 +1,6 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
-import { stat } from "fs/promises";
+import { stat, copyFile } from "fs/promises";
 import ffmpeg from "fluent-ffmpeg";
 import { eq } from "drizzle-orm";
 import { db } from "@/config/drizzle";
@@ -9,6 +9,7 @@ import { env } from "@/config/env";
 import { NotFoundError } from "@/utils/errors";
 import { videosService } from "@/modules/videos/videos.service";
 import type { Thumbnail, GenerateThumbnailInput } from "./thumbnails.types";
+import type { ExtractedFrame } from "@/modules/frame-extraction";
 
 export class ThumbnailsService {
   constructor() {
@@ -132,6 +133,62 @@ export class ThumbnailsService {
           reject(new Error(`FFmpeg error: ${err.message}`));
         });
     });
+  }
+
+  /**
+   * Save a thumbnail from an already-extracted frame
+   * Used by unified frame extraction workflow
+   */
+  async saveFromFrame(
+    videoId: number,
+    frame: ExtractedFrame,
+  ): Promise<Thumbnail> {
+    // Delete existing thumbnail if present
+    const existing = await db
+      .select()
+      .from(thumbnailsTable)
+      .where(eq(thumbnailsTable.videoId, videoId))
+      .limit(1)
+      .then((rows) => rows[0] || null);
+
+    if (existing) {
+      await this.delete(existing.id);
+    }
+
+    // Parse width and height from THUMBNAIL_SIZE env variable (e.g., "320x240")
+    const [width, height] = env.THUMBNAIL_SIZE.split("x").map(Number);
+
+    // Generate filename and copy frame to thumbnails directory
+    const format = env.THUMBNAIL_FORMAT;
+    const filename = `thumbnail_${videoId}_${Date.now()}.${format}`;
+    const outputPath = join(env.THUMBNAILS_DIR, filename);
+
+    // Copy frame file to thumbnails directory
+    await copyFile(frame.filePath, outputPath);
+
+    // Get file size
+    const stats = await stat(outputPath);
+    const fileSize = stats.size;
+
+    // Insert into DB
+    const result = await db
+      .insert(thumbnailsTable)
+      .values({
+        videoId,
+        filePath: outputPath,
+        fileSizeBytes: fileSize,
+        timestampSeconds: frame.timestampSeconds,
+        width,
+        height,
+      })
+      .returning({ id: thumbnailsTable.id })
+      .then((rows) => rows[0] || null);
+
+    if (!result) {
+      throw new Error("Failed to save thumbnail record");
+    }
+
+    return await this.findById(result.id);
   }
 
   async findById(id: number): Promise<Thumbnail> {

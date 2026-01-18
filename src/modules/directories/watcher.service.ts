@@ -241,25 +241,64 @@ export class WatcherService {
 
     logger.info(
       { count: this.newVideoIds.length },
-      "Queueing post-scan storyboard generation...",
+      "Queueing unified video processing (frames, thumbnails, storyboards, faces)...",
     );
 
-    const { storyboardsService } =
-      await import("@/modules/storyboards/storyboards.service");
+    const { getFaceRecognitionService } =
+      await import("@/modules/face-recognition");
 
-    // Add all new videos to the centralized queue
-    // The queue handles deduplication and sequential processing
+    const faceService = getFaceRecognitionService();
+
+    // Process each new video with unified workflow
+    // This will:
+    // 1. Extract frames in a single FFmpeg pass
+    // 2. Generate thumbnail from extracted frames
+    // 3. Generate storyboard from extracted frames
+    // 4. Queue face extraction from extracted frames
     for (const videoId of this.newVideoIds) {
-      storyboardsService.queueGenerate(videoId);
+      try {
+        // Get video details
+        const video = await this.getVideoById(videoId);
+
+        if (!video || !video.duration_seconds) {
+          logger.warn(
+            { videoId },
+            "Skipping video processing - duration not available",
+          );
+          continue;
+        }
+
+        // Trigger unified processing workflow
+        await faceService.processVideo(
+          videoId,
+          video.file_path,
+          video.duration_seconds,
+        );
+
+        logger.info({ videoId }, "Video queued for unified processing");
+      } catch (error) {
+        logger.error(
+          { videoId, error },
+          "Failed to queue video for processing",
+        );
+      }
     }
 
     logger.info(
       { count: this.newVideoIds.length },
-      "Videos queued for storyboard generation",
+      "Videos queued for unified processing",
     );
 
     // Clear local queue
     this.newVideoIds = [];
+  }
+
+  /**
+   * Helper to get video by ID
+   */
+  private async getVideoById(videoId: number) {
+    const { videosService } = await import("@/modules/videos/videos.service");
+    return await videosService.findById(videoId);
   }
 
   private async findVideoFiles(

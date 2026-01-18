@@ -53,6 +53,7 @@ export class StudiosRelationshipsService {
       name: string;
       description: string | null;
       profile_picture_path: string | null;
+      face_thumbnail_path: string | null;
       created_at: Date;
       updated_at: Date;
     }>(sql`
@@ -68,6 +69,13 @@ export class StudiosRelationshipsService {
       name: c.name,
       description: c.description,
       profile_picture_path: c.profile_picture_path,
+      face_thumbnail_path: c.face_thumbnail_path,
+      profile_picture_url: c.profile_picture_path
+        ? `/api/creators/${c.id}/picture`
+        : undefined,
+      face_thumbnail_url: c.face_thumbnail_path
+        ? `/api/creators/${c.id}/picture?type=face`
+        : undefined,
       created_at: c.created_at.toISOString(),
       updated_at: c.updated_at.toISOString(),
     }));

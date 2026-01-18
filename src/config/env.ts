@@ -73,6 +73,34 @@ const envSchema = z.object({
 
   // Conversion
   CONVERSION_MAX_CONCURRENT: z.string().default("1").transform(Number),
+
+  // Face Recognition
+  FACE_SERVICE_URL: z.string().default("http://localhost:8100"),
+  FACE_SIMILARITY_THRESHOLD: z
+    .string()
+    .default("0.65")
+    .transform(Number)
+    .pipe(z.number().min(0).max(1)),
+  FACE_AUTO_TAG_THRESHOLD: z
+    .string()
+    .default("0.75")
+    .transform(Number)
+    .pipe(z.number().min(0).max(1)),
+  FACE_DETECTION_BATCH_SIZE: z.string().default("10").transform(Number),
+  FACE_DETECTION_RETRY_INTERVAL_MS: z
+    .string()
+    .default("300000")
+    .transform(Number),
+  FACE_DETECTION_MAX_RETRIES: z.string().default("3").transform(Number),
+
+  // Frame Extraction
+  FRAME_EXTRACTION_TEMP_DIR: z.string().default("/dev/shm"),
+  FRAME_EXTRACTION_FORMAT: z.enum(["jpg", "webp", "png"]).default("jpg"),
+  FRAME_EXTRACTION_QUALITY: z
+    .string()
+    .default("90")
+    .transform(Number)
+    .pipe(z.number().min(1).max(100)),
 });
 
 function loadEnv() {

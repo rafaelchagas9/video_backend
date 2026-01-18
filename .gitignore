@@ -33,3 +33,6 @@ Thumbs.db
 
 
 .husky
+
+.migraphx_cache
+.ruff_cache

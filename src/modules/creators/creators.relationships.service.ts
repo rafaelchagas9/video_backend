@@ -97,6 +97,7 @@ export class CreatorsRelationshipsService {
         name: creatorsTable.name,
         description: creatorsTable.description,
         profilePicturePath: creatorsTable.profilePicturePath,
+        faceThumbnailPath: creatorsTable.faceThumbnailPath,
         createdAt: creatorsTable.createdAt,
         updatedAt: creatorsTable.updatedAt,
       })
@@ -224,6 +225,15 @@ export class CreatorsRelationshipsService {
       name: creator.name,
       description: creator.description,
       profile_picture_path: creator.profilePicturePath,
+      face_thumbnail_path: creator.faceThumbnailPath,
+      profile_picture_url:
+        (creator.profilePicturePath ?? creator.profile_picture_path)
+          ? `/api/creators/${creator.id}/picture`
+          : undefined,
+      face_thumbnail_url:
+        (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
+          ? `/api/creators/${creator.id}/picture?type=face`
+          : undefined,
       created_at:
         creator.createdAt instanceof Date
           ? creator.createdAt.toISOString()

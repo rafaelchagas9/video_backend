@@ -1,11 +1,13 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export interface Creator {
   id: number;
   name: string;
   description: string | null;
   profile_picture_path: string | null;
+  face_thumbnail_path: string | null;
   profile_picture_url?: string; // Computed field
+  face_thumbnail_url?: string; // Computed field
   created_at: string;
   updated_at: string;
 }
@@ -62,13 +64,13 @@ export interface ListCreatorsOptions {
   page?: number;
   limit?: number;
   search?: string;
-  sort?: 'name' | 'created_at' | 'updated_at' | 'video_count';
-  order?: 'asc' | 'desc';
+  sort?: "name" | "created_at" | "updated_at" | "video_count";
+  order?: "asc" | "desc";
   minVideoCount?: number;
   maxVideoCount?: number;
   hasProfilePicture?: boolean;
   studioIds?: number[];
-  missing?: 'picture' | 'platform' | 'social' | 'linked' | 'any';
+  missing?: "picture" | "platform" | "social" | "linked" | "any";
   complete?: boolean;
 }
 
@@ -114,19 +116,19 @@ export interface BulkCreatorImportItem {
 
 export interface BulkCreatorImportInput {
   items: BulkCreatorImportItem[];
-  mode: 'merge' | 'replace';
+  mode: "merge" | "replace";
 }
 
 export interface BulkImportPreviewItem {
   index: number;
-  action: 'create' | 'update';
+  action: "create" | "update";
   resolved_id: number | null; // null if will create new
   name: string;
   validation_errors: string[];
   changes: {
     name?: { from: string | null; to: string };
     description?: { from: string | null; to: string | null };
-    profile_picture?: { action: 'set' | 'unchanged' };
+    profile_picture?: { action: "set" | "unchanged" };
     platforms?: { add: number; update: number; remove?: number };
     social_links?: { add: number; update: number; remove?: number };
     videos?: { add: number; remove?: number };
@@ -144,4 +146,3 @@ export interface BulkImportResult {
     errors: number;
   };
 }
-

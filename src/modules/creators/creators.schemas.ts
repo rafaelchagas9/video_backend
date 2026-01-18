@@ -96,7 +96,9 @@ const creatorSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().optional().nullable(),
+  face_thumbnail_path: z.string().optional().nullable(),
   profile_picture_url: z.string().optional(),
+  face_thumbnail_url: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   // Enhanced fields
@@ -236,6 +238,10 @@ export const bulkSocialLinksSchema = z.object({
 
 export const pictureFromUrlSchema = z.object({
   url: z.string().url(),
+});
+
+export const pictureQuerySchema = z.object({
+  type: z.enum(["face"]).optional(),
 });
 
 export const bulkOperationResponseSchema = z.object({

@@ -218,6 +218,8 @@ export async function buildServer() {
       const { statsRoutes } = await import("./modules/stats/stats.routes");
       const { taggingRulesRoutes } =
         await import("./modules/tagging-rules/tagging-rules.routes");
+      const { faceRecognitionRoutes } =
+        await import("./modules/face-recognition/face-recognition.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -238,6 +240,7 @@ export async function buildServer() {
       await instance.register(storyboardsRoutes, { prefix: "/" }); // Storyboards routes handle /videos/:id/storyboard.* paths
       await instance.register(statsRoutes, { prefix: "/stats" });
       await instance.register(taggingRulesRoutes, { prefix: "/tagging-rules" });
+      await instance.register(faceRecognitionRoutes, { prefix: "/" }); // Face recognition routes handle /creators/:id/face-embeddings, /videos/:id/faces, /faces/* paths
     },
     { prefix: API_PREFIX },
   );

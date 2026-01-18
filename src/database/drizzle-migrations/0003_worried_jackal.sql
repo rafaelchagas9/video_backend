@@ -1,0 +1,1 @@
+ALTER TABLE "creators" ADD COLUMN "face_thumbnail_path" text;

@@ -34,5 +34,8 @@ export * from './triage.schema';
 // App Settings
 export * from './app-settings.schema';
 
+// Face Recognition
+export * from './face-recognition.schema';
+
 // Relations (for Drizzle relational queries)
 export * from './relations';

@@ -1,0 +1,1 @@
+ALTER TABLE "video_creators" DROP CONSTRAINT IF EXISTS "video_creators_video_id_creator_id_pk";

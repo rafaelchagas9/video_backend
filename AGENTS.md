@@ -12,7 +12,6 @@ This document provides essential information for AI agents and developers workin
 - **Run Migrations**: `bun db:migrate` (applies pending migrations)
 - **Push Schema**: `bun db:push` (push schema changes directly - dev only)
 - **Database Studio**: `bun db:studio` (opens Drizzle Studio GUI)
-- **Apply SQL Migration**: `bun db:apply-migration <file>` (run raw SQL migration)
 
 ### Testing & Quality
 

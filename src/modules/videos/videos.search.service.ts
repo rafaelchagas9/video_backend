@@ -403,6 +403,57 @@ export class VideosSearchService {
       );
     }
 
+    if (needsCreatorJoin && creatorIds && creatorIds.length > 0) {
+      if (matchMode === "any") {
+        countQueryWithJoins = countQueryWithJoins.innerJoin(
+          videoCreatorsTable,
+          and(
+            eq(videosTable.id, videoCreatorsTable.videoId),
+            inArray(videoCreatorsTable.creatorId, creatorIds),
+          ),
+        );
+      } else {
+        countQueryWithJoins = countQueryWithJoins.leftJoin(
+          videoCreatorsTable,
+          eq(videosTable.id, videoCreatorsTable.videoId),
+        );
+      }
+    }
+
+    if (needsTagJoin && tagIds && tagIds.length > 0) {
+      if (matchMode === "any") {
+        countQueryWithJoins = countQueryWithJoins.innerJoin(
+          videoTagsTable,
+          and(
+            eq(videosTable.id, videoTagsTable.videoId),
+            inArray(videoTagsTable.tagId, tagIds),
+          ),
+        );
+      } else {
+        countQueryWithJoins = countQueryWithJoins.leftJoin(
+          videoTagsTable,
+          eq(videosTable.id, videoTagsTable.videoId),
+        );
+      }
+    }
+
+    if (needsStudioJoin && studioIds && studioIds.length > 0) {
+      if (matchMode === "any") {
+        countQueryWithJoins = countQueryWithJoins.innerJoin(
+          videoStudiosTable,
+          and(
+            eq(videosTable.id, videoStudiosTable.videoId),
+            inArray(videoStudiosTable.studioId, studioIds),
+          ),
+        );
+      } else {
+        countQueryWithJoins = countQueryWithJoins.leftJoin(
+          videoStudiosTable,
+          eq(videosTable.id, videoStudiosTable.videoId),
+        );
+      }
+    }
+
     if (conditions.length > 0) {
       countQueryWithJoins = countQueryWithJoins.where(and(...conditions));
     }
