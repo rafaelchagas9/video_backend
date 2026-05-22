@@ -76,6 +76,7 @@ export type FaceExtractionStatus =
 
 /**
  * Face match status (for user confirmation)
+ * Note: "no_match" status should not be used in new code - unidentified faces are now discarded instead of stored
  */
 export type FaceMatchStatus = "pending" | "confirmed" | "rejected" | "no_match";
 
@@ -91,6 +92,19 @@ export interface ExtractedFrame {
 }
 
 /**
+ * Raw face detection from a frame (not yet inserted into database)
+ */
+export interface RawFaceDetection {
+  embedding: number[];
+  timestampSeconds: number;
+  frameIndex: number;
+  bbox: number[];
+  detScore: number;
+  estimatedAge?: number;
+  estimatedGender?: "M" | "F";
+}
+
+/**
  * Face processing options
  */
 export interface FaceProcessingOptions {
@@ -100,5 +114,3 @@ export interface FaceProcessingOptions {
   maxRetries?: number; // Maximum retry attempts (default: 3)
   retryIntervalMs?: number; // Retry interval in milliseconds (default: 300000 = 5 min)
 }
-
-

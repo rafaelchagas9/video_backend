@@ -1,6 +1,6 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
-import { stat, copyFile } from "fs/promises";
+import { stat } from "fs/promises";
 import ffmpeg from "fluent-ffmpeg";
 import { eq } from "drizzle-orm";
 import { db } from "@/config/drizzle";
@@ -8,6 +8,7 @@ import { thumbnailsTable } from "@/database/schema";
 import { env } from "@/config/env";
 import { NotFoundError } from "@/utils/errors";
 import { videosService } from "@/modules/videos/videos.service";
+import { logger } from "@/utils/logger";
 import type { Thumbnail, GenerateThumbnailInput } from "./thumbnails.types";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
 
@@ -41,7 +42,6 @@ export class ThumbnailsService {
       await this.delete(existing.id);
     }
 
-    // Parse width and height from THUMBNAIL_SIZE env variable (e.g., "320x240")
     const [width, height] = env.THUMBNAIL_SIZE.split("x").map(Number);
 
     // Calculate timestamp from percentage or use override
@@ -78,27 +78,36 @@ export class ThumbnailsService {
     const outputPath = join(env.THUMBNAILS_DIR, filename);
 
     return new Promise((resolve, reject) => {
-      const command = ffmpeg(video.file_path).screenshots({
-        timestamps: [timestamp],
-        filename: filename,
-        folder: env.THUMBNAILS_DIR,
-        size: env.THUMBNAIL_SIZE,
-      });
+      const stderrLines: string[] = [];
 
-      // Add quality settings based on format
-      if (format === "webp") {
-        // WebP quality (0-100 scale)
-        command.outputOptions(["-quality", env.THUMBNAIL_QUALITY.toString()]);
-      } else {
-        // JPEG quality (2-31 scale, lower is better)
-        // Convert from 0-100 scale (higher is better) to 2-31 scale (lower is better)
-        const jpegQuality = Math.round(
-          2 + ((100 - env.THUMBNAIL_QUALITY) / 100) * 29,
-        );
-        command.outputOptions(["-qscale:v", jpegQuality.toString()]);
-      }
+      // Build command manually instead of using .screenshots()
+      // because .screenshots() uses complex filtergraph which conflicts with -vf
+      const command = ffmpeg(video.file_path)
+        .inputOptions([
+          "-hwaccel",
+          "vaapi",
+          "-hwaccel_device",
+          env.VAAPI_DEVICE,
+        ])
+        .seekInput(timestamp)
+        .frames(1)
+        .outputOptions([
+          "-an", // no audio
+          "-sn", // no subtitles
+          "-dn", // no data streams
+          "-vf",
+          `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+          ...this.getQualityOptions(format, env.THUMBNAIL_QUALITY),
+        ])
+        .output(outputPath);
 
       command
+        .on("start", (cmdLine) => {
+          logger.debug({ cmd: cmdLine, videoId }, "ffmpeg thumbnail start");
+        })
+        .on("stderr", (line) => {
+          stderrLines.push(line);
+        })
         .on("end", async () => {
           try {
             // Get file size
@@ -126,12 +135,22 @@ export class ThumbnailsService {
             const thumbnail = await this.findById(result.id);
             resolve(thumbnail);
           } catch (error) {
-            reject(new Error("Failed to save thumbnail record"));
+            const normalizedError =
+              error instanceof Error ? error : new Error(String(error));
+            reject(normalizedError);
           }
         })
-        .on("error", (err) => {
-          reject(new Error(`FFmpeg error: ${err.message}`));
-        });
+        .on("error", (err, _stdout, stderr) => {
+          const stderrOutput = stderr || stderrLines.join("\n");
+          const message = stderrOutput || err?.message || String(err);
+          const error = new Error(`FFmpeg thumbnail error: ${message}`);
+          logger.error(
+            { videoId, stderrOutput, originalError: err?.message },
+            "ffmpeg thumbnail failed",
+          );
+          reject(error);
+        })
+        .run();
     });
   }
 
@@ -155,7 +174,6 @@ export class ThumbnailsService {
       await this.delete(existing.id);
     }
 
-    // Parse width and height from THUMBNAIL_SIZE env variable (e.g., "320x240")
     const [width, height] = env.THUMBNAIL_SIZE.split("x").map(Number);
 
     // Generate filename and copy frame to thumbnails directory
@@ -163,8 +181,22 @@ export class ThumbnailsService {
     const filename = `thumbnail_${videoId}_${Date.now()}.${format}`;
     const outputPath = join(env.THUMBNAILS_DIR, filename);
 
-    // Copy frame file to thumbnails directory
-    await copyFile(frame.filePath, outputPath);
+    const outputOptions = this.getQualityOptions(format, env.THUMBNAIL_QUALITY);
+    outputOptions.unshift(
+      "-vf",
+      `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(frame.filePath)
+        .outputOptions(outputOptions)
+        .output(outputPath)
+        .on("end", () => resolve())
+        .on("error", (err) =>
+          reject(err instanceof Error ? err : new Error(String(err))),
+        )
+        .run();
+    });
 
     // Get file size
     const stats = await stat(outputPath);
@@ -189,6 +221,15 @@ export class ThumbnailsService {
     }
 
     return await this.findById(result.id);
+  }
+
+  private getQualityOptions(format: "webp" | "jpg", quality: number): string[] {
+    if (format === "webp") {
+      return ["-quality", quality.toString()];
+    }
+
+    const jpegQuality = Math.round(2 + ((100 - quality) / 100) * 29);
+    return ["-qscale:v", jpegQuality.toString()];
   }
 
   async findById(id: number): Promise<Thumbnail> {

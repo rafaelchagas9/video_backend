@@ -27,34 +27,28 @@ export class StudiosService {
 
     const offset = (page - 1) * limit;
 
-    // Build complex query with subqueries for counts using raw SQL
-    // This is similar to what we had in tags.service.ts for complex queries
-    const whereClauses: string[] = [];
-    const whereParams: any[] = [];
+    const whereConditions: any[] = [];
 
-    // Search filter
     if (search) {
-      whereClauses.push("s.name LIKE $" + (whereParams.length + 1));
-      whereParams.push(`%${search}%`);
+      whereConditions.push(sql`s.name ILIKE ${`%${search}%`}`);
     }
 
-    // Missing filter
     if (missing) {
       switch (missing) {
         case "picture":
-          whereClauses.push("s.profile_picture_path IS NULL");
+          whereConditions.push(sql`s.profile_picture_path IS NULL`);
           break;
         case "social":
-          whereClauses.push("COALESCE(slc.social_link_count, 0) = 0");
+          whereConditions.push(sql`COALESCE(slc.social_link_count, 0) = 0`);
           break;
         case "linked":
-          whereClauses.push(
-            "(COALESCE(vc.video_count, 0) = 0 AND COALESCE(cc.creator_count, 0) = 0)",
+          whereConditions.push(
+            sql`(COALESCE(vc.video_count, 0) = 0 AND COALESCE(cc.creator_count, 0) = 0)`,
           );
           break;
         case "any":
-          whereClauses.push(`(
-            s.profile_picture_path IS NULL 
+          whereConditions.push(sql`(
+            s.profile_picture_path IS NULL
             OR COALESCE(slc.social_link_count, 0) = 0
             OR (COALESCE(vc.video_count, 0) = 0 AND COALESCE(cc.creator_count, 0) = 0)
           )`);
@@ -62,45 +56,45 @@ export class StudiosService {
       }
     }
 
-    // Complete filter
     if (complete !== undefined) {
-      const completenessCondition = `(
-        s.profile_picture_path IS NOT NULL 
+      const completenessCondition = sql`(
+        s.profile_picture_path IS NOT NULL
         AND COALESCE(slc.social_link_count, 0) > 0
         AND (COALESCE(vc.video_count, 0) > 0 OR COALESCE(cc.creator_count, 0) > 0)
       )`;
 
       if (complete) {
-        whereClauses.push(completenessCondition);
+        whereConditions.push(completenessCondition);
       } else {
-        whereClauses.push(`NOT ${completenessCondition}`);
+        whereConditions.push(sql`NOT ${completenessCondition}`);
       }
     }
 
     const whereClause =
-      whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+      whereConditions.length > 0
+        ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
+        : sql``;
 
-    // Count query
-    const countQuery = sql.raw(`
+    const countQuery = sql`
       SELECT COUNT(*) as count
       FROM studios s
       LEFT JOIN (
-        SELECT studio_id, COUNT(*) as social_link_count 
-        FROM studio_social_links 
+        SELECT studio_id, COUNT(*) as social_link_count
+        FROM studio_social_links
         GROUP BY studio_id
       ) slc ON s.id = slc.studio_id
       LEFT JOIN (
-        SELECT studio_id, COUNT(*) as video_count 
-        FROM video_studios 
+        SELECT studio_id, COUNT(*) as video_count
+        FROM video_studios
         GROUP BY studio_id
       ) vc ON s.id = vc.studio_id
       LEFT JOIN (
-        SELECT studio_id, COUNT(*) as creator_count 
-        FROM creator_studios 
+        SELECT studio_id, COUNT(*) as creator_count
+        FROM creator_studios
         GROUP BY studio_id
       ) cc ON s.id = cc.studio_id
       ${whereClause}
-    `);
+    `;
 
     const countResult = await db.execute(countQuery);
     const countRows = Array.isArray(countResult) ? countResult : [];
@@ -117,22 +111,23 @@ export class StudiosService {
     ];
     const sortColumn = validSortColumns.includes(sort) ? sort : "name";
 
-    let sortExpression = "s.name";
+    let sortExpression;
     if (sortColumn === "video_count") {
-      sortExpression = "COALESCE(vc.video_count, 0)";
+      sortExpression = sql`COALESCE(vc.video_count, 0)`;
     } else if (sortColumn === "creator_count") {
-      sortExpression = "COALESCE(cc.creator_count, 0)";
+      sortExpression = sql`COALESCE(cc.creator_count, 0)`;
     } else if (sortColumn === "created_at") {
-      sortExpression = "s.created_at";
+      sortExpression = sql`s.created_at`;
     } else if (sortColumn === "updated_at") {
-      sortExpression = "s.updated_at";
+      sortExpression = sql`s.updated_at`;
+    } else {
+      sortExpression = sql`s.name`;
     }
 
-    const sortOrder = order === "asc" ? "ASC" : "DESC";
+    const sortDir = order === "asc" ? sql`ASC` : sql`DESC`;
 
-    // Select query with pagination
-    const selectQuery = sql.raw(`
-      SELECT 
+    const selectQuery = sql`
+      SELECT
         s.id,
         s.name,
         s.description,
@@ -144,24 +139,24 @@ export class StudiosService {
         COALESCE(cc.creator_count, 0) as linked_creator_count
       FROM studios s
       LEFT JOIN (
-        SELECT studio_id, COUNT(*) as social_link_count 
-        FROM studio_social_links 
+        SELECT studio_id, COUNT(*) as social_link_count
+        FROM studio_social_links
         GROUP BY studio_id
       ) slc ON s.id = slc.studio_id
       LEFT JOIN (
-        SELECT studio_id, COUNT(*) as video_count 
-        FROM video_studios 
+        SELECT studio_id, COUNT(*) as video_count
+        FROM video_studios
         GROUP BY studio_id
       ) vc ON s.id = vc.studio_id
       LEFT JOIN (
-        SELECT studio_id, COUNT(*) as creator_count 
-        FROM creator_studios 
+        SELECT studio_id, COUNT(*) as creator_count
+        FROM creator_studios
         GROUP BY studio_id
       ) cc ON s.id = cc.studio_id
       ${whereClause}
-      ORDER BY ${sortExpression} ${sortOrder}
+      ORDER BY ${sortExpression} ${sortDir}
       LIMIT ${limit} OFFSET ${offset}
-    `);
+    `;
 
     const rawStudios = await db.execute(selectQuery);
     const studiosArray = Array.isArray(rawStudios) ? rawStudios : [];

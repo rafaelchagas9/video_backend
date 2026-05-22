@@ -1,0 +1,1 @@
+ALTER TABLE "conversion_jobs" ADD COLUMN "ffmpeg_output" text;

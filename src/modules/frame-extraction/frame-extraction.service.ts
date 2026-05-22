@@ -4,27 +4,28 @@
  * Frames are used by thumbnail, storyboard, and face recognition services
  */
 
-import { join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
-import { unlink, readdir, rmdir, stat as statAsync } from 'fs/promises';
-import ffmpeg from 'fluent-ffmpeg';
-import { logger } from '@/utils/logger';
-import { InternalServerError } from '@/utils/errors';
+import { join } from "path";
+import { existsSync, mkdirSync } from "fs";
+import { unlink, readdir, rmdir, stat as statAsync } from "fs/promises";
+import ffmpeg from "fluent-ffmpeg";
+import { logger } from "@/utils/logger";
+import { InternalServerError } from "@/utils/errors";
+import { env } from "@/config/env";
 import type {
   FrameExtractionOptions,
   FrameExtractionResult,
   ExtractedFrame,
   FrameCleanupOptions,
-} from './frame-extraction.types';
+} from "./frame-extraction.types";
 
 export class FrameExtractionService {
   private defaultTempDir: string;
-  private defaultFormat: 'jpg' | 'webp' | 'png';
+  private defaultFormat: "jpg" | "webp" | "png";
   private defaultQuality: number;
 
   constructor(
-    tempDir: string = '/dev/shm',
-    format: 'jpg' | 'webp' | 'png' = 'jpg',
+    tempDir: string = "/dev/shm",
+    format: "jpg" | "webp" | "png" = "jpg",
     quality: number = 90,
   ) {
     this.defaultTempDir = tempDir;
@@ -35,7 +36,7 @@ export class FrameExtractionService {
     if (!existsSync(this.defaultTempDir)) {
       logger.warn(
         { tempDir: this.defaultTempDir },
-        'Default temp directory does not exist, will use fallback',
+        "Default temp directory does not exist, will use fallback",
       );
     }
   }
@@ -44,7 +45,9 @@ export class FrameExtractionService {
    * Extract frames from a video at regular intervals
    * Returns paths to extracted frames for processing by other services
    */
-  async extractFrames(options: FrameExtractionOptions): Promise<FrameExtractionResult> {
+  async extractFrames(
+    options: FrameExtractionOptions,
+  ): Promise<FrameExtractionResult> {
     const startTime = Date.now();
 
     const {
@@ -52,12 +55,13 @@ export class FrameExtractionService {
       videoPath,
       videoDuration,
       intervalSeconds,
+      keyframesOnly = false,
       targetWidth,
       targetHeight,
       outputFormat = this.defaultFormat,
       quality = this.defaultQuality,
       tempDir = this.defaultTempDir,
-      prefix = 'frame',
+      prefix = "frame",
     } = options;
 
     // Calculate number of frames to extract
@@ -68,8 +72,12 @@ export class FrameExtractionService {
 
     logger.info(
       { videoId, totalFrames, intervalSeconds, outputFormat },
-      'Starting frame extraction',
+      "Starting frame extraction",
     );
+
+    // WebP's libwebp encoder only supports single-image output,
+    // so runFfmpegExtraction falls back to JPEG for sequences.
+    const actualFormat = outputFormat === "webp" ? "jpg" : outputFormat;
 
     try {
       // Extract frames using FFmpeg
@@ -77,6 +85,7 @@ export class FrameExtractionService {
         videoPath,
         outputDir: videoTempDir,
         intervalSeconds,
+        keyframesOnly,
         targetWidth,
         targetHeight,
         outputFormat,
@@ -88,7 +97,7 @@ export class FrameExtractionService {
       const frames = await this.collectFrameMetadata(
         videoTempDir,
         prefix,
-        outputFormat,
+        actualFormat,
         intervalSeconds,
         totalFrames,
       );
@@ -97,7 +106,7 @@ export class FrameExtractionService {
 
       logger.info(
         { videoId, framesExtracted: frames.length, timeMs: extractionTimeMs },
-        'Frame extraction completed',
+        "Frame extraction completed",
       );
 
       return {
@@ -108,7 +117,7 @@ export class FrameExtractionService {
         tempDirectory: videoTempDir,
       };
     } catch (error) {
-      logger.error({ error, videoId }, 'Frame extraction failed');
+      logger.error({ error, videoId }, "Frame extraction failed");
       // Clean up temp directory on failure
       await this.cleanupFrames(videoTempDir, { removeDirectory: true });
       throw new InternalServerError(
@@ -127,10 +136,10 @@ export class FrameExtractionService {
     // Check if base directory exists, fallback to /tmp if not
     if (!existsSync(baseDir)) {
       logger.warn(
-        { requestedDir: baseDir, fallback: '/tmp' },
-        'Temp directory not available, using fallback',
+        { requestedDir: baseDir, fallback: "/tmp" },
+        "Temp directory not available, using fallback",
       );
-      tempDir = '/tmp';
+      tempDir = "/tmp";
     }
 
     // Create unique directory for this video's frames
@@ -139,9 +148,99 @@ export class FrameExtractionService {
 
     mkdirSync(videoTempDir, { recursive: true });
 
-    logger.debug({ directory: videoTempDir }, 'Created temp directory for frames');
+    logger.debug(
+      { directory: videoTempDir },
+      "Created temp directory for frames",
+    );
 
     return videoTempDir;
+  }
+
+  /**
+   * Extract a single frame at a specific timestamp
+   * Useful for face image generation and thumbnails
+   */
+  async extractFrame(params: {
+    videoPath: string;
+    timestampSeconds: number;
+    outputDir: string;
+    outputFormat?: "jpg" | "webp" | "png";
+    quality?: number;
+    targetWidth?: number;
+    targetHeight?: number;
+  }): Promise<string> {
+    const {
+      videoPath,
+      timestampSeconds,
+      outputDir,
+      outputFormat = this.defaultFormat,
+      quality = this.defaultQuality,
+      targetWidth,
+      targetHeight,
+    } = params;
+
+    // Ensure output directory exists
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
+
+    // Generate filename
+    const filename = `frame_${Date.now()}.${outputFormat}`;
+    const outputPath = join(outputDir, filename);
+
+    // Build scale filter if dimensions specified
+    let scaleFilter = "";
+    if (targetWidth && targetHeight) {
+      scaleFilter = `scale=w=${targetWidth}:h=${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2`;
+    } else if (targetWidth) {
+      scaleFilter = `scale=${targetWidth}:-1`;
+    } else if (targetHeight) {
+      scaleFilter = `scale=-1:${targetHeight}`;
+    }
+
+    // Quality options based on format
+    const qualityOptions = this.getQualityOptions(outputFormat, quality);
+
+    return new Promise<string>((resolve, reject) => {
+      const command = ffmpeg(videoPath)
+        .inputOptions([
+          "-hwaccel",
+          "vaapi",
+          "-hwaccel_device",
+          env.VAAPI_DEVICE,
+        ])
+        .seekInput(timestampSeconds)
+        .frames(1)
+        .outputOptions([
+          "-an", // No audio
+          "-sn", // No subtitles
+          "-dn", // No data streams
+          ...qualityOptions,
+        ]);
+
+      // Add scale filter if specified
+      if (scaleFilter) {
+        command.outputOptions(["-vf", scaleFilter]);
+      }
+
+      command
+        .output(outputPath)
+        .on("end", () => {
+          logger.debug(
+            { outputPath, timestamp: timestampSeconds },
+            "Single frame extracted",
+          );
+          resolve(outputPath);
+        })
+        .on("error", (err) => {
+          logger.error(
+            { error: err, videoPath, timestamp: timestampSeconds },
+            "Single frame extraction error",
+          );
+          reject(new InternalServerError("Failed to extract frame from video"));
+        })
+        .run();
+    });
   }
 
   /**
@@ -151,6 +250,7 @@ export class FrameExtractionService {
     videoPath: string;
     outputDir: string;
     intervalSeconds: number;
+    keyframesOnly: boolean;
     targetWidth?: number;
     targetHeight?: number;
     outputFormat: string;
@@ -161,6 +261,7 @@ export class FrameExtractionService {
       videoPath,
       outputDir,
       intervalSeconds,
+      keyframesOnly,
       targetWidth,
       targetHeight,
       outputFormat,
@@ -169,9 +270,9 @@ export class FrameExtractionService {
     } = params;
 
     // Build scale filter if dimensions specified
-    let scaleFilter = '';
+    let scaleFilter = "";
     if (targetWidth && targetHeight) {
-      scaleFilter = `scale=${targetWidth}:${targetHeight}`;
+      scaleFilter = `scale=w=${targetWidth}:h=${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2`;
     } else if (targetWidth) {
       scaleFilter = `scale=${targetWidth}:-1`;
     } else if (targetHeight) {
@@ -184,33 +285,56 @@ export class FrameExtractionService {
     if (scaleFilter) {
       filters.push(scaleFilter);
     }
-    const filterChain = filters.join(',');
+    const filterChain = filters.join(",");
+
+    // WebP's libwebp encoder only supports single-image output, so we
+    // fall back to JPEG for multi-frame sequence extraction.
+    const seqFormat = outputFormat === "webp" ? "jpg" : outputFormat;
+    const seqQuality = outputFormat === "webp" ? Math.round(2 + ((100 - quality) / 100) * 29) : undefined;
 
     // Output filename pattern
-    const outputPattern = join(outputDir, `${prefix}_%04d.${outputFormat}`);
+    const outputPattern = join(outputDir, `${prefix}_%04d.${seqFormat}`);
 
     // Quality options based on format
-    const qualityOptions = this.getQualityOptions(outputFormat, quality);
+    const qualityOptions = seqQuality
+      ? ["-qscale:v", seqQuality.toString()]
+      : this.getQualityOptions(seqFormat, quality);
 
     return new Promise<void>((resolve, reject) => {
+      const inputOptions = [
+        "-hwaccel",
+        "vaapi",
+        "-hwaccel_device",
+        env.VAAPI_DEVICE,
+      ];
+
+      if (keyframesOnly) {
+        inputOptions.push("-skip_frame", "nokey");
+      }
+
       ffmpeg(videoPath)
+        .inputOptions(inputOptions)
         .outputOptions([
-          '-vf',
+          "-vf",
           filterChain,
-          '-vsync',
-          'vfr', // Variable frame rate to handle exact intervals
-          '-an', // No audio
-          '-sn', // No subtitles
-          '-dn', // No data streams
+          "-an", // No audio
+          "-sn", // No subtitles
+          "-dn", // No data streams
           ...qualityOptions,
         ])
         .output(outputPattern)
-        .on('end', () => {
-          logger.debug({ outputPattern }, 'FFmpeg frame extraction completed');
+        .on("start", (commandLine) => {
+          logger.debug({ commandLine }, "FFmpeg frame extraction command");
+        })
+        .on("end", () => {
+          logger.debug({ outputPattern }, "FFmpeg frame extraction completed");
           resolve();
         })
-        .on('error', (err) => {
-          logger.error({ error: err, videoPath }, 'FFmpeg frame extraction error');
+        .on("error", (err) => {
+          logger.error(
+            { error: err, videoPath },
+            "FFmpeg frame extraction error",
+          );
           reject(err);
         })
         .run();
@@ -221,19 +345,19 @@ export class FrameExtractionService {
    * Get quality options for FFmpeg based on output format
    */
   private getQualityOptions(format: string, quality: number): string[] {
-    if (format === 'webp') {
-      return ['-q:v', quality.toString()];
+    if (format === "webp") {
+      return ["-q:v", quality.toString()];
     }
 
-    if (format === 'png') {
+    if (format === "png") {
       // PNG compression level (0-9, lower is faster but larger)
       const compressionLevel = Math.round(9 - (quality / 100) * 9);
-      return ['-compression_level', compressionLevel.toString()];
+      return ["-compression_level", compressionLevel.toString()];
     }
 
     // JPEG quality (qscale 2-31, lower is better)
     const jpegQuality = Math.round(2 + ((100 - quality) / 100) * 29);
-    return ['-qscale:v', jpegQuality.toString()];
+    return ["-qscale:v", jpegQuality.toString()];
   }
 
   /**
@@ -248,14 +372,14 @@ export class FrameExtractionService {
   ): Promise<ExtractedFrame[]> {
     const files = await readdir(directory);
     const frameFiles = files
-      .filter(f => f.startsWith(prefix) && f.endsWith(`.${format}`))
+      .filter((f) => f.startsWith(prefix) && f.endsWith(`.${format}`))
       .sort(); // Sort to ensure sequential order
 
     const frames: ExtractedFrame[] = [];
 
     for (let i = 0; i < frameFiles.length; i++) {
       const filePath = join(directory, frameFiles[i]);
-      const stats = await statAsync(filePath);
+      await statAsync(filePath);
 
       // We don't extract actual dimensions here (would require image library)
       // Services that need dimensions should read them when processing
@@ -273,7 +397,7 @@ export class FrameExtractionService {
     if (frames.length < expectedCount) {
       logger.warn(
         { expected: expectedCount, actual: frames.length },
-        'Fewer frames extracted than expected',
+        "Fewer frames extracted than expected",
       );
     }
 
@@ -307,7 +431,7 @@ export class FrameExtractionService {
         try {
           await unlink(filePath);
         } catch (error) {
-          logger.warn({ file: filePath, error }, 'Failed to delete frame file');
+          logger.warn({ file: filePath, error }, "Failed to delete frame file");
         }
       }
 
@@ -315,13 +439,13 @@ export class FrameExtractionService {
       if (removeDirectory) {
         try {
           await rmdir(directory);
-          logger.debug({ directory }, 'Removed frame temp directory');
+          logger.debug({ directory }, "Removed frame temp directory");
         } catch (error) {
-          logger.warn({ directory, error }, 'Failed to remove temp directory');
+          logger.warn({ directory, error }, "Failed to remove temp directory");
         }
       }
     } catch (error) {
-      logger.error({ error, directory }, 'Frame cleanup failed');
+      logger.error({ error, directory }, "Frame cleanup failed");
     }
   }
 
@@ -353,8 +477,12 @@ export class FrameExtractionService {
     // Check if closest frame is within acceptable deviation
     if (minDifference > maxDeviationSeconds) {
       logger.warn(
-        { targetSeconds, closestFrame: closestFrame.timestampSeconds, deviation: minDifference },
-        'Closest frame exceeds max deviation',
+        {
+          targetSeconds,
+          closestFrame: closestFrame.timestampSeconds,
+          deviation: minDifference,
+        },
+        "Closest frame exceeds max deviation",
       );
       return null;
     }
@@ -369,9 +497,12 @@ let serviceInstance: FrameExtractionService | null = null;
 export function getFrameExtractionService(): FrameExtractionService {
   if (!serviceInstance) {
     // Will be configured from env in next phase
-    const tempDir = process.env.FRAME_EXTRACTION_TEMP_DIR || '/dev/shm';
-    const format = (process.env.FRAME_EXTRACTION_FORMAT || 'jpg') as 'jpg' | 'webp' | 'png';
-    const quality = parseInt(process.env.FRAME_EXTRACTION_QUALITY || '90', 10);
+    const tempDir = process.env.FRAME_EXTRACTION_TEMP_DIR || "/dev/shm";
+    const format = (process.env.FRAME_EXTRACTION_FORMAT || "jpg") as
+      | "jpg"
+      | "webp"
+      | "png";
+    const quality = parseInt(process.env.FRAME_EXTRACTION_QUALITY || "90", 10);
 
     serviceInstance = new FrameExtractionService(tempDir, format, quality);
   }

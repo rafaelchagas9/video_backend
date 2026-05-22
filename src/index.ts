@@ -1,6 +1,6 @@
-import { buildServer } from './server';
-import { env } from './config/env';
-import { logger } from './utils/logger';
+import { buildServer } from "./server";
+import { env } from "./config/env";
+import { logger } from "./utils/logger";
 
 async function main() {
   try {
@@ -12,11 +12,16 @@ async function main() {
     });
 
     logger.info(`Server listening on http://${env.HOST}:${env.PORT}`);
-    logger.info(`API documentation available at http://${env.HOST}:${env.PORT}/docs`);
-    logger.info(`Health check available at http://${env.HOST}:${env.PORT}/health`);
-    logger.info(`WebSocket server available at ws://${env.HOST}:${env.PORT}/ws`);
+    logger.info(
+      `API documentation available at http://${env.HOST}:${env.PORT}/docs`,
+    );
+    logger.info(
+      `Health check available at http://${env.HOST}:${env.PORT}/health`,
+    );
+    logger.info(
+      `SSE stream available at http://${env.HOST}:${env.PORT}/api/events/stream`,
+    );
     logger.info(`URL: ${env.BASE_URL}`);
-
   } catch (error) {
     logger.error(error);
     process.exit(1);

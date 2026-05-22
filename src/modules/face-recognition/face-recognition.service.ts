@@ -3,8 +3,8 @@
  * Main service for face recognition, embedding management, and similarity matching
  */
 
-import { db } from '@/config/drizzle';
-import { eq, sql, and, desc } from 'drizzle-orm';
+import { db } from "@/config/drizzle";
+import { eq, sql, and, desc } from "drizzle-orm";
 import {
   creatorFaceEmbeddingsTable,
   videoFaceDetectionsTable,
@@ -14,18 +14,40 @@ import {
   type VideoFaceDetection,
   videoCreatorsTable,
   creatorsTable,
-} from '@/database/schema';
-import { logger } from '@/utils/logger';
-import { env } from '@/config/env';
-import { NotFoundError } from '@/utils/errors';
-import { getFaceRecognitionClient } from './face-recognition.client';
-import { getFrameExtractionService } from '@/modules/frame-extraction';
-import { getFaceExtractionQueue } from './face-extraction-queue.service';
-import { thumbnailsService } from '@/modules/thumbnails/thumbnails.service';
-import { storyboardsService } from '@/modules/storyboards/storyboards.service';
-import type { SimilarityMatch } from './face-recognition.types';
+} from "@/database/schema";
+import { logger } from "@/utils/logger";
+import { env } from "@/config/env";
+import { NotFoundError } from "@/utils/errors";
+import { getFaceRecognitionClient } from "./face-recognition.client";
+import { getFrameExtractionService } from "@/modules/frame-extraction";
+import { getFaceExtractionQueue } from "./face-extraction-queue.service";
+import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
+import { storyboardsService } from "@/modules/storyboards/storyboards.service";
+import { resizeAndSaveCreatorThumbnail } from "@/utils/image-processing";
+import { recordPerfStage } from "@/utils/performance-profiler";
+import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { join } from "path";
+import type {
+  SimilarityMatch,
+  RawFaceDetection,
+} from "./face-recognition.types";
 
 export class FaceRecognitionService {
+  private creatorFacesDir: string;
+
+  constructor() {
+    this.creatorFacesDir =
+      env.CREATOR_FACE_THUMBNAILS_DIR || "./data/creator-face-thumbnails";
+
+    if (!existsSync(this.creatorFacesDir)) {
+      mkdirSync(this.creatorFacesDir, { recursive: true });
+      logger.info(
+        { creatorFacesDir: this.creatorFacesDir },
+        "Created creator face thumbnails directory",
+      );
+    }
+  }
+
   /**
    * Add a reference face embedding for a creator
    */
@@ -51,18 +73,48 @@ export class FaceRecognitionService {
     const result = await faceClient.detectFacesFromFile(imagePath);
 
     if (result.faces.length === 0) {
-      throw new Error('No face detected in image');
+      throw new Error("No face detected in image");
     }
 
     if (result.faces.length > 1) {
       logger.warn(
         { count: result.faces.length },
-        'Multiple faces detected, using first face',
+        "Multiple faces detected, using first face",
       );
     }
 
     const face = result.faces[0];
     const embedding = JSON.stringify(face.embedding);
+
+    let thumbnailPath: string | null = null;
+
+    try {
+      const filename = `creator_${creatorId}_embedding_${Date.now()}.webp`;
+      const outputPath = join(this.creatorFacesDir, filename);
+
+      await resizeAndSaveCreatorThumbnail({
+        inputPath: imagePath,
+        outputPath,
+        faceBox: face.bbox,
+        imageWidth: result.image_width,
+        imageHeight: result.image_height,
+        paddingScale: env.FACE_IMAGE_PADDING,
+        size: 128,
+        quality: 75,
+      });
+
+      thumbnailPath = outputPath;
+
+      logger.debug(
+        { creatorId, thumbnailPath },
+        "Creator face thumbnail saved",
+      );
+    } catch (error) {
+      logger.warn(
+        { creatorId, error },
+        "Failed to save creator face thumbnail (continuing without thumbnail)",
+      );
+    }
 
     // If setting as primary, unset other primary embeddings for this creator
     if (isPrimary) {
@@ -83,6 +135,7 @@ export class FaceRecognitionService {
       isPrimary,
       estimatedAge: face.age,
       estimatedGender: face.gender,
+      thumbnailPath,
     };
 
     const inserted = await db
@@ -92,7 +145,7 @@ export class FaceRecognitionService {
 
     logger.info(
       { creatorId, embeddingId: inserted[0].id },
-      'Added creator face embedding',
+      "Added creator face embedding",
     );
 
     return inserted[0];
@@ -101,7 +154,9 @@ export class FaceRecognitionService {
   /**
    * Get all face embeddings for a creator
    */
-  async getCreatorEmbeddings(creatorId: number): Promise<CreatorFaceEmbedding[]> {
+  async getCreatorEmbeddings(
+    creatorId: number,
+  ): Promise<CreatorFaceEmbedding[]> {
     return await db
       .select()
       .from(creatorFaceEmbeddingsTable)
@@ -133,6 +188,30 @@ export class FaceRecognitionService {
    * Delete a creator face embedding
    */
   async deleteCreatorEmbedding(embeddingId: number): Promise<void> {
+    // Get the embedding first to delete the thumbnail file
+    const embedding = await db
+      .select({ thumbnailPath: creatorFaceEmbeddingsTable.thumbnailPath })
+      .from(creatorFaceEmbeddingsTable)
+      .where(eq(creatorFaceEmbeddingsTable.id, embeddingId))
+      .limit(1)
+      .then((rows) => rows[0]);
+
+    // Delete thumbnail file if exists
+    if (embedding?.thumbnailPath && existsSync(embedding.thumbnailPath)) {
+      try {
+        unlinkSync(embedding.thumbnailPath);
+        logger.debug(
+          { embeddingId, thumbnailPath: embedding.thumbnailPath },
+          "Deleted creator face thumbnail",
+        );
+      } catch (error) {
+        logger.warn(
+          { embeddingId, error },
+          "Failed to delete creator face thumbnail file",
+        );
+      }
+    }
+
     await db
       .delete(creatorFaceEmbeddingsTable)
       .where(eq(creatorFaceEmbeddingsTable.id, embeddingId));
@@ -162,7 +241,7 @@ export class FaceRecognitionService {
       .from(videoFaceDetectionsTable)
       .where(eq(videoFaceDetectionsTable.id, detectionId))
       .limit(1)
-      .then(rows => rows[0]);
+      .then((rows) => rows[0]);
 
     if (!detection) {
       throw new NotFoundError(`Detection ${detectionId} not found`);
@@ -172,7 +251,7 @@ export class FaceRecognitionService {
 
     logger.info(
       { videoId, creatorId, detectionId },
-      'Manually confirming face match - Auto-tagging and cleaning up',
+      "Manually confirming face match - Auto-tagging and cleaning up",
     );
 
     // 1. Tag the creator on the video
@@ -187,7 +266,7 @@ export class FaceRecognitionService {
         ),
       )
       .limit(1)
-      .then(rows => rows[0]);
+      .then((rows) => rows[0]);
 
     if (!existing) {
       await db
@@ -209,7 +288,7 @@ export class FaceRecognitionService {
           eq(videoFaceDetectionsTable.matchedCreatorId, creatorId),
         ),
       );
-    
+
     // Also delete the specific detection ID if it wasn't caught by the above (e.g. if matchedCreatorId wasn't set yet)
     await db
       .delete(videoFaceDetectionsTable)
@@ -225,7 +304,7 @@ export class FaceRecognitionService {
       .set({
         matchedCreatorId: null,
         matchConfidence: null,
-        matchStatus: 'rejected',
+        matchStatus: "rejected",
         updatedAt: new Date(),
       })
       .where(eq(videoFaceDetectionsTable.id, detectionId));
@@ -241,7 +320,7 @@ export class FaceRecognitionService {
     threshold: number = env.FACE_SIMILARITY_THRESHOLD,
   ): Promise<SimilarityMatch[]> {
     // Convert embedding to vector format for pgvector
-    const embeddingString = `[${embedding.join(',')}]`;
+    const embeddingString = `[${embedding.join(",")}]`;
 
     // Using raw SQL for pgvector cosine similarity
     // The <=> operator computes cosine distance (1 - cosine_similarity)
@@ -273,46 +352,36 @@ export class FaceRecognitionService {
 
   /**
    * Auto-match video face detections with creators
-   * Runs similarity search for all unmatched faces in a video
+   * Only stores faces that match a creator - unidentified faces are discarded
    */
   async autoMatchVideoFaces(
     videoId: number,
+    rawDetections: RawFaceDetection[],
     similarityThreshold: number = env.FACE_SIMILARITY_THRESHOLD,
     autoTagThreshold: number = env.FACE_AUTO_TAG_THRESHOLD,
   ): Promise<void> {
-    // Get all pending face detections
-    const detections = await db
-      .select()
-      .from(videoFaceDetectionsTable)
-      .where(
-        and(
-          eq(videoFaceDetectionsTable.videoId, videoId),
-          eq(videoFaceDetectionsTable.matchStatus, 'pending'),
-        ),
-      );
+    logger.info(
+      { videoId, count: rawDetections.length },
+      "Auto-matching video faces",
+    );
 
-    logger.info({ videoId, count: detections.length }, 'Auto-matching video faces');
-
-    if (detections.length === 0) {
+    if (rawDetections.length === 0) {
       return;
     }
 
-    // Group matches by creator to robustly handle "multiple instances" check
     const creatorMatches = new Map<
       number,
       {
         creatorId: number;
         maxConfidence: number;
-        detections: typeof detections;
+        detections: RawFaceDetection[];
       }
     >();
 
-    // 1. Calculate matches for all detections
-    for (const detection of detections) {
+    for (const detection of rawDetections) {
       try {
-        const embedding = JSON.parse(detection.embedding);
         const matches = await this.findSimilarCreators(
-          embedding,
+          detection.embedding,
           1,
           similarityThreshold,
         );
@@ -331,40 +400,33 @@ export class FaceRecognitionService {
 
           const group = creatorMatches.get(creatorId)!;
           group.detections.push(detection);
-          // Keep track of the highest confidence seen for this creator in this batch
           if (bestMatch.similarity > group.maxConfidence) {
             group.maxConfidence = bestMatch.similarity;
           }
 
-          // Attach match info temporarily to the detection object for later use
           (detection as any)._matchInfo = bestMatch;
-        } else {
-          // No match found immediately mark as no_match
-          await db
-            .update(videoFaceDetectionsTable)
-            .set({
-              matchStatus: 'no_match',
-              updatedAt: new Date(),
-            })
-            .where(eq(videoFaceDetectionsTable.id, detection.id));
         }
       } catch (error) {
-        logger.error({ detectionId: detection.id, error }, 'Failed to compute match');
+        logger.error({ error }, "Failed to compute match");
       }
     }
 
-    // 2. Process groups
     for (const group of creatorMatches.values()) {
       const { creatorId, maxConfidence, detections: groupDetections } = group;
 
-      // Check if ANY detection for this creator meets the auto-tag threshold
+      // Sort detections by match confidence (highest first)
+      groupDetections.sort((a, b) => {
+        const confA = (a as any)._matchInfo.similarity;
+        const confB = (b as any)._matchInfo.similarity;
+        return confB - confA;
+      });
+
       if (maxConfidence >= autoTagThreshold) {
         logger.info(
           { videoId, creatorId, maxConfidence },
-          'High confidence match found, auto-tagging creator and clearing detections',
+          "High confidence match found, auto-tagging creator",
         );
 
-        // A. Tag the creator on the video
         const existing = await db
           .select()
           .from(videoCreatorsTable)
@@ -375,7 +437,7 @@ export class FaceRecognitionService {
             ),
           )
           .limit(1)
-          .then(rows => rows[0]);
+          .then((rows) => rows[0]);
 
         if (!existing) {
           await db
@@ -387,78 +449,93 @@ export class FaceRecognitionService {
             .onConflictDoNothing();
         }
 
-        // B. DELETE ALL detections for this creator in this video
-        // This includes likely the ones we just found, plus any others that might exist in DB
-        // Query to delete by matchedCreatorId OR if we are processing them now.
-        // Easier: Delete from table where videoId AND (matchedCreatorId = creatorId OR id IN ids_we_matched_to_this_creator)
-
-        // For stricter cleanup as requested: "remove any other detect faces on that video for that actor"
-        // We delete ALL faces that are either:
-        // 1. Already matched to this creator (confirmed/pending/rejected)
-        // 2. In our current batch and matched to this creator
-
-        const currentBatchIds = groupDetections.map(d => d.id);
-
+        // Clean up ALL detections for this creator on this video
         await db
           .delete(videoFaceDetectionsTable)
           .where(
             and(
               eq(videoFaceDetectionsTable.videoId, videoId),
-              sql`(${videoFaceDetectionsTable.matchedCreatorId} = ${creatorId} OR ${videoFaceDetectionsTable.id} IN ${currentBatchIds})`,
+              eq(videoFaceDetectionsTable.matchedCreatorId, creatorId),
             ),
           );
-      } else {
-        // Low confidence - just update the records as pending/confirmed based on own score
-        // (Note: The original logic had a binary "confirmed" vs "pending" based on autoTagThreshold too.
-        // We keep that, but since we didn't hit the "Delete" path, we persist them.)
-        for (const detection of groupDetections) {
-          const matchInfo = (detection as any)._matchInfo;
-          const matchStatus =
-            matchInfo.similarity >= autoTagThreshold ? 'confirmed' : 'pending';
 
-          await db
-            .update(videoFaceDetectionsTable)
-            .set({
-              matchedCreatorId: matchInfo.creator_id,
-              matchConfidence: matchInfo.similarity,
-              matchStatus,
-              updatedAt: new Date(),
-            })
-            .where(eq(videoFaceDetectionsTable.id, detection.id));
+        // Save ONLY the single best match as confirmed
+        const bestDetection = groupDetections[0];
+        const matchInfo = (bestDetection as any)._matchInfo;
+
+        await db.insert(videoFaceDetectionsTable).values({
+          videoId,
+          embedding: JSON.stringify(bestDetection.embedding),
+          timestampSeconds: bestDetection.timestampSeconds,
+          frameIndex: bestDetection.frameIndex,
+          bboxX1: bestDetection.bbox[0],
+          bboxY1: bestDetection.bbox[1],
+          bboxX2: bestDetection.bbox[2],
+          bboxY2: bestDetection.bbox[3],
+          detScore: bestDetection.detScore,
+          estimatedAge: bestDetection.estimatedAge,
+          estimatedGender: bestDetection.estimatedGender,
+          matchedCreatorId: matchInfo.creator_id,
+          matchConfidence: matchInfo.similarity,
+          matchStatus: "confirmed",
+        });
+      } else {
+        // Pending matches - limit to top N
+        const limit = env.FACE_MAX_PENDING_PER_VIDEO;
+        const detectionsToSave = groupDetections.slice(0, limit);
+
+        for (const detection of detectionsToSave) {
+          const matchInfo = (detection as any)._matchInfo;
+          // Double check status, though it should be pending here based on logic
+          const matchStatus =
+            matchInfo.similarity >= autoTagThreshold ? "confirmed" : "pending";
+
+          await db.insert(videoFaceDetectionsTable).values({
+            videoId,
+            embedding: JSON.stringify(detection.embedding),
+            timestampSeconds: detection.timestampSeconds,
+            frameIndex: detection.frameIndex,
+            bboxX1: detection.bbox[0],
+            bboxY1: detection.bbox[1],
+            bboxX2: detection.bbox[2],
+            bboxY2: detection.bbox[3],
+            detScore: detection.detScore,
+            estimatedAge: detection.estimatedAge,
+            estimatedGender: detection.estimatedGender,
+            matchedCreatorId: matchInfo.creator_id,
+            matchConfidence: matchInfo.similarity,
+            matchStatus,
+          });
         }
       }
     }
   }
 
   /**
-   * Orchestrate complete face recognition workflow for a video
-   * 1. Extract frames
-   * 2. Generate thumbnail and storyboard from frames
-   * 3. Queue face extraction
+   * Unified workflow for initial library scan.
+   * Keeps one extraction pass for thumbnail + storyboard + faces.
    */
   async processVideo(
     videoId: number,
     videoPath: string,
     videoDuration: number,
   ): Promise<void> {
-    logger.info({ videoId }, 'Starting unified video processing');
+    logger.info({ videoId }, "Starting unified video processing");
 
-    // Extract frames (unified pass)
     const frameService = getFrameExtractionService();
     const result = await frameService.extractFrames({
       videoId,
       videoPath,
       videoDuration,
-      intervalSeconds: 10, // Extract frame every 10 seconds
+      intervalSeconds: env.STORYBOARD_INTERVAL_SECONDS,
     });
 
     logger.info(
       { videoId, framesExtracted: result.totalFrames },
-      'Frames extracted',
+      "Frames extracted",
     );
 
     try {
-      // Generate thumbnail from closest frame to target position
       const thumbnailPercent = env.THUMBNAIL_POSITION_PERCENT;
       const targetSeconds = videoDuration * (thumbnailPercent / 100);
       const closestFrame = frameService.findClosestFrame(
@@ -468,25 +545,93 @@ export class FaceRecognitionService {
 
       if (closestFrame) {
         await thumbnailsService.saveFromFrame(videoId, closestFrame);
-        logger.info({ videoId }, 'Thumbnail generated from extracted frame');
+        logger.info({ videoId }, "Thumbnail generated from extracted frame");
       }
 
-      // Generate storyboard from all frames
       await storyboardsService.assembleFromFrames(
         videoId,
         result.frames,
         videoDuration,
       );
-      logger.info({ videoId }, 'Storyboard assembled from extracted frames');
+      logger.info({ videoId }, "Storyboard assembled from extracted frames");
 
-      // Queue face extraction
       const faceQueue = getFaceExtractionQueue();
       await faceQueue.queueExtraction(videoId, result.frames);
-      logger.info({ videoId }, 'Face extraction queued');
-
-      // Note: Frames will be cleaned up by the face queue after processing
+      logger.info({ videoId }, "Face extraction queued");
     } catch (error) {
-      // Clean up frames on error
+      await frameService.cleanupFrames(result.tempDirectory, {
+        removeDirectory: true,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Face-only workflow for on-demand endpoint.
+   * Skips thumbnail/storyboard generation and uses face-optimized extraction settings.
+   */
+  async processFacesOnly(
+    videoId: number,
+    videoPath: string,
+    videoDuration: number,
+  ): Promise<void> {
+    const totalStart = Date.now();
+    logger.info({ videoId }, "Starting face-only processing");
+
+    const frameService = getFrameExtractionService();
+    const extractionStart = Date.now();
+    const result = await frameService.extractFrames({
+      videoId,
+      videoPath,
+      videoDuration,
+      intervalSeconds: env.FACE_EXTRACTION_INTERVAL_SECONDS,
+      keyframesOnly: true,
+      targetWidth: env.FACE_EXTRACTION_MAX_WIDTH,
+      outputFormat: env.FACE_EXTRACTION_FORMAT,
+      quality: env.FACE_EXTRACTION_QUALITY,
+      prefix: "face",
+    });
+
+    await recordPerfStage(
+      { scenario: "face", videoId, mode: "process_faces_only" },
+      "extract_frames",
+      Date.now() - extractionStart,
+      {
+        frameCount: result.totalFrames,
+        intervalSeconds: env.FACE_EXTRACTION_INTERVAL_SECONDS,
+        targetWidth: env.FACE_EXTRACTION_MAX_WIDTH,
+      },
+    );
+
+    logger.info(
+      {
+        videoId,
+        framesExtracted: result.totalFrames,
+        intervalSeconds: env.FACE_EXTRACTION_INTERVAL_SECONDS,
+        targetWidth: env.FACE_EXTRACTION_MAX_WIDTH,
+      },
+      "Face-only frames extracted",
+    );
+
+    try {
+      const faceQueue = getFaceExtractionQueue();
+      const queueStart = Date.now();
+      await faceQueue.queueExtraction(videoId, result.frames);
+      await recordPerfStage(
+        { scenario: "face", videoId, mode: "process_faces_only" },
+        "queue_extraction",
+        Date.now() - queueStart,
+        { frameCount: result.totalFrames },
+      );
+      logger.info({ videoId }, "Face-only extraction queued");
+
+      await recordPerfStage(
+        { scenario: "face", videoId, mode: "process_faces_only" },
+        "total",
+        Date.now() - totalStart,
+        { frameCount: result.totalFrames },
+      );
+    } catch (error) {
       await frameService.cleanupFrames(result.tempDirectory, {
         removeDirectory: true,
       });
@@ -503,10 +648,12 @@ export class FaceRecognitionService {
       .from(faceExtractionJobsTable)
       .where(eq(faceExtractionJobsTable.videoId, videoId))
       .limit(1)
-      .then(rows => rows[0] || null);
+      .then((rows) => rows[0] || null);
 
     if (!job) {
-      throw new NotFoundError(`Face extraction job not found for video: ${videoId}`);
+      throw new NotFoundError(
+        `Face extraction job not found for video: ${videoId}`,
+      );
     }
 
     return job;
@@ -526,7 +673,9 @@ export class FaceRecognitionService {
   async findVideosWithCreator(
     creatorId: number,
     minConfidence: number = env.FACE_SIMILARITY_THRESHOLD,
-  ): Promise<Array<{ videoId: number; detectionCount: number; avgConfidence: number }>> {
+  ): Promise<
+    Array<{ videoId: number; detectionCount: number; avgConfidence: number }>
+  > {
     const query = sql`
       SELECT
         video_id,

@@ -1,15 +1,15 @@
-import { eq, inArray, and, sql, desc, asc } from 'drizzle-orm';
-import { db } from '@/config/drizzle';
+import { eq, inArray, and, sql, desc, asc } from "drizzle-orm";
+import { db } from "@/config/drizzle";
 import {
   videosTable,
   videoCreatorsTable,
   videoTagsTable,
   videoStudiosTable,
   favoritesTable,
-} from '@/database/schema';
-import { logger } from '@/utils/logger';
-import type { ListVideosOptions } from './videos.types';
-import { buildVideoFilters } from './videos.query-builder';
+} from "@/database/schema";
+import { logger } from "@/utils/logger";
+import type { ListVideosOptions } from "./videos.types";
+import { buildVideoFilters } from "./videos.query-builder";
 
 /**
  * Service for bulk video operations
@@ -24,7 +24,7 @@ export class VideosBulkService {
     if (ids.length === 0) return;
 
     // Import here to avoid circular dependency
-    const { videosService } = await import('./videos.service');
+    const { videosService } = await import("./videos.service");
 
     // Delete each video individually to ensure file cleanup
     for (const id of ids) {
@@ -33,7 +33,7 @@ export class VideosBulkService {
       } catch (error) {
         logger.warn(
           { error, videoId: id },
-          'Failed to delete video in bulk operation',
+          "Failed to delete video in bulk operation",
         );
         // Continue with remaining videos even if one fails
       }
@@ -46,13 +46,13 @@ export class VideosBulkService {
   async bulkUpdateCreators(input: {
     videoIds: number[];
     creatorIds: number[];
-    action: 'add' | 'remove';
+    action: "add" | "remove";
   }): Promise<void> {
     const { videoIds, creatorIds, action } = input;
     if (videoIds.length === 0 || creatorIds.length === 0) return;
 
     await db.transaction(async (tx) => {
-      if (action === 'add') {
+      if (action === "add") {
         // Generate all combinations of videoId x creatorId
         const values = videoIds.flatMap((videoId) =>
           creatorIds.map((creatorId) => ({
@@ -86,13 +86,13 @@ export class VideosBulkService {
   async bulkUpdateTags(input: {
     videoIds: number[];
     tagIds: number[];
-    action: 'add' | 'remove';
+    action: "add" | "remove";
   }): Promise<void> {
     const { videoIds, tagIds, action } = input;
     if (videoIds.length === 0 || tagIds.length === 0) return;
 
     await db.transaction(async (tx) => {
-      if (action === 'add') {
+      if (action === "add") {
         // Generate all combinations of videoId x tagId
         const values = videoIds.flatMap((videoId) =>
           tagIds.map((tagId) => ({
@@ -102,10 +102,7 @@ export class VideosBulkService {
         );
 
         // Bulk insert with conflict handling
-        await tx
-          .insert(videoTagsTable)
-          .values(values)
-          .onConflictDoNothing();
+        await tx.insert(videoTagsTable).values(values).onConflictDoNothing();
       } else {
         // Remove all specified tag-video relationships
         await tx
@@ -126,13 +123,13 @@ export class VideosBulkService {
   async bulkUpdateStudios(input: {
     videoIds: number[];
     studioIds: number[];
-    action: 'add' | 'remove';
+    action: "add" | "remove";
   }): Promise<void> {
     const { videoIds, studioIds, action } = input;
     if (videoIds.length === 0 || studioIds.length === 0) return;
 
     await db.transaction(async (tx) => {
-      if (action === 'add') {
+      if (action === "add") {
         // Generate all combinations of videoId x studioId
         const values = videoIds.flatMap((videoId) =>
           studioIds.map((studioId) => ({
@@ -142,10 +139,7 @@ export class VideosBulkService {
         );
 
         // Bulk insert with conflict handling
-        await tx
-          .insert(videoStudiosTable)
-          .values(values)
-          .onConflictDoNothing();
+        await tx.insert(videoStudiosTable).values(values).onConflictDoNothing();
       } else {
         // Remove all specified studio-video relationships
         await tx
@@ -178,10 +172,7 @@ export class VideosBulkService {
           videoId,
         }));
 
-        await tx
-          .insert(favoritesTable)
-          .values(values)
-          .onConflictDoNothing();
+        await tx.insert(favoritesTable).values(values).onConflictDoNothing();
       } else {
         // Remove favorites
         await tx
@@ -203,7 +194,7 @@ export class VideosBulkService {
     {
       file_hash: string;
       count: number;
-      total_size_bytes: number;
+      total_size_bytes: string;
       videos: Array<{
         id: number;
         file_name: string;
@@ -218,10 +209,12 @@ export class VideosBulkService {
       .select({
         fileHash: videosTable.fileHash,
         count: sql<number>`COUNT(*)::int`,
-        totalSizeBytes: sql<number>`SUM(${videosTable.fileSizeBytes})::int`,
+        totalSizeBytes: sql<bigint>`SUM(${videosTable.fileSizeBytes})::bigint`,
       })
       .from(videosTable)
-      .where(sql`${videosTable.fileHash} IS NOT NULL AND ${videosTable.fileHash} != ''`)
+      .where(
+        sql`${videosTable.fileHash} IS NOT NULL AND ${videosTable.fileHash} != ''`,
+      )
       .groupBy(videosTable.fileHash)
       .having(sql`COUNT(*) > 1`)
       .orderBy(desc(sql`SUM(${videosTable.fileSizeBytes})`));
@@ -244,7 +237,7 @@ export class VideosBulkService {
         return {
           file_hash: dup.fileHash!,
           count: dup.count,
-          total_size_bytes: dup.totalSizeBytes,
+          total_size_bytes: dup.totalSizeBytes?.toString() ?? "0",
           videos: videos.map((v) => ({
             id: v.id,
             file_name: v.fileName,
@@ -424,7 +417,7 @@ export class VideosBulkService {
         }
       } catch (error) {
         errors++;
-        logger.error({ error }, 'Failed to apply bulk conditional actions');
+        logger.error({ error }, "Failed to apply bulk conditional actions");
         throw error;
       }
     });

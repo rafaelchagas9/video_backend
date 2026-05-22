@@ -1,15 +1,33 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // Request schemas
 export const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
-export const generateStoryboardBodySchema = z.object({
-  tileWidth: z.number().min(64).max(512).optional(),
-  tileHeight: z.number().min(36).max(288).optional(),
-  intervalSeconds: z.number().min(1).max(60).optional(),
-}).optional();
+export const generateStoryboardBodySchema = z
+  .object({
+    tileWidth: z.number().min(64).max(512).optional(),
+    tileHeight: z.number().min(36).max(288).optional(),
+    intervalSeconds: z.number().min(1).max(60).optional(),
+  })
+  .optional();
+
+const parseBooleanQuery = (val: unknown) => {
+  if (typeof val === "boolean") {
+    return val;
+  }
+
+  if (typeof val === "string") {
+    return val.toLowerCase() === "true";
+  }
+
+  return undefined;
+};
+
+export const thumbnailsVttQuerySchema = z.object({
+  autogenerate: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
+});
 
 // Response schemas
 export const storyboardSchema = z.object({

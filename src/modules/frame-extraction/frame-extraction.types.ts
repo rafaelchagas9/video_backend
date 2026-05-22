@@ -22,9 +22,10 @@ export interface FrameExtractionOptions {
   videoPath: string; // Path to video file
   videoDuration: number; // Duration in seconds
   intervalSeconds: number; // Interval between frames
+  keyframesOnly?: boolean; // Decode keyframes only (faster, less precise)
   targetWidth?: number; // Target frame width (maintains aspect ratio if only width specified)
   targetHeight?: number; // Target frame height
-  outputFormat?: 'jpg' | 'webp' | 'png'; // Output format (default: jpg)
+  outputFormat?: "jpg" | "webp" | "png"; // Output format (default: jpg)
   quality?: number; // Quality 1-100 (default: 90)
   tempDir?: string; // Temp directory for frames (default: /dev/shm)
   prefix?: string; // Filename prefix (default: 'frame')

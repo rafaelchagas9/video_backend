@@ -5,6 +5,11 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start:prod": "NODE_ENV=production NODE_OPTIONS='--enable-source-maps' bun dist/index.js",
+    "prestart:prod": "bun run validate:env && bun run check:deps && bun run db:migrate",
+    "validate:env": "bun scripts/validate-env.ts",
+    "check:deps": "bun scripts/check-dependencies.ts",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

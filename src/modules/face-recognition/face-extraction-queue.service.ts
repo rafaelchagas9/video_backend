@@ -8,15 +8,17 @@ import { eq } from "drizzle-orm";
 import {
   faceExtractionJobsTable,
   videoFaceDetectionsTable,
-  type NewVideoFaceDetection,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
 import { getFrameExtractionService } from "@/modules/frame-extraction";
 import { env } from "@/config/env";
+import { eventsService } from "@/modules/events/events.service";
 import { getFaceRecognitionClient } from "./face-recognition.client";
+import { recordPerfStage } from "@/utils/performance-profiler";
 import type {
   ExtractedFrame,
   FaceProcessingOptions,
+  RawFaceDetection,
 } from "./face-recognition.types";
 
 export class FaceExtractionQueueService {
@@ -56,39 +58,6 @@ export class FaceExtractionQueueService {
 
     if (
       existingJob &&
-      existingJob.status === "completed" &&
-      existingJob.facesDetected > 0
-    ) {
-      // Check if all detected faces have been rejected
-      const detections = await db
-        .select()
-        .from(videoFaceDetectionsTable)
-        .where(eq(videoFaceDetectionsTable.videoId, videoId));
-
-      const allRejected =
-        detections.length > 0 &&
-        detections.every((d) => d.matchStatus === "rejected");
-
-      if (allRejected) {
-        // Clear all rejected detections to allow re-scan
-        await db
-          .delete(videoFaceDetectionsTable)
-          .where(eq(videoFaceDetectionsTable.videoId, videoId));
-        logger.info(
-          { videoId, clearedCount: detections.length },
-          "Cleared rejected face detections for re-scan",
-        );
-      } else {
-        logger.debug(
-          { videoId, facesDetected: existingJob.facesDetected },
-          "Face extraction already completed with results, skipping",
-        );
-        return;
-      }
-    }
-
-    if (
-      existingJob &&
       (existingJob.status === "processing" || existingJob.status === "pending")
     ) {
       logger.debug(
@@ -96,6 +65,13 @@ export class FaceExtractionQueueService {
         "Face extraction already queued or processing, skipping",
       );
       return;
+    }
+
+    // Clear previous detections before re-running
+    if (existingJob) {
+      await db
+        .delete(videoFaceDetectionsTable)
+        .where(eq(videoFaceDetectionsTable.videoId, videoId));
     }
 
     // Create or reset job
@@ -249,6 +225,7 @@ export class FaceExtractionQueueService {
     frames: ExtractedFrame[],
     tempDir?: string,
   ): Promise<void> {
+    const totalStart = Date.now();
     // Update job status to processing
     await db
       .update(faceExtractionJobsTable)
@@ -263,7 +240,11 @@ export class FaceExtractionQueueService {
     await this.broadcastEvent({
       type: "face:extraction_started",
       videoId,
-      message: { videoId },
+      message: {
+        videoId,
+        video_id: videoId,
+        message: "Face extraction started",
+      },
     });
 
     try {
@@ -279,9 +260,17 @@ export class FaceExtractionQueueService {
         throw new Error("Job not found");
       }
 
-      // Process the frames for face detection
+      const rawDetections: RawFaceDetection[] = [];
       if (frames.length > 0) {
-        await this.processFrames(jobId, videoId, frames);
+        const detectStart = Date.now();
+        const detected = await this.processFrames(jobId, frames);
+        rawDetections.push(...detected);
+        await recordPerfStage(
+          { scenario: "face", videoId, jobId, mode: "queue_job" },
+          "detect_faces",
+          Date.now() - detectStart,
+          { frameCount: frames.length, detections: rawDetections.length },
+        );
       } else {
         logger.warn(
           { videoId, jobId },
@@ -292,10 +281,18 @@ export class FaceExtractionQueueService {
       const { getFaceRecognitionService } =
         await import("./face-recognition.service");
       const faceRecognitionService = getFaceRecognitionService();
+      const matchStart = Date.now();
       await faceRecognitionService.autoMatchVideoFaces(
         videoId,
+        rawDetections,
         this.options.similarityThreshold,
         this.options.autoTagThreshold,
+      );
+      await recordPerfStage(
+        { scenario: "face", videoId, jobId, mode: "queue_job" },
+        "auto_match",
+        Date.now() - matchStart,
+        { detections: rawDetections.length },
       );
 
       // Mark as completed
@@ -312,12 +309,23 @@ export class FaceExtractionQueueService {
       await this.broadcastEvent({
         type: "face:extraction_complete",
         videoId,
-        message: { videoId },
+        message: {
+          videoId,
+          video_id: videoId,
+          message: "Face extraction complete",
+        },
       });
 
       logger.info(
         { videoId, jobId, facesDetected: job.facesDetected },
         "Face extraction completed",
+      );
+
+      await recordPerfStage(
+        { scenario: "face", videoId, jobId, mode: "queue_job" },
+        "total",
+        Date.now() - totalStart,
+        { frameCount: frames.length, detections: rawDetections.length },
       );
 
       // Cleanup temp directory
@@ -354,7 +362,11 @@ export class FaceExtractionQueueService {
       await this.broadcastEvent({
         type: "face:extraction_error",
         videoId,
-        message: { videoId, message: errorMessage }, // payload -> message
+        message: {
+          videoId,
+          video_id: videoId,
+          message: errorMessage,
+        },
       });
 
       throw error;
@@ -363,83 +375,79 @@ export class FaceExtractionQueueService {
 
   /**
    * Process frames for a specific job (called by orchestrator)
+   * Returns raw face detections - matching/insertion is handled by autoMatchVideoFaces
    */
   async processFrames(
     jobId: number,
-    videoId: number,
     frames: ExtractedFrame[],
-  ): Promise<void> {
+  ): Promise<RawFaceDetection[]> {
     const faceClient = getFaceRecognitionClient();
-    let totalFacesDetected = 0;
+    const rawDetections: RawFaceDetection[] = [];
 
-    for (let i = 0; i < frames.length; i++) {
-      const frame = frames[i];
+    const batchSize = Math.max(1, env.FACE_DETECTION_BATCH_SIZE);
 
-      try {
-        // Detect faces in frame
-        const result = await faceClient.detectFacesFromFile(frame.filePath);
+    for (let start = 0; start < frames.length; start += batchSize) {
+      const batch = frames.slice(start, start + batchSize);
 
-        // Store each detected face
-        for (const face of result.faces) {
-          const embedding = JSON.stringify(face.embedding);
+      const batchResults = await Promise.all(
+        batch.map(async (frame) => {
+          try {
+            const result = await faceClient.detectFacesFromFile(frame.filePath);
+            return { frame, faces: result.faces };
+          } catch (error) {
+            logger.error(
+              { frame: frame.filePath, error },
+              "Failed to process frame",
+            );
+            return { frame, faces: [] };
+          }
+        }),
+      );
 
-          const detection: NewVideoFaceDetection = {
-            videoId,
-            embedding,
-            timestampSeconds: frame.timestampSeconds,
-            frameIndex: frame.frameIndex,
-            bboxX1: face.bbox[0],
-            bboxY1: face.bbox[1],
-            bboxX2: face.bbox[2],
-            bboxY2: face.bbox[3],
+      for (const item of batchResults) {
+        for (const face of item.faces) {
+          rawDetections.push({
+            embedding: face.embedding,
+            timestampSeconds: item.frame.timestampSeconds,
+            frameIndex: item.frame.frameIndex,
+            bbox: face.bbox,
             detScore: face.det_score,
             estimatedAge: face.age,
             estimatedGender: face.gender,
-          };
-
-          await db.insert(videoFaceDetectionsTable).values(detection);
-          totalFacesDetected++;
+          });
         }
-
-        // Update progress
-        await db
-          .update(faceExtractionJobsTable)
-          .set({
-            processedFrames: i + 1,
-            facesDetected: totalFacesDetected,
-            updatedAt: new Date(),
-          })
-          .where(eq(faceExtractionJobsTable.id, jobId));
-      } catch (error) {
-        logger.error(
-          { frame: frame.filePath, error },
-          "Failed to process frame",
-        );
-        // Continue processing other frames
       }
+
+      await db
+        .update(faceExtractionJobsTable)
+        .set({
+          processedFrames: Math.min(start + batch.length, frames.length),
+          facesDetected: rawDetections.length,
+          updatedAt: new Date(),
+        })
+        .where(eq(faceExtractionJobsTable.id, jobId));
     }
+
+    return rawDetections;
   }
 
   /**
-   * Broadcast event via WebSocket
+   * Broadcast event via SSE
    */
   private async broadcastEvent(params: {
     type: string;
     videoId: number;
-    message: any;
+    message: Record<string, unknown>;
   }): Promise<void> {
     try {
-      const { websocketService } =
-        await import("@/modules/websocket/websocket");
-      
-      websocketService.broadcastToAuthenticated({
+      eventsService.broadcastToAuthenticated({
         type: params.type,
         message: params.message,
       });
-      
+
       logger.debug(
-        { type: params.type, videoId: params.videoId }, 
-        "Broadcasted face extraction event"
+        { type: params.type, videoId: params.videoId },
+        "Broadcasted face extraction event",
       );
     } catch (error) {
       logger.warn({ error }, "Failed to broadcast face extraction event");

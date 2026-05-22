@@ -111,6 +111,35 @@ export const videoMetadataTable = pgTable(
   }),
 );
 
+// Cached related-video scores (source -> candidate)
+export const videoRelatedScoresTable = pgTable(
+  "video_related_scores",
+  {
+    sourceVideoId: integer("source_video_id")
+      .notNull()
+      .references(() => videosTable.id, { onDelete: "cascade" }),
+    relatedVideoId: integer("related_video_id")
+      .notNull()
+      .references(() => videosTable.id, { onDelete: "cascade" }),
+    score: real("score").notNull(),
+    reasonsJson: text("reasons_json").notNull(),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.sourceVideoId, table.relatedVideoId] }),
+    sourceScoreIdx: index("idx_video_related_scores_source_score").on(
+      table.sourceVideoId,
+      table.score,
+    ),
+    relatedIdx: index("idx_video_related_scores_related").on(
+      table.relatedVideoId,
+    ),
+    computedAtIdx: index("idx_video_related_scores_computed_at").on(
+      table.computedAt,
+    ),
+  }),
+);
+
 // Inferred types
 export type Video = typeof videosTable.$inferSelect;
 export type NewVideo = typeof videosTable.$inferInsert;
@@ -118,3 +147,5 @@ export type VideoStats = typeof videoStatsTable.$inferSelect;
 export type NewVideoStats = typeof videoStatsTable.$inferInsert;
 export type VideoMetadata = typeof videoMetadataTable.$inferSelect;
 export type NewVideoMetadata = typeof videoMetadataTable.$inferInsert;
+export type VideoRelatedScore = typeof videoRelatedScoresTable.$inferSelect;
+export type NewVideoRelatedScore = typeof videoRelatedScoresTable.$inferInsert;

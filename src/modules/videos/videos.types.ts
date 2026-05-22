@@ -25,7 +25,6 @@ export interface Video {
   is_favorite: boolean;
   thumbnail_id?: number | null;
   thumbnail_url?: string | null;
-  thumbnail_base64?: string | null;
 }
 
 export interface VideoMetadata {
@@ -52,6 +51,7 @@ export interface ListVideosOptions {
   limit?: number;
   directory_id?: number;
   search?: string;
+  searchFullPath?: boolean;
   sort?: string;
   order?: "asc" | "desc";
   include_hidden?: boolean;
@@ -162,13 +162,43 @@ export interface CompressionSuggestion {
   bitrate: number | null;
   fps: number | null;
   duration_seconds: number | null;
-  total_play_count: number;
-  total_watch_seconds: number;
-  last_played_at: string | null;
-  technical_score: number;
-  usage_score: number;
-  recommended_actions: string[];
+  is_favorite: boolean;
+  bytes_per_second: number | null;
+  estimated_output_bytes: number;
+  estimated_savings_bytes: number;
+  estimated_savings_percent: number;
+  confidence: "high" | "medium" | "low";
+  priority_score: number;
+  recommended_preset: string;
+  recommended_preset_name: string;
   reasons: string[];
   thumbnail_id?: number | null;
   thumbnail_url?: string | null;
+}
+
+export interface CompressionSuggestionsSummary {
+  total_candidates: number;
+  total_estimated_savings_bytes: number;
+  avg_estimated_savings_percent: number;
+  historical_accuracy_note: string;
+}
+
+export interface RelatedVideo {
+  video: Video;
+  score: number;
+  reasons: string[];
+}
+
+export interface RelatedVideosOptions {
+  limit?: number;
+  refresh?: boolean;
+}
+
+export interface RelatedVideosResult {
+  data: RelatedVideo[];
+  meta: {
+    computed_at: string | null;
+    refreshed: boolean;
+    candidate_count: number;
+  };
 }

@@ -8,11 +8,14 @@ import {
   thumbnailsTable,
   favoritesTable,
 } from "@/database/schema";
-import { NotFoundError } from "@/utils/errors";
+import { BadRequestError, NotFoundError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import { logger } from "@/utils/logger";
-import { readFileSync, existsSync, unlinkSync } from "fs";
+import { existsSync, unlinkSync, statSync } from "fs";
+import { basename } from "path";
 import type { Video, UpdateVideoInput } from "./videos.types";
+import { computeFileHash } from "@/utils/file-utils";
+import { metadataService } from "./metadata.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
 import { conversionService } from "@/modules/conversion/conversion.service";
 
@@ -26,18 +29,6 @@ export { videosBulkService } from "./videos.bulk.service";
  * Main video service - Core CRUD operations
  */
 export class VideosService {
-  private readThumbnailAsBase64(filePath: string | null): string | null {
-    if (!filePath || !existsSync(filePath)) {
-      return null;
-    }
-    try {
-      const buffer = readFileSync(filePath);
-      return `data:image/jpeg;base64,${buffer.toString("base64")}`;
-    } catch {
-      return null;
-    }
-  }
-
   /**
    * Find video by ID
    */
@@ -120,7 +111,6 @@ export class VideosService {
       thumbnail_url: video.thumbnailId
         ? `${API_PREFIX}/thumbnails/${video.thumbnailId}/image`
         : null,
-      thumbnail_base64: this.readThumbnailAsBase64(video.thumbnailFilePath),
     } as Video;
   }
 
@@ -240,6 +230,57 @@ export class VideosService {
   }
 
   /**
+   * Re-read video metadata from disk and regenerate its thumbnail.
+   * Useful when a file was indexed before a download completed.
+   */
+  async refreshDerivedData(id: number, userId?: number): Promise<Video> {
+    const video = await this.findById(id, userId);
+
+    if (!existsSync(video.file_path)) {
+      await db
+        .update(videosTable)
+        .set({
+          isAvailable: false,
+          lastVerifiedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(videosTable.id, id));
+
+      throw new BadRequestError("Video file not found on disk");
+    }
+
+    const fileStats = statSync(video.file_path);
+    const [fileHash, metadata] = await Promise.all([
+      computeFileHash(video.file_path),
+      metadataService.extractMetadata(video.file_path),
+    ]);
+
+    await db
+      .update(videosTable)
+      .set({
+        fileSizeBytes: fileStats.size,
+        fileHash,
+        durationSeconds: metadata.duration_seconds,
+        width: metadata.width,
+        height: metadata.height,
+        codec: metadata.codec,
+        bitrate: metadata.bitrate,
+        fps: metadata.fps,
+        audioCodec: metadata.audio_codec,
+        isAvailable: true,
+        lastVerifiedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(videosTable.id, id));
+
+    await thumbnailsService.generate(id);
+
+    logger.info({ videoId: id }, "Video metadata and thumbnail refreshed");
+
+    return this.findById(id, userId);
+  }
+
+  /**
    * Get studios associated with a video
    */
   async getStudios(videoId: number) {
@@ -270,6 +311,47 @@ export class VideosService {
       created_at: s.createdAt.toISOString(),
       updated_at: s.updatedAt.toISOString(),
     }));
+  }
+
+  /**
+   * Replace a video's file in-place, preserving the record and all relations.
+   * Updates file path, size, hash, and all technical metadata from the new file.
+   */
+  async replaceFile(videoId: number, newFilePath: string): Promise<Video> {
+    await this.findById(videoId);
+
+    const fileStats = statSync(newFilePath);
+    const [fileHash, metadata] = await Promise.all([
+      computeFileHash(newFilePath),
+      metadataService.extractMetadata(newFilePath),
+    ]);
+
+    const fileName = basename(newFilePath);
+
+    await db
+      .update(videosTable)
+      .set({
+        filePath: newFilePath,
+        fileName,
+        fileSizeBytes: fileStats.size,
+        fileHash,
+        codec: metadata.codec,
+        bitrate: metadata.bitrate,
+        width: metadata.width,
+        height: metadata.height,
+        fps: metadata.fps,
+        audioCodec: metadata.audio_codec,
+        durationSeconds: metadata.duration_seconds,
+        updatedAt: new Date(),
+      })
+      .where(eq(videosTable.id, videoId));
+
+    logger.info(
+      { videoId, newFilePath, newSize: fileStats.size },
+      "Video file replaced in-place",
+    );
+
+    return this.findById(videoId);
   }
 }
 

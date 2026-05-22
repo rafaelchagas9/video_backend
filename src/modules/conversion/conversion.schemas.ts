@@ -153,3 +153,56 @@ export const clearQueueResponseSchema = z.object({
     message: z.string(),
   }),
 });
+
+export const conversionHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+  videoId: z.coerce.number().int().positive().optional(),
+  preset: z.string().optional(),
+});
+
+export const conversionHistoryItemSchema = z.object({
+  id: z.number(),
+  conversion_job_id: z.number().nullable(),
+  video_id: z.number().nullable(),
+  source_video_deleted: z.boolean(),
+  source_file_path: z.string(),
+  source_file_name: z.string(),
+  output_file_path: z.string(),
+  preset: z.string(),
+  codec: z.string(),
+  target_resolution: z.string().nullable(),
+  ffmpeg_command: z.string(),
+  original_size_bytes: z.number(),
+  output_size_bytes: z.number(),
+  size_delta_bytes: z.number(),
+  size_change_percent: z.number(),
+  conversion_duration_ms: z.number().nullable(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  created_at: z.string(),
+});
+
+export const conversionHistoryResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(conversionHistoryItemSchema),
+});
+
+export const conversionHistoryOverviewSchema = z.object({
+  total_conversions: z.number(),
+  total_original_size_bytes: z.number(),
+  total_output_size_bytes: z.number(),
+  total_size_delta_bytes: z.number(),
+  total_saved_bytes: z.number(),
+  total_increased_bytes: z.number(),
+  saved_count: z.number(),
+  increased_count: z.number(),
+  unchanged_count: z.number(),
+  avg_size_change_percent: z.number(),
+  avg_conversion_duration_ms: z.number(),
+});
+
+export const conversionHistoryOverviewResponseSchema = z.object({
+  success: z.literal(true),
+  data: conversionHistoryOverviewSchema,
+});

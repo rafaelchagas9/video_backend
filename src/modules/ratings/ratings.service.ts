@@ -88,7 +88,13 @@ export class RatingsService {
       .from(ratingsTable)
       .where(eq(ratingsTable.videoId, videoId));
 
-    return result[0]?.avgRating ?? null;
+    const avgRating = result[0]?.avgRating;
+
+    if (avgRating === null || avgRating === undefined) {
+      return null;
+    }
+
+    return Number(avgRating);
   }
 
   private mapToSnakeCase(rating: any): Rating {

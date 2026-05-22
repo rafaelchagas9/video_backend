@@ -5,7 +5,7 @@
 import { dirname } from "path";
 import { conversionJobsService } from "./conversion.jobs.service";
 import { logger } from "@/utils/logger";
-import { websocketService } from "@/modules/websocket/websocket";
+import { eventsService } from "@/modules/events/events.service";
 import type { ConversionEvent } from "./conversion.types";
 
 export class ConversionBatchService {
@@ -88,13 +88,13 @@ export class ConversionBatchService {
   }
 
   /**
-   * Emit WebSocket event
+   * Emit SSE event
    */
   private emitEvent(event: ConversionEvent): void {
     try {
-      websocketService.broadcast(event);
+      eventsService.broadcast(event);
     } catch (error) {
-      logger.error({ error }, "Failed to emit WebSocket event");
+      logger.error({ error }, "Failed to emit SSE event");
     }
   }
 }

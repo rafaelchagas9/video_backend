@@ -17,6 +17,9 @@ import {
   bulkConversionSchema,
   listActiveConversionsResponseSchema,
   clearQueueResponseSchema,
+  conversionHistoryQuerySchema,
+  conversionHistoryResponseSchema,
+  conversionHistoryOverviewResponseSchema,
 } from "./conversion.schemas";
 
 export async function conversionRoutes(fastify: FastifyInstance) {
@@ -168,6 +171,79 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: number };
       const jobs = await conversionService.listByVideoId(id);
       return reply.send({ success: true, data: jobs });
+    },
+  );
+
+  /**
+   * List completed conversion history
+   * GET /conversions/history
+   */
+  app.get(
+    "/conversions/history",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "List conversion history",
+        description:
+          "Returns completed conversion history including source/output sizes and FFmpeg command used.",
+        querystring: conversionHistoryQuerySchema,
+        response: {
+          200: conversionHistoryResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { limit, offset, videoId, preset } = request.query as {
+        limit?: number;
+        offset?: number;
+        videoId?: number;
+        preset?: string;
+      };
+
+      const history = await conversionService.getHistory({
+        limit,
+        offset,
+        videoId,
+        preset,
+      });
+
+      return reply.send({ success: true, data: history });
+    },
+  );
+
+  /**
+   * Get conversion history overview
+   * GET /conversions/history/overview
+   */
+  app.get(
+    "/conversions/history/overview",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Get conversion history overview",
+        description:
+          "Returns aggregate disk impact metrics (saved/increased bytes) across completed conversions.",
+        querystring: conversionHistoryQuerySchema.pick({
+          videoId: true,
+          preset: true,
+        }),
+        response: {
+          200: conversionHistoryOverviewResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { videoId, preset } = request.query as {
+        videoId?: number;
+        preset?: string;
+      };
+
+      const overview = await conversionService.getHistoryOverview({
+        videoId,
+        preset,
+      });
+
+      return reply.send({ success: true, data: overview });
     },
   );
 

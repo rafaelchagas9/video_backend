@@ -33,7 +33,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "h264_vaapi",
     qp: 26,
     maxBitrate: "20M",
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
   "1080p_h265": {
@@ -44,7 +44,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "hevc_vaapi",
     qp: 28,
     maxBitrate: "15M",
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
   "1080p_av1": {
@@ -53,9 +53,9 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     description: "Full HD with AV1 - Best compression",
     targetWidth: 1920,
     codec: "av1_vaapi",
-    qp: 38,
-    maxBitrate: "6M",
-    audioBitrate: "128k",
+    qp: 42,
+    maxBitrate: "5M",
+    audioBitrate: "96k",
     container: "mkv",
   },
 
@@ -68,7 +68,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "h264_vaapi",
     qp: 26,
     maxBitrate: "10M",
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
   "720p_h265": {
@@ -79,7 +79,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "hevc_vaapi",
     qp: 28,
     maxBitrate: "8M",
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
   "720p_av1": {
@@ -90,7 +90,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "av1_vaapi",
     qp: 35,
     maxBitrate: "4M",
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
 
@@ -103,7 +103,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "h264_vaapi",
     qp: 26,
     maxBitrate: null,
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
   original_h265: {
@@ -114,7 +114,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "hevc_vaapi",
     qp: 28,
     maxBitrate: null,
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
   original_av1: {
@@ -125,7 +125,7 @@ export const CONVERSION_PRESETS: Record<string, ConversionPreset> = {
     codec: "av1_vaapi",
     qp: 35,
     maxBitrate: null,
-    audioBitrate: "128k",
+    audioBitrate: "96k",
     container: "mkv",
   },
 } as const;

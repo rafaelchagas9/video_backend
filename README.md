@@ -1,17 +1,11 @@
 # Video Streaming Backend
 
-A TypeScript/Bun backend application for managing and streaming local video files. Built with Fastify and SQLite, this single-user system provides video indexing, metadata management, and HTTP streaming with support for hierarchical organization, ratings, playlists, and bookmarks.
+A TypeScript/Bun backend application for managing and streaming local video files. Built with Fastify and PostgreSQL, this single-user system provides video indexing, metadata management, and HTTP streaming with support for hierarchical organization, creators, tags, ratings, playlists, bookmarks, and face recognition.
 
 ## Features
 
-### Implemented ✅
+### Video Management
 
-**Authentication & Security**
-- Session-based authentication with bcrypt password hashing
-- Single-user system with registration lock after first user
-- HTTP-only secure cookies with configurable expiration
-
-**Video Management**
 - Automatic video indexing from registered directories
 - Recursive directory scanning with file detection
 - Metadata extraction (duration, resolution, codecs, bitrate, fps) via FFprobe
@@ -19,93 +13,101 @@ A TypeScript/Bun backend application for managing and streaming local video file
 - Soft-delete for missing files (availability tracking)
 - UTF-8 filename support (tested with special characters)
 
-**API Endpoints**
-- Full CRUD operations for videos and directories
-- Video listing with pagination, filtering, and sorting
-- Search functionality across video metadata
-- Directory statistics and manual scan triggers
-- HTTP range request video streaming
+### Media Organization
 
-**Testing**
-- Comprehensive integration test suite
-- Test utilities for server setup and database isolation
-- Real video file testing (281MB test file with special characters)
-
-### Planned 🚧
-
-**Media Organization** (Phase 4)
 - Creator management with many-to-many video associations
 - Hierarchical tags with recursive queries (parent/child relationships)
 - Custom metadata key-value storage per video
 - Tag tree navigation and filtering
+- Studios and platforms support
 
-**Ratings & Thumbnails** (Phase 5)
-- 1-5 star rating system with optional comments
-- Automatic thumbnail generation at configurable timestamps
-- Multiple thumbnail positions per video
-- Average rating calculation
+### User Experience
 
-**User Experience** (Phase 6)
 - Playlist creation with custom ordering
 - Favorites/watchlist functionality
-- Video bookmarks with timestamps (mark favorite moments, climaxes)
-- Bookmark descriptions and categorization
+- Video bookmarks with timestamps
+- 1-5 star rating system with optional comments
+- Automatic thumbnail generation at configurable timestamps
 
-**Advanced Features** (Phase 7)
+### Advanced Features
+
+- HTTP range request video streaming
 - Scheduled directory scanning with node-cron
-- Performance optimization (caching, query optimization)
-- API documentation via Swagger UI
-- Enhanced security hardening
+- Storyboard generation for video scrubbing
+- Face recognition with auto-tagging
+- Background conversion queue (VAAPI GPU acceleration)
+- Redis-based job queue for async processing
 - Database backup/export utilities
+
+### Authentication & Security
+
+- Session-based authentication with bcrypt password hashing
+- Single-user system with registration lock after first user
+- HTTP-only secure cookies with configurable expiration
+- Rate limiting and security headers
 
 ## Technology Stack
 
-- **Runtime**: [Bun](https://bun.sh) - Fast JavaScript runtime with built-in SQLite
+- **Runtime**: [Bun](https://bun.sh) - Fast JavaScript runtime
 - **Framework**: [Fastify](https://fastify.dev) - High-performance web framework
-- **Database**: SQLite3 (via Bun's native driver)
+- **Database**: PostgreSQL with [Drizzle ORM](https://orm.drizzle.team)
 - **Authentication**: bcrypt + session-based cookies
 - **Validation**: [Zod](https://zod.dev) - TypeScript-first schema validation
 - **Logging**: [Pino](https://getpino.io) - Fast JSON logger
-- **Video Processing**: [fluent-ffmpeg](https://github.com/fluent-ffmpeg/node-fluent-ffmpeg) - FFmpeg wrapper for metadata extraction
+- **Video Processing**: FFmpeg/FFprobe
+- **Queue**: Redis with BullMQ pattern
 - **Testing**: Bun's built-in test runner
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) v1.0 or higher
-- [FFmpeg](https://ffmpeg.org) and FFprobe installed on your system
-- Linux, macOS, or WSL2 (Bun requirement)
+- [Bun](https://bun.sh) v1.3 or higher
+- PostgreSQL 14+
+- [FFmpeg](https://ffmpeg.org) and FFprobe
+- Redis (optional, for job queues)
+- Linux, macOS, or WSL2
 
 ## Installation
 
 1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd conversor-video
-```
+
+   ```bash
+   git clone <repository-url>
+   cd conversor-video
+   ```
 
 2. **Install dependencies**
-```bash
-bun install
-```
+
+   ```bash
+   bun install
+   ```
 
 3. **Configure environment**
-```bash
-cp .env.example .env
-# Edit .env and set SESSION_SECRET to a random 32+ character string
-```
 
-4. **Verify FFmpeg installation**
-```bash
-which ffmpeg
-which ffprobe
-# Update FFMPEG_PATH and FFPROBE_PATH in .env if needed
-```
+   ```bash
+   cp .env.example .env
+   # Edit .env with your PostgreSQL credentials and SESSION_SECRET
+   ```
+
+4. **Setup database**
+
+   ```bash
+   bun db:generate
+   bun db:migrate
+   ```
+
+5. **Verify FFmpeg installation**
+   ```bash
+   which ffmpeg
+   which ffprobe
+   # Update FFMPEG_PATH and FFPROBE_PATH in .env if needed
+   ```
 
 ## Usage
 
 ### Development
 
 Start the development server with auto-reload:
+
 ```bash
 bun dev
 ```
@@ -114,47 +116,52 @@ The server will start at `http://localhost:3000` (configurable via `PORT` in `.e
 
 ### Production
 
+Build and start the production server:
+
 ```bash
-bun start
+bun run build
+bun run start:prod
 ```
+
+The production startup includes:
+
+- Environment variable validation
+- Dependency checks (PostgreSQL, FFmpeg, required directories)
+- Automatic migration of any pending database changes
+- Running compiled JavaScript instead of TypeScript on-the-fly
 
 ### First-Time Setup
 
 1. **Register the first user** (only works once):
-```bash
-curl -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "your-secure-password"}'
-```
+
+   ```bash
+   curl -X POST http://localhost:3000/api/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "your-secure-password"}'
+   ```
 
 2. **Login to get session cookie**:
-```bash
-curl -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "your-secure-password"}' \
-  -c cookies.txt
-```
+
+   ```bash
+   curl -X POST http://localhost:3000/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "your-secure-password"}' \
+     -c cookies.txt
+   ```
 
 3. **Register a directory to watch**:
-```bash
-curl -X POST http://localhost:3000/api/directories \
-  -H "Content-Type: application/json" \
-  -b cookies.txt \
-  -d '{
-    "path": "/path/to/your/videos",
-    "auto_scan": true,
-    "scan_interval_minutes": 30
-  }'
-```
+   ```bash
+   curl -X POST http://localhost:3000/api/directories \
+     -H "Content-Type: application/json" \
+     -b cookies.txt \
+     -d '{"path": "/path/to/your/videos", "auto_scan": true, "scan_interval_minutes": 30}'
+   ```
 
 The system will automatically scan the directory and index all video files.
 
 ### API Documentation
 
-Access the Swagger UI documentation at:
-```
-http://localhost:3000/docs
-```
+Access Swagger UI documentation at: `http://localhost:3000/docs`
 
 ### Health Check
 
@@ -164,191 +171,117 @@ curl http://localhost:3000/health
 
 ## Testing
 
-Run all tests:
 ```bash
-bun test
-```
-
-Run specific test file:
-```bash
-bun test tests/integration/auth.test.ts
-```
-
-Run tests matching a pattern:
-```bash
-bun test --filter "should register"
+bun test                    # Run all tests
+bun test tests/integration/auth.test.ts  # Run specific file
+bun test --filter "should register"      # Run by pattern
 ```
 
 ## Project Structure
 
 ```
-conversor-video/
-├── src/
-│   ├── index.ts                    # Application entry point
-│   ├── server.ts                   # Fastify server setup and configuration
-│   ├── config/
-│   │   ├── database.ts             # SQLite connection and initialization
-│   │   ├── env.ts                  # Environment variable validation (Zod)
-│   │   └── constants.ts            # Application constants
-│   ├── database/
-│   │   └── schema.sql              # Complete database schema
-│   ├── modules/
-│   │   ├── auth/                   # Authentication and sessions
-│   │   ├── directories/            # Directory registration and scanning
-│   │   └── videos/                 # Video CRUD and metadata
-│   └── utils/
-│       ├── errors.ts               # Custom error classes
-│       ├── validation.ts           # Zod validation helpers
-│       ├── logger.ts               # Pino logger configuration
-│       └── file-utils.ts           # File operations and video detection
-├── tests/
-│   ├── integration/                # Integration tests
-│   ├── helpers/                    # Test utilities
-│   └── videos/                     # Test video files
-├── data/
-│   ├── database.db                 # SQLite database (created on first run)
-│   └── thumbnails/                 # Generated thumbnails (future)
-└── logs/                           # Application logs
+src/
+├── index.ts                    # Application entry point
+├── server.ts                   # Fastify server setup
+├── config/
+│   ├── database.ts             # Drizzle database connection
+│   ├── drizzle.ts              # Drizzle config and schema
+│   └── env.ts                  # Environment variable validation
+├── database/
+│   ├── schema/                 # Drizzle table definitions
+│   └── migrations/             # Generated migrations
+├── modules/
+│   ├── auth/                   # Authentication and sessions
+│   ├── directories/            # Directory registration and scanning
+│   ├── videos/                 # Video CRUD, metadata, streaming
+│   ├── creators/               # Creator management
+│   ├── studios/                # Studio management
+│   ├── platforms/              # Platform management
+│   ├── tags/                   # Tag management
+│   ├── thumbnails/             # Thumbnail generation
+│   ├── storyboards/            # Storyboard/sprite generation
+│   ├── playlists/              # Playlist management
+│   ├── favorites/              # Favorites management
+│   ├── bookmarks/              # Video bookmarks
+│   ├── ratings/                # Rating system
+│   ├── auto-tagging/           # Auto-tagging rules
+│   ├── face-recognition/       # Face detection and recognition
+│   ├── frame-extraction/       # Unified frame extraction
+│   ├── video-stats/            # Video view statistics
+│   ├── stats/                  # Library statistics
+│   ├── settings/               # Application settings
+│   ├── scheduler/              # Cron-based scheduling
+│   ├── backup/                 # Database backup
+│   ├── websocket/              # WebSocket support
+│   └── conversion/             # Video conversion queue
+└── utils/
+    ├── errors.ts               # Custom error classes
+    ├── validation.ts           # Zod validation helpers
+    ├── logger.ts               # Pino logger configuration
+    └── file-utils.ts           # File operations
 ```
-
-## Database Schema
-
-### Core Tables
-- **users** - Single user with bcrypt-hashed password
-- **sessions** - Active sessions with UUID and expiration
-- **watched_directories** - Registered video directories with scan settings
-- **videos** - Video files with metadata and availability status
-
-### Metadata Tables (Planned)
-- **creators** - Video creators/artists
-- **video_creators** - Many-to-many relationship
-- **tags** - Hierarchical tags with parent/child support
-- **video_tags** - Many-to-many relationship
-- **ratings** - User ratings with optional comments
-- **video_metadata** - Custom key-value pairs per video
-
-### User Experience Tables (Planned)
-- **playlists** - Custom playlists with ordering
-- **playlist_videos** - Videos in playlists with positions
-- **favorites** - Favorited videos
-- **bookmarks** - Timestamp bookmarks within videos
-
-### Operational Tables
-- **scan_logs** - Directory scan history and results
 
 ## Environment Variables
 
-Required variables in `.env`:
+Required PostgreSQL variables:
 
 ```bash
-# Server Configuration
-PORT=3000                           # Server port
-HOST=localhost                      # Server host
-NODE_ENV=development                # development | production | test
-
-# Database
-DATABASE_PATH=./data/database.db    # SQLite database file path
-
-# Paths
-THUMBNAILS_DIR=./data/thumbnails    # Thumbnail storage
-LOGS_DIR=./logs                     # Log file directory
-
-# Authentication (REQUIRED - generate a secure random string!)
-SESSION_SECRET=your-32-char-minimum-secret-here
-SESSION_EXPIRY_HOURS=168            # 7 days
-
-# Video Processing
-FFMPEG_PATH=/usr/bin/ffmpeg         # FFmpeg binary path
-FFPROBE_PATH=/usr/bin/ffprobe       # FFprobe binary path
-THUMBNAIL_SIZE=320x240              # Default thumbnail dimensions
-THUMBNAIL_TIMESTAMP=5.0             # Default thumbnail position (seconds)
-
-# File Scanning
-DEFAULT_SCAN_INTERVAL_MINUTES=30    # Auto-scan interval
-MAX_FILE_SIZE_GB=50                 # Maximum video file size to index
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=video_streaming_db
+POSTGRES_USER=your_user
+POSTGRES_PASSWORD=your_password
+POSTGRES_MAX_CONNECTIONS=20
 ```
 
-## API Overview
+Other important keys:
 
-### Authentication
-- `POST /api/auth/register` - Create first user (disabled after)
-- `POST /api/auth/login` - Login and receive session cookie
-- `POST /api/auth/logout` - Invalidate current session
-- `GET /api/auth/me` - Get current user information
+```bash
+SESSION_SECRET=your-32-char-minimum-secret
+FFMPEG_PATH=/usr/bin/ffmpeg
+FFPROBE_PATH=/usr/bin/ffprobe
+```
 
-### Directories
-- `POST /api/directories` - Register directory for scanning
-- `GET /api/directories` - List all registered directories
-- `GET /api/directories/:id` - Get directory details
-- `PATCH /api/directories/:id` - Update scan settings
-- `DELETE /api/directories/:id` - Remove directory
-- `POST /api/directories/:id/scan` - Trigger manual scan
-- `GET /api/directories/:id/stats` - Get directory statistics
-
-### Videos
-- `GET /api/videos` - List videos (pagination, filtering, search)
-- `GET /api/videos/:id` - Get video details
-- `PATCH /api/videos/:id` - Update video metadata
-- `DELETE /api/videos/:id` - Remove video from database
-- `GET /api/videos/:id/stream` - Stream video (HTTP range requests)
-- `POST /api/videos/:id/verify` - Verify file availability
+See `.env.example` for all available options.
 
 ## Supported Video Formats
 
-- MP4 (`.mp4`)
-- MKV (`.mkv`)
-- AVI (`.avi`)
-- MOV (`.mov`)
-- WMV (`.wmv`)
-- FLV (`.flv`)
-- WebM (`.webm`)
+- MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V, MPEG, MPV, OGM, RMVB
 
-Format detection is based on file extensions. Additional formats can be added in `src/utils/file-utils.ts`.
+Format detection is based on file extensions. Add more in `src/utils/file-utils.ts`.
 
-## Security Considerations
+## Commands
 
-- **Single-user design** - Registration automatically disabled after first user
-- **Session-based auth** - HTTP-only secure cookies, no JWT exposure
-- **Password hashing** - bcrypt with 12 rounds
-- **Input validation** - Zod schemas on all endpoints
-- **Path traversal prevention** - Normalized and validated file paths
-- **SQL injection prevention** - Parameterized queries only
-- **CORS configuration** - Configured for same-network access
+| Command                | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `bun dev`              | Start dev server with auto-reload                |
+| `bun start`            | Start production server (from TypeScript source) |
+| `bun run build`        | Compile TypeScript to JavaScript                 |
+| `bun run start:prod`   | Start production server (from compiled build)    |
+| `bun run validate:env` | Validate environment variables                   |
+| `bun run check:deps`   | Check dependencies (PostgreSQL, FFmpeg, dirs)    |
+| `bun db:generate`      | Generate Drizzle migrations                      |
+| `bun db:migrate`       | Apply pending migrations                         |
+| `bun db:push`          | Push schema (dev only)                           |
+| `bun db:studio`        | Open Drizzle Studio GUI                          |
+| `bun test`             | Run all tests                                    |
+| `bunx eslint .`        | Run linter                                       |
+| `bunx tsc --noEmit`    | Type check                                       |
 
-## Performance Notes
+## Security
 
-- **SQLite optimizations**:
-  - WAL mode for better concurrency
-  - 64MB cache size
-  - Foreign keys enabled
-  - Indexes on frequently queried columns
-
-- **Video streaming**: Direct file streaming without buffering entire file
-- **Metadata extraction**: Asynchronous processing during indexing
-- **Soft deletes**: Missing files marked unavailable instead of removed
-
-## Future Enhancements
-
-Beyond Phase 7, potential features include:
-- Playback progress tracking (resume functionality)
-- Subtitle file detection and serving (.srt support)
-- Video collections/series organization
-- Full-text search with SQLite FTS5
-- Smart recommendations based on viewing history
-- Multiple thumbnail positions (sprite sheets)
-- Video transcoding queue system
-- Multi-user support with permissions
+- Single-user design with registration auto-disable
+- HTTP-only secure cookies, no JWT exposure
+- bcrypt password hashing (12 rounds)
+- Zod schemas on all endpoints
+- Path traversal prevention
+- Parameterized queries (Drizzle ORM)
+- Rate limiting and security headers (Fastify Helmet)
 
 ## Contributing
 
-This is a personal project, but suggestions and bug reports are welcome via issues.
+This is a personal project. Suggestions and bug reports via issues are welcome.
 
 ## License
 
 [Add your license here]
-
-## Acknowledgments
-
-- Built with [Bun](https://bun.sh) - The fast all-in-one JavaScript runtime
-- Powered by [Fastify](https://fastify.dev) - Fast and low overhead web framework
-- Video processing via [FFmpeg](https://ffmpeg.org) - The leading multimedia framework

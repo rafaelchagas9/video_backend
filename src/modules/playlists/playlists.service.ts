@@ -222,7 +222,9 @@ export class PlaylistsService {
         t.id as thumbnail_id
       FROM videos v
       INNER JOIN playlist_videos pv ON v.id = pv.video_id
-      LEFT JOIN thumbnails t ON v.id = t.video_id
+      LEFT JOIN (
+        SELECT DISTINCT ON (video_id) id, video_id FROM thumbnails
+      ) t ON v.id = t.video_id
       WHERE pv.playlist_id = ${playlistId}
       ORDER BY pv.position ASC
     `;

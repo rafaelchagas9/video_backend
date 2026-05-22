@@ -141,12 +141,17 @@ export class ConversionJobsService {
   /**
    * Mark job as failed
    */
-  async markAsFailed(id: number, errorMessage: string): Promise<void> {
+  async markAsFailed(
+    id: number,
+    errorMessage: string,
+    ffmpegOutput?: string,
+  ): Promise<void> {
     await db
       .update(conversionJobsTable)
       .set({
         status: "failed",
         errorMessage,
+        ffmpegOutput: ffmpegOutput ?? null,
         completedAt: sql`CURRENT_TIMESTAMP`,
       })
       .where(eq(conversionJobsTable.id, id));
@@ -435,6 +440,7 @@ export class ConversionJobsService {
       output_size_bytes: row.output_size_bytes ?? row.outputSizeBytes,
       progress_percent: row.progress_percent ?? row.progressPercent ?? 0,
       error_message: row.error_message ?? row.errorMessage,
+      ffmpeg_output: row.ffmpeg_output ?? row.ffmpegOutput ?? null,
       delete_original: row.delete_original ?? row.deleteOriginal ?? false,
       batch_id: row.batch_id ?? row.batchId,
       started_at:

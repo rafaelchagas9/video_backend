@@ -11,6 +11,7 @@ import { getPreset, listPresets } from "@/config/presets";
 import { conversionQueue } from "./conversion.queue";
 import { conversionProcessorService } from "./conversion.processor.service";
 import { conversionJobsService } from "./conversion.jobs.service";
+import { conversionHistoryService } from "./conversion.history.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { logger } from "@/utils/logger";
 import type {
@@ -201,6 +202,19 @@ export class ConversionService {
     return conversionJobsService.getActiveConversions();
   }
 
+  async getHistory(options?: {
+    limit?: number;
+    offset?: number;
+    videoId?: number;
+    preset?: string;
+  }) {
+    return conversionHistoryService.list(options);
+  }
+
+  async getHistoryOverview(options?: { videoId?: number; preset?: string }) {
+    return conversionHistoryService.getOverview(options);
+  }
+
   /**
    * Clear all pending and processing jobs from the queue
    * - Clears Redis queue
@@ -214,7 +228,7 @@ export class ConversionService {
     // Clear Redis queue
     await conversionQueue.clear();
 
-    // Get job IDs for WebSocket notifications
+    // Get job IDs for SSE notifications
     const pendingJobs =
       await conversionJobsService.getPendingJobsForNotification();
     const processingJobs =
@@ -226,11 +240,11 @@ export class ConversionService {
     // Update processing jobs to failed (these are stuck)
     const processingCount = await conversionJobsService.clearProcessing();
 
-    // Emit WebSocket events for cancelled jobs
-    const { websocketService } = await import("@/modules/websocket/websocket");
+    // Emit SSE events for cancelled jobs
+    const { eventsService } = await import("@/modules/events/events.service");
     for (const job of pendingJobs) {
       try {
-        websocketService.broadcast({
+        eventsService.broadcast({
           type: "conversion:failed",
           message: {
             jobId: job.id,
@@ -240,14 +254,14 @@ export class ConversionService {
           },
         });
       } catch (error) {
-        logger.error({ error }, "Failed to emit WebSocket event");
+        logger.error({ error }, "Failed to emit SSE event");
       }
     }
 
-    // Emit WebSocket events for failed (stuck) jobs
+    // Emit SSE events for failed (stuck) jobs
     for (const job of processingJobs) {
       try {
-        websocketService.broadcast({
+        eventsService.broadcast({
           type: "conversion:failed",
           message: {
             jobId: job.id,
@@ -257,7 +271,7 @@ export class ConversionService {
           },
         });
       } catch (error) {
-        logger.error({ error }, "Failed to emit WebSocket event");
+        logger.error({ error }, "Failed to emit SSE event");
       }
     }
 

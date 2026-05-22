@@ -1,9 +1,14 @@
-import { relations } from 'drizzle-orm';
+import { relations } from "drizzle-orm";
 
 // Import all tables
-import { usersTable, sessionsTable } from './users.schema';
-import { watchedDirectoriesTable, scanLogsTable } from './directories.schema';
-import { videosTable, videoStatsTable, videoMetadataTable } from './videos.schema';
+import { usersTable, sessionsTable } from "./users.schema";
+import { watchedDirectoriesTable, scanLogsTable } from "./directories.schema";
+import {
+  videosTable,
+  videoStatsTable,
+  videoMetadataTable,
+  videoRelatedScoresTable,
+} from "./videos.schema";
 import {
   creatorsTable,
   videoCreatorsTable,
@@ -16,23 +21,26 @@ import {
   creatorPlatformsTable,
   creatorSocialLinksTable,
   studioSocialLinksTable,
-} from './organization.schema';
+} from "./organization.schema";
 import {
   playlistsTable,
   playlistVideosTable,
   favoritesTable,
   bookmarksTable,
   ratingsTable,
-} from './content.schema';
-import { thumbnailsTable, storyboardsTable } from './media.schema';
-import { conversionJobsTable } from './conversion.schema';
-import { triageProgressTable } from './triage.schema';
+} from "./content.schema";
+import { thumbnailsTable, storyboardsTable } from "./media.schema";
+import {
+  conversionJobsTable,
+  conversionHistoryTable,
+} from "./conversion.schema";
+import { triageProgressTable } from "./triage.schema";
 import {
   taggingRulesTable,
   taggingRuleConditionsTable,
   taggingRuleActionsTable,
   taggingRuleLogTable,
-} from './tagging.schema';
+} from "./tagging.schema";
 
 // Users relations
 export const usersRelations = relations(usersTable, ({ many }) => ({
@@ -53,10 +61,13 @@ export const sessionsRelations = relations(sessionsTable, ({ one }) => ({
 }));
 
 // Watched directories relations
-export const watchedDirectoriesRelations = relations(watchedDirectoriesTable, ({ many }) => ({
-  videos: many(videosTable),
-  scanLogs: many(scanLogsTable),
-}));
+export const watchedDirectoriesRelations = relations(
+  watchedDirectoriesTable,
+  ({ many }) => ({
+    videos: many(videosTable),
+    scanLogs: many(scanLogsTable),
+  }),
+);
 
 // Scan logs relations
 export const scanLogsRelations = relations(scanLogsTable, ({ one }) => ({
@@ -89,9 +100,33 @@ export const videosRelations = relations(videosTable, ({ one, many }) => ({
   ratings: many(ratingsTable),
   videoStats: many(videoStatsTable),
   videoMetadata: many(videoMetadataTable),
+  relatedScoresFrom: many(videoRelatedScoresTable, {
+    relationName: "relatedScoresFrom",
+  }),
+  relatedScoresTo: many(videoRelatedScoresTable, {
+    relationName: "relatedScoresTo",
+  }),
   conversionJobs: many(conversionJobsTable),
+  conversionHistory: many(conversionHistoryTable),
   taggingRuleLogs: many(taggingRuleLogTable),
 }));
+
+// Related-video score relations
+export const videoRelatedScoresRelations = relations(
+  videoRelatedScoresTable,
+  ({ one }) => ({
+    sourceVideo: one(videosTable, {
+      fields: [videoRelatedScoresTable.sourceVideoId],
+      references: [videosTable.id],
+      relationName: "relatedScoresFrom",
+    }),
+    relatedVideo: one(videosTable, {
+      fields: [videoRelatedScoresTable.relatedVideoId],
+      references: [videosTable.id],
+      relationName: "relatedScoresTo",
+    }),
+  }),
+);
 
 // Video stats relations
 export const videoStatsRelations = relations(videoStatsTable, ({ one }) => ({
@@ -106,12 +141,15 @@ export const videoStatsRelations = relations(videoStatsTable, ({ one }) => ({
 }));
 
 // Video metadata relations
-export const videoMetadataRelations = relations(videoMetadataTable, ({ one }) => ({
-  video: one(videosTable, {
-    fields: [videoMetadataTable.videoId],
-    references: [videosTable.id],
+export const videoMetadataRelations = relations(
+  videoMetadataTable,
+  ({ one }) => ({
+    video: one(videosTable, {
+      fields: [videoMetadataTable.videoId],
+      references: [videosTable.id],
+    }),
   }),
-}));
+);
 
 // Creators relations
 export const creatorsRelations = relations(creatorsTable, ({ many }) => ({
@@ -122,26 +160,29 @@ export const creatorsRelations = relations(creatorsTable, ({ many }) => ({
 }));
 
 // Video-Creator junction relations
-export const videoCreatorsRelations = relations(videoCreatorsTable, ({ one }) => ({
-  video: one(videosTable, {
-    fields: [videoCreatorsTable.videoId],
-    references: [videosTable.id],
+export const videoCreatorsRelations = relations(
+  videoCreatorsTable,
+  ({ one }) => ({
+    video: one(videosTable, {
+      fields: [videoCreatorsTable.videoId],
+      references: [videosTable.id],
+    }),
+    creator: one(creatorsTable, {
+      fields: [videoCreatorsTable.creatorId],
+      references: [creatorsTable.id],
+    }),
   }),
-  creator: one(creatorsTable, {
-    fields: [videoCreatorsTable.creatorId],
-    references: [creatorsTable.id],
-  }),
-}));
+);
 
 // Tags relations (self-referencing)
 export const tagsRelations = relations(tagsTable, ({ one, many }) => ({
   parent: one(tagsTable, {
     fields: [tagsTable.parentId],
     references: [tagsTable.id],
-    relationName: 'parentChild',
+    relationName: "parentChild",
   }),
   children: many(tagsTable, {
-    relationName: 'parentChild',
+    relationName: "parentChild",
   }),
   videoTags: many(videoTagsTable),
 }));
@@ -166,28 +207,34 @@ export const studiosRelations = relations(studiosTable, ({ many }) => ({
 }));
 
 // Video-Studio junction relations
-export const videoStudiosRelations = relations(videoStudiosTable, ({ one }) => ({
-  video: one(videosTable, {
-    fields: [videoStudiosTable.videoId],
-    references: [videosTable.id],
+export const videoStudiosRelations = relations(
+  videoStudiosTable,
+  ({ one }) => ({
+    video: one(videosTable, {
+      fields: [videoStudiosTable.videoId],
+      references: [videosTable.id],
+    }),
+    studio: one(studiosTable, {
+      fields: [videoStudiosTable.studioId],
+      references: [studiosTable.id],
+    }),
   }),
-  studio: one(studiosTable, {
-    fields: [videoStudiosTable.studioId],
-    references: [studiosTable.id],
-  }),
-}));
+);
 
 // Creator-Studio junction relations
-export const creatorStudiosRelations = relations(creatorStudiosTable, ({ one }) => ({
-  creator: one(creatorsTable, {
-    fields: [creatorStudiosTable.creatorId],
-    references: [creatorsTable.id],
+export const creatorStudiosRelations = relations(
+  creatorStudiosTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorStudiosTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+    studio: one(studiosTable, {
+      fields: [creatorStudiosTable.studioId],
+      references: [studiosTable.id],
+    }),
   }),
-  studio: one(studiosTable, {
-    fields: [creatorStudiosTable.studioId],
-    references: [studiosTable.id],
-  }),
-}));
+);
 
 // Platforms relations
 export const platformsRelations = relations(platformsTable, ({ many }) => ({
@@ -195,53 +242,68 @@ export const platformsRelations = relations(platformsTable, ({ many }) => ({
 }));
 
 // Creator platforms relations
-export const creatorPlatformsRelations = relations(creatorPlatformsTable, ({ one }) => ({
-  creator: one(creatorsTable, {
-    fields: [creatorPlatformsTable.creatorId],
-    references: [creatorsTable.id],
+export const creatorPlatformsRelations = relations(
+  creatorPlatformsTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorPlatformsTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+    platform: one(platformsTable, {
+      fields: [creatorPlatformsTable.platformId],
+      references: [platformsTable.id],
+    }),
   }),
-  platform: one(platformsTable, {
-    fields: [creatorPlatformsTable.platformId],
-    references: [platformsTable.id],
-  }),
-}));
+);
 
 // Creator social links relations
-export const creatorSocialLinksRelations = relations(creatorSocialLinksTable, ({ one }) => ({
-  creator: one(creatorsTable, {
-    fields: [creatorSocialLinksTable.creatorId],
-    references: [creatorsTable.id],
+export const creatorSocialLinksRelations = relations(
+  creatorSocialLinksTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorSocialLinksTable.creatorId],
+      references: [creatorsTable.id],
+    }),
   }),
-}));
+);
 
 // Studio social links relations
-export const studioSocialLinksRelations = relations(studioSocialLinksTable, ({ one }) => ({
-  studio: one(studiosTable, {
-    fields: [studioSocialLinksTable.studioId],
-    references: [studiosTable.id],
+export const studioSocialLinksRelations = relations(
+  studioSocialLinksTable,
+  ({ one }) => ({
+    studio: one(studiosTable, {
+      fields: [studioSocialLinksTable.studioId],
+      references: [studiosTable.id],
+    }),
   }),
-}));
+);
 
 // Playlists relations
-export const playlistsRelations = relations(playlistsTable, ({ one, many }) => ({
-  user: one(usersTable, {
-    fields: [playlistsTable.userId],
-    references: [usersTable.id],
+export const playlistsRelations = relations(
+  playlistsTable,
+  ({ one, many }) => ({
+    user: one(usersTable, {
+      fields: [playlistsTable.userId],
+      references: [usersTable.id],
+    }),
+    playlistVideos: many(playlistVideosTable),
   }),
-  playlistVideos: many(playlistVideosTable),
-}));
+);
 
 // Playlist-Video junction relations
-export const playlistVideosRelations = relations(playlistVideosTable, ({ one }) => ({
-  playlist: one(playlistsTable, {
-    fields: [playlistVideosTable.playlistId],
-    references: [playlistsTable.id],
+export const playlistVideosRelations = relations(
+  playlistVideosTable,
+  ({ one }) => ({
+    playlist: one(playlistsTable, {
+      fields: [playlistVideosTable.playlistId],
+      references: [playlistsTable.id],
+    }),
+    video: one(videosTable, {
+      fields: [playlistVideosTable.videoId],
+      references: [videosTable.id],
+    }),
   }),
-  video: one(videosTable, {
-    fields: [playlistVideosTable.videoId],
-    references: [videosTable.id],
-  }),
-}));
+);
 
 // Favorites relations
 export const favoritesRelations = relations(favoritesTable, ({ one }) => ({
@@ -292,56 +354,88 @@ export const storyboardsRelations = relations(storyboardsTable, ({ one }) => ({
 }));
 
 // Conversion jobs relations
-export const conversionJobsRelations = relations(conversionJobsTable, ({ one }) => ({
-  video: one(videosTable, {
-    fields: [conversionJobsTable.videoId],
-    references: [videosTable.id],
+export const conversionJobsRelations = relations(
+  conversionJobsTable,
+  ({ one }) => ({
+    video: one(videosTable, {
+      fields: [conversionJobsTable.videoId],
+      references: [videosTable.id],
+    }),
   }),
-}));
+);
+
+export const conversionHistoryRelations = relations(
+  conversionHistoryTable,
+  ({ one }) => ({
+    job: one(conversionJobsTable, {
+      fields: [conversionHistoryTable.conversionJobId],
+      references: [conversionJobsTable.id],
+    }),
+    video: one(videosTable, {
+      fields: [conversionHistoryTable.videoId],
+      references: [videosTable.id],
+    }),
+  }),
+);
 
 // Triage progress relations
-export const triageProgressRelations = relations(triageProgressTable, ({ one }) => ({
-  user: one(usersTable, {
-    fields: [triageProgressTable.userId],
-    references: [usersTable.id],
+export const triageProgressRelations = relations(
+  triageProgressTable,
+  ({ one }) => ({
+    user: one(usersTable, {
+      fields: [triageProgressTable.userId],
+      references: [usersTable.id],
+    }),
+    lastVideo: one(videosTable, {
+      fields: [triageProgressTable.lastVideoId],
+      references: [videosTable.id],
+    }),
   }),
-  lastVideo: one(videosTable, {
-    fields: [triageProgressTable.lastVideoId],
-    references: [videosTable.id],
-  }),
-}));
+);
 
 // Tagging rules relations
-export const taggingRulesRelations = relations(taggingRulesTable, ({ many }) => ({
-  conditions: many(taggingRuleConditionsTable),
-  actions: many(taggingRuleActionsTable),
-  logs: many(taggingRuleLogTable),
-}));
+export const taggingRulesRelations = relations(
+  taggingRulesTable,
+  ({ many }) => ({
+    conditions: many(taggingRuleConditionsTable),
+    actions: many(taggingRuleActionsTable),
+    logs: many(taggingRuleLogTable),
+  }),
+);
 
 // Tagging rule conditions relations
-export const taggingRuleConditionsRelations = relations(taggingRuleConditionsTable, ({ one }) => ({
-  rule: one(taggingRulesTable, {
-    fields: [taggingRuleConditionsTable.ruleId],
-    references: [taggingRulesTable.id],
+export const taggingRuleConditionsRelations = relations(
+  taggingRuleConditionsTable,
+  ({ one }) => ({
+    rule: one(taggingRulesTable, {
+      fields: [taggingRuleConditionsTable.ruleId],
+      references: [taggingRulesTable.id],
+    }),
   }),
-}));
+);
 
 // Tagging rule actions relations
-export const taggingRuleActionsRelations = relations(taggingRuleActionsTable, ({ one }) => ({
-  rule: one(taggingRulesTable, {
-    fields: [taggingRuleActionsTable.ruleId],
-    references: [taggingRulesTable.id],
+export const taggingRuleActionsRelations = relations(
+  taggingRuleActionsTable,
+  ({ one }) => ({
+    rule: one(taggingRulesTable, {
+      fields: [taggingRuleActionsTable.ruleId],
+      references: [taggingRulesTable.id],
+    }),
   }),
-}));
+);
 
 // Tagging rule log relations
-export const taggingRuleLogRelations = relations(taggingRuleLogTable, ({ one }) => ({
-  rule: one(taggingRulesTable, {
-    fields: [taggingRuleLogTable.ruleId],
-    references: [taggingRulesTable.id],
+export const taggingRuleLogRelations = relations(
+  taggingRuleLogTable,
+  ({ one }) => ({
+    rule: one(taggingRulesTable, {
+      fields: [taggingRuleLogTable.ruleId],
+      references: [taggingRulesTable.id],
+    }),
+    video: one(videosTable, {
+      fields: [taggingRuleLogTable.videoId],
+      references: [videosTable.id],
+    }),
   }),
-  video: one(videosTable, {
-    fields: [taggingRuleLogTable.videoId],
-    references: [videosTable.id],
-  }),
-}));
+);

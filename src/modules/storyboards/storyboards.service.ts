@@ -1,5 +1,6 @@
 import { join } from "path";
 import {
+  createReadStream,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -13,13 +14,16 @@ import { eq } from "drizzle-orm";
 import { env } from "@/config/env";
 import { NotFoundError, InternalServerError } from "@/utils/errors";
 import { videosService } from "@/modules/videos/videos.service";
+import { eventsService } from "@/modules/events/events.service";
 import { logger } from "@/utils/logger";
+import { recordPerfStage } from "@/utils/performance-profiler";
 import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
 import { copyFile, unlink, stat, readFile } from "fs/promises";
 import { freemem } from "os";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
 
 interface SpriteSheetOptions {
+  videoId: number;
   inputPath: string;
   outputPath: string;
   tileWidth: number;
@@ -29,7 +33,6 @@ interface SpriteSheetOptions {
   rows: number;
   format: "webp" | "jpg";
   quality: number;
-  videoFps?: number; // Needed for select filter fallback
 }
 
 export class StoryboardsService {
@@ -134,37 +137,40 @@ export class StoryboardsService {
             "Processing storyboard generation",
           );
 
-          // Import websocket service for notifications
-          const { websocketService } =
-            await import("@/modules/websocket/websocket");
-
-          websocketService.broadcastToAuthenticated({
+          eventsService.broadcastToAuthenticated({
             type: "storyboard:generating",
-            message: { videoId, text: "Generating storyboard thumbnails..." },
-            timestamp: new Date().toISOString(),
+            message: {
+              videoId,
+              video_id: videoId,
+              message: "Generating storyboard thumbnails...",
+              text: "Generating storyboard thumbnails...",
+            },
           });
 
           await this.generate(videoId);
 
-          websocketService.broadcastToAuthenticated({
+          eventsService.broadcastToAuthenticated({
             type: "storyboard:ready",
-            message: { videoId, text: "Storyboard thumbnails ready" },
-            timestamp: new Date().toISOString(),
+            message: {
+              videoId,
+              video_id: videoId,
+              message: "Storyboard thumbnails ready",
+              text: "Storyboard thumbnails ready",
+            },
           });
         }
       } catch (error) {
         logger.error({ videoId, error }, "Failed to generate storyboard");
 
-        const { websocketService } =
-          await import("@/modules/websocket/websocket");
-        websocketService.broadcastToAuthenticated({
+        eventsService.broadcastToAuthenticated({
           type: "storyboard:error",
           message: {
             videoId,
+            video_id: videoId,
+            message: "Failed to generate storyboard",
             text: "Failed to generate storyboard",
             error: error instanceof Error ? error.message : String(error),
           },
-          timestamp: new Date().toISOString(),
         });
       } finally {
         this.processingVideoId = null;
@@ -182,6 +188,7 @@ export class StoryboardsService {
     videoId: number,
     input?: GenerateStoryboardInput,
   ): Promise<Storyboard> {
+    const totalStart = Date.now();
     const video = await videosService.findById(videoId);
 
     // Delete existing storyboard if present
@@ -195,10 +202,13 @@ export class StoryboardsService {
       await this.delete(videoId);
     }
 
-    // Use input overrides or env defaults
-    const tileWidth = input?.tileWidth ?? env.STORYBOARD_TILE_WIDTH;
-    const tileHeight = input?.tileHeight ?? env.STORYBOARD_TILE_HEIGHT;
-    const intervalSeconds =
+    const { tileWidth, tileHeight } = this.getTileDimensions(
+      video.width,
+      video.height,
+      input?.tileWidth,
+      input?.tileHeight,
+    );
+    const requestedIntervalSeconds =
       input?.intervalSeconds ?? env.STORYBOARD_INTERVAL_SECONDS;
     const storyboardFormat = env.STORYBOARD_FORMAT;
     const storyboardQuality = env.STORYBOARD_QUALITY;
@@ -206,6 +216,24 @@ export class StoryboardsService {
     if (!video.duration_seconds || video.duration_seconds <= 0) {
       throw new InternalServerError(
         "Video duration not available for storyboard generation",
+      );
+    }
+
+    const intervalSeconds = this.getEffectiveIntervalSeconds(
+      video.duration_seconds,
+      requestedIntervalSeconds,
+    );
+
+    if (intervalSeconds !== requestedIntervalSeconds) {
+      logger.info(
+        {
+          videoId,
+          requestedIntervalSeconds,
+          effectiveIntervalSeconds: intervalSeconds,
+          durationSeconds: video.duration_seconds,
+          maxTiles: env.STORYBOARD_MAX_TILES,
+        },
+        "Adjusted storyboard interval for long video",
       );
     }
 
@@ -224,6 +252,7 @@ export class StoryboardsService {
     const vttPath = join(env.STORYBOARDS_DIR, vttFilename);
 
     const options: SpriteSheetOptions = {
+      videoId,
       inputPath: video.file_path,
       outputPath: spritePath,
       tileWidth,
@@ -233,17 +262,30 @@ export class StoryboardsService {
       rows,
       format: storyboardFormat,
       quality: storyboardQuality,
-      videoFps: video.fps ?? 30,
     };
 
     // Generate sprite sheet using FFmpeg
+    const spriteStart = Date.now();
     await this.generateSpriteSheet(options);
+    await recordPerfStage(
+      { scenario: "storyboard", videoId, mode: "generate" },
+      "sprite_sheet",
+      Date.now() - spriteStart,
+      {
+        tileCount,
+        intervalSeconds,
+        requestedIntervalSeconds,
+        cols,
+        rows,
+      },
+    );
 
     // Get sprite file size
     const stats = await stat(spritePath);
     const spriteSizeBytes = stats.size;
 
     // Generate VTT file
+    const vttStart = Date.now();
     this.generateVttFile(
       vttPath,
       videoId,
@@ -254,6 +296,12 @@ export class StoryboardsService {
       cols,
       video.duration_seconds,
       storyboardFormat,
+    );
+    await recordPerfStage(
+      { scenario: "storyboard", videoId, mode: "generate" },
+      "vtt_file",
+      Date.now() - vttStart,
+      { tileCount, intervalSeconds, cols },
     );
 
     // Insert into database
@@ -270,6 +318,13 @@ export class StoryboardsService {
         spriteSizeBytes,
       })
       .returning();
+
+    await recordPerfStage(
+      { scenario: "storyboard", videoId, mode: "generate" },
+      "total",
+      Date.now() - totalStart,
+      { tileCount, spriteSizeBytes },
+    );
 
     return this.mapToApiFormat(result[0]);
   }
@@ -294,14 +349,21 @@ export class StoryboardsService {
       await this.delete(videoId);
     }
 
-    const tileWidth = env.STORYBOARD_TILE_WIDTH;
-    const tileHeight = env.STORYBOARD_TILE_HEIGHT;
+    const video = await videosService.findById(videoId);
+    const { tileWidth, tileHeight } = this.getTileDimensions(
+      video.width,
+      video.height,
+      env.STORYBOARD_TILE_WIDTH,
+      env.STORYBOARD_TILE_HEIGHT,
+    );
     const storyboardFormat = env.STORYBOARD_FORMAT;
     const storyboardQuality = env.STORYBOARD_QUALITY;
     const tileCount = frames.length;
 
     if (tileCount === 0) {
-      throw new InternalServerError("No frames provided for storyboard assembly");
+      throw new InternalServerError(
+        "No frames provided for storyboard assembly",
+      );
     }
 
     // Calculate interval from frames
@@ -399,7 +461,7 @@ export class StoryboardsService {
           .inputOptions(["-f", "concat", "-safe", "0"])
           .outputOptions([
             "-vf",
-            `scale=${tileWidth}:${tileHeight},tile=${cols}x${rows}`,
+            `${this.getScaleFilter(tileWidth, tileHeight)},tile=${cols}x${rows}`,
             "-frames:v",
             "1",
             "-an",
@@ -413,7 +475,10 @@ export class StoryboardsService {
             resolve();
           })
           .on("error", (err) => {
-            logger.error({ error: err, outputPath }, "Failed to assemble sprite sheet");
+            logger.error(
+              { error: err, outputPath },
+              "Failed to assemble sprite sheet",
+            );
             reject(err);
           })
           .run();
@@ -423,7 +488,10 @@ export class StoryboardsService {
       try {
         unlinkSync(inputListPath);
       } catch (error) {
-        logger.warn({ path: inputListPath }, "Failed to clean up input list file");
+        logger.warn(
+          { path: inputListPath },
+          "Failed to clean up input list file",
+        );
       }
     }
   }
@@ -434,7 +502,8 @@ export class StoryboardsService {
   private async generateSpriteSheet(
     options: SpriteSheetOptions,
   ): Promise<void> {
-    const { inputPath } = options;
+    const { inputPath, videoId } = options;
+    const decisionStart = Date.now();
 
     const fileSize = (await stat(inputPath)).size;
     const availableShm = await this.getAvailableShm();
@@ -443,22 +512,57 @@ export class StoryboardsService {
     const shmUsable = availableShm * 0.8;
     const ramBuffer = 2 * 1024 * 1024 * 1024;
 
+    // Copying very large files to /dev/shm can dominate total time.
+    // Keep RAM-copy path only for relatively small inputs.
+    const maxRamCopyBytes = env.STORYBOARD_RAM_COPY_MAX_MB * 1024 * 1024;
     const canUseRam =
-      fileSize < shmUsable && fileSize < availableRam - ramBuffer;
+      fileSize < maxRamCopyBytes &&
+      fileSize < shmUsable &&
+      fileSize < availableRam - ramBuffer;
 
-    console.log("Can use RAM:", canUseRam, {
-      fileSize: this.formatBytes(fileSize),
-      shmUsable: this.formatBytes(shmUsable),
-      availableRam: this.formatBytes(availableRam),
-      ramBuffer: this.formatBytes(ramBuffer),
-      needed: this.formatBytes(fileSize),
-      actuallyAvailable: this.formatBytes(availableRam - ramBuffer),
-    });
+    logger.debug(
+      {
+        canUseRam,
+        fileSize: this.formatBytes(fileSize),
+        shmUsable: this.formatBytes(shmUsable),
+        availableRam: this.formatBytes(availableRam),
+        ramBuffer: this.formatBytes(ramBuffer),
+        needed: this.formatBytes(fileSize),
+        actuallyAvailable: this.formatBytes(availableRam - ramBuffer),
+        maxRamCopyBytes: this.formatBytes(maxRamCopyBytes),
+      },
+      "Storyboard RAM path decision",
+    );
+
+    await recordPerfStage(
+      { scenario: "storyboard", videoId, mode: "sprite_sheet" },
+      "path_decision",
+      Date.now() - decisionStart,
+      {
+        canUseRam,
+        fileSizeBytes: fileSize,
+        maxRamCopyBytes,
+      },
+    );
 
     if (canUseRam) {
+      const ramStart = Date.now();
       await this.processFromRam(options);
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "sprite_sheet" },
+        "process_from_ram",
+        Date.now() - ramStart,
+        { fileSizeBytes: fileSize },
+      );
     } else {
+      const seqStart = Date.now();
       await this.processSequential(options);
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "sprite_sheet" },
+        "process_sequential",
+        Date.now() - seqStart,
+        { fileSizeBytes: fileSize },
+      );
     }
   }
 
@@ -506,8 +610,42 @@ export class StoryboardsService {
     return ["-qscale:v", jpegQuality.toString()];
   }
 
+  private getScaleFilter(tileWidth: number, tileHeight: number): string {
+    return `scale=w=${tileWidth}:h=${tileHeight}:force_original_aspect_ratio=decrease,pad=${tileWidth}:${tileHeight}:(ow-iw)/2:(oh-ih)/2`;
+  }
+
+  private getTileDimensions(
+    width: number | null | undefined,
+    height: number | null | undefined,
+    overrideWidth?: number,
+    overrideHeight?: number,
+  ): { tileWidth: number; tileHeight: number } {
+    const baseWidth = overrideWidth ?? env.STORYBOARD_TILE_WIDTH;
+    const baseHeight = overrideHeight ?? env.STORYBOARD_TILE_HEIGHT;
+
+    if (!width || !height) {
+      return { tileWidth: baseWidth, tileHeight: baseHeight };
+    }
+
+    if (height > width) {
+      return { tileWidth: baseHeight, tileHeight: baseWidth };
+    }
+
+    return { tileWidth: baseWidth, tileHeight: baseHeight };
+  }
+
+  private getEffectiveIntervalSeconds(
+    durationSeconds: number,
+    requestedIntervalSeconds: number,
+  ): number {
+    const maxTiles = Math.max(1, env.STORYBOARD_MAX_TILES);
+    const intervalByTileLimit = Math.ceil(durationSeconds / maxTiles);
+    return Math.max(1, requestedIntervalSeconds, intervalByTileLimit);
+  }
+
   private async processFromRam(options: SpriteSheetOptions): Promise<void> {
     const {
+      videoId,
       inputPath,
       outputPath,
       tileWidth,
@@ -522,20 +660,28 @@ export class StoryboardsService {
     const qualityOptions = this.getQualityOptions(format, quality);
 
     try {
+      const copyStart = Date.now();
       await copyFile(inputPath, ramPath);
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "process_from_ram" },
+        "copy_to_ram",
+        Date.now() - copyStart,
+      );
 
+      const ffmpegStart = Date.now();
       await new Promise<void>((resolve, reject) => {
         ffmpeg(ramPath)
           .inputOptions([
             `-hwaccel`,
             `vaapi`,
             `-hwaccel_device`,
-            `/dev/dri/renderD128`,
-            // Remove hwaccel_output_format - let frames auto-transfer to CPU after decode
+            env.VAAPI_DEVICE,
+            `-hwaccel_output_format`,
+            `vaapi`,
           ])
           .outputOptions([
             `-vf`,
-            `fps=1/${intervalSeconds},scale=${tileWidth}:${tileHeight},tile=${cols}x${rows}`,
+            `fps=1/${intervalSeconds},scale_vaapi=w=${tileWidth}:h=${tileHeight}:force_original_aspect_ratio=decrease,hwdownload,format=nv12,pad=${tileWidth}:${tileHeight}:(ow-iw)/2:(oh-ih)/2,tile=${cols}x${rows}`,
             `-frames:v`,
             `1`,
             `-an`,
@@ -548,6 +694,11 @@ export class StoryboardsService {
           .on("error", (err) => reject(err))
           .run();
       });
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "process_from_ram" },
+        "ffmpeg_from_ram",
+        Date.now() - ffmpegStart,
+      );
     } finally {
       await unlink(ramPath).catch(() => {});
     }
@@ -555,6 +706,7 @@ export class StoryboardsService {
 
   private async processSequential(options: SpriteSheetOptions): Promise<void> {
     const {
+      videoId,
       inputPath,
       outputPath,
       tileWidth,
@@ -564,35 +716,51 @@ export class StoryboardsService {
       rows,
       format,
       quality,
-      videoFps,
     } = options;
 
-    // Need FPS to calculate frame selection interval
-    const fps = videoFps ?? 30;
-    const selectInterval = Math.round(fps * intervalSeconds);
     const qualityOptions = this.getQualityOptions(format, quality);
-    console.log(
-      "Processing sequentially:",
-      inputPath,
-      outputPath,
-      selectInterval,
+    logger.debug(
+      { inputPath, outputPath, intervalSeconds },
+      "Processing storyboard sequentially (HDD path)",
     );
 
+    const fileSizeBytes = (await stat(inputPath)).size;
+    const readaheadMaxBytes = env.STORYBOARD_READAHEAD_MAX_MB * 1024 * 1024;
+
+    if (fileSizeBytes <= readaheadMaxBytes) {
+      // Prime page cache only for smaller files; for very large files this can
+      // double total read volume and hurt end-to-end completion time.
+      const readAheadStart = Date.now();
+      await this.primePageCache(inputPath);
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "process_sequential" },
+        "prime_page_cache",
+        Date.now() - readAheadStart,
+        { fileSizeBytes, readaheadMaxBytes },
+      );
+    } else {
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "process_sequential" },
+        "prime_page_cache_skipped",
+        0,
+        { fileSizeBytes, readaheadMaxBytes },
+      );
+    }
+
+    const ffmpegStart = Date.now();
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .inputOptions([
           `-hwaccel`,
           `vaapi`,
           `-hwaccel_device`,
-          `/dev/dri/renderD128`,
+          env.VAAPI_DEVICE,
           `-hwaccel_output_format`,
           `vaapi`,
         ])
         .outputOptions([
           `-vf`,
-          `select='not(mod(n\\,${selectInterval}))',scale_vaapi=${tileWidth}:${tileHeight},hwdownload,format=nv12,tile=${cols}x${rows}`,
-          `-vsync`,
-          `vfr`,
+          `fps=1/${intervalSeconds},scale_vaapi=w=${tileWidth}:h=${tileHeight}:force_original_aspect_ratio=decrease,hwdownload,format=nv12,pad=${tileWidth}:${tileHeight}:(ow-iw)/2:(oh-ih)/2,tile=${cols}x${rows}`,
           `-frames:v`,
           `1`,
           `-an`,
@@ -605,6 +773,11 @@ export class StoryboardsService {
         .on("error", (err) => reject(err))
         .run();
     });
+    await recordPerfStage(
+      { scenario: "storyboard", videoId, mode: "process_sequential" },
+      "ffmpeg_sequential",
+      Date.now() - ffmpegStart,
+    );
   }
 
   /**
@@ -758,9 +931,9 @@ export class StoryboardsService {
         unlinkSync(storyboard.vtt_path);
       }
     } catch (error) {
-      console.error(
-        `Failed to delete storyboard files for video ${videoId}:`,
-        error,
+      logger.error(
+        { videoId, error },
+        `Failed to delete storyboard files for video ${videoId}`,
       );
     }
 
@@ -773,6 +946,28 @@ export class StoryboardsService {
   private getExtension(filePath: string): string {
     const match = filePath.match(/\.[^.]+$/);
     return match ? match[0] : ".mp4";
+  }
+
+  /**
+   * Prime the OS page cache by reading the file sequentially.
+   * This converts slow random HDD I/O into sequential reads so FFmpeg
+   * finds the data in cache rather than stalling on disk seeks.
+   */
+  private primePageCache(filePath: string): Promise<void> {
+    return new Promise((resolve) => {
+      // 16 MB chunks — keeps the read sequential, matches HDD optimal block size
+      const stream = createReadStream(filePath, {
+        highWaterMark: 16 * 1024 * 1024,
+      });
+      // Discard data; we only want the side-effect of filling the page cache
+      stream.on("data", () => {});
+      stream.on("end", () => resolve());
+      // On error we still proceed — worst case FFmpeg reads from disk directly
+      stream.on("error", (err) => {
+        logger.warn({ filePath, err }, "Page cache priming failed, continuing");
+        resolve();
+      });
+    });
   }
 }
 

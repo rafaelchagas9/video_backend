@@ -1,11 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import { NotFoundError } from "@/utils/errors";
 import { storyboardsService } from "./storyboards.service";
 import {
   idParamSchema,
   generateStoryboardBodySchema,
   storyboardResponseSchema,
+  thumbnailsVttQuerySchema,
   messageResponseSchema,
   errorResponseSchema,
 } from "./storyboards.schemas";
@@ -26,16 +28,36 @@ export async function storyboardsRoutes(
         tags: ["storyboards"],
         summary: "Get thumbnails VTT",
         description:
-          "Returns the WebVTT file with storyboard sprite coordinates for Vidstack slider preview.",
+          "Returns the WebVTT file with storyboard sprite coordinates for Vidstack slider preview. If not available and autogenerate=true, generation is queued and 404 is returned until ready.",
+        params: idParamSchema,
+        querystring: thumbnailsVttQuerySchema,
       },
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const vttContent = await storyboardsService.getVttContent(Number(id));
+      const { autogenerate } = request.query as {
+        autogenerate?: boolean | string;
+      };
+      const shouldAutogenerate =
+        autogenerate === undefined
+          ? false
+          : typeof autogenerate === "string"
+            ? autogenerate.toLowerCase() === "true"
+            : autogenerate;
 
-      reply.header("Content-Type", "text/vtt");
-      reply.header("Cache-Control", "public, max-age=86400");
-      return reply.send(vttContent);
+      try {
+        const vttContent = await storyboardsService.getVttContent(Number(id));
+
+        reply.header("Content-Type", "text/vtt");
+        reply.header("Cache-Control", "public, max-age=86400");
+        return reply.send(vttContent);
+      } catch (error) {
+        if (shouldAutogenerate && error instanceof NotFoundError) {
+          await storyboardsService.queueGenerate(Number(id));
+        }
+
+        throw error;
+      }
     },
   );
 

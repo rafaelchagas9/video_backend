@@ -16,6 +16,7 @@ export interface StorageSnapshot {
   storyboards_size_bytes: number;
   profile_pictures_size_bytes: number;
   converted_size_bytes: number;
+  faces_size_bytes: number;
   database_size_bytes: number;
   directory_breakdown: DirectoryStorageInfo[] | null;
   created_at: string;
@@ -29,6 +30,7 @@ export interface StorageSnapshotRow {
   storyboards_size_bytes: number;
   profile_pictures_size_bytes: number;
   converted_size_bytes: number;
+  faces_size_bytes: number;
   database_size_bytes: number;
   directory_breakdown: string | null;
   created_at: string;
@@ -41,6 +43,7 @@ export interface CurrentStorageStats {
   storyboards_size_bytes: number;
   profile_pictures_size_bytes: number;
   converted_size_bytes: number;
+  faces_size_bytes: number;
   database_size_bytes: number;
   directory_breakdown: DirectoryStorageInfo[];
   total_managed_size_bytes: number;

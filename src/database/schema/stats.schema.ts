@@ -9,6 +9,7 @@ export const statsStorageSnapshotsTable = pgTable('stats_storage_snapshots', {
   storyboardsSizeBytes: integer('storyboards_size_bytes').default(0).notNull(),
   profilePicturesSizeBytes: integer('profile_pictures_size_bytes').default(0).notNull(),
   convertedSizeBytes: integer('converted_size_bytes').default(0).notNull(),
+  facesSizeBytes: integer('faces_size_bytes').default(0).notNull(),
   databaseSizeBytes: integer('database_size_bytes').default(0).notNull(),
   directoryBreakdown: text('directory_breakdown'),
   createdAt: timestamp('created_at').defaultNow().notNull(),

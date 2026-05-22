@@ -54,6 +54,7 @@ export const listVideosQuerySchema = z
     limit: z.coerce.number().int().positive().max(100).default(20),
     directory_id: z.coerce.number().int().positive().optional(),
     search: z.string().optional(),
+    searchFullPath: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
     sort: z
       .enum([
         "created_at",
@@ -244,7 +245,6 @@ const videoSchema = z.object({
   updated_at: z.string(),
   thumbnail_id: z.number().nullable().optional(),
   thumbnail_url: z.string().nullable().optional(),
-  thumbnail_base64: z.string().nullable().optional(),
   is_favorite: z.boolean(),
 });
 
@@ -432,6 +432,11 @@ export const compressionSuggestionsQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().default(0),
 });
 
+export const relatedVideosQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).default(12),
+  refresh: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
+});
+
 const compressionSuggestionSchema = z.object({
   video_id: z.number(),
   file_name: z.string(),
@@ -442,20 +447,47 @@ const compressionSuggestionSchema = z.object({
   bitrate: z.number().nullable(),
   fps: z.number().nullable(),
   duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
-  total_play_count: z.number(),
-  total_watch_seconds: z.number(),
-  last_played_at: z.string().nullable(),
-  technical_score: z.number(),
-  usage_score: z.number(),
-  recommended_actions: z.array(z.string()),
+  is_favorite: z.boolean(),
+  bytes_per_second: z.number().nullable(),
+  estimated_output_bytes: z.number(),
+  estimated_savings_bytes: z.number(),
+  estimated_savings_percent: z.number(),
+  confidence: z.enum(["high", "medium", "low"]),
+  priority_score: z.number(),
+  recommended_preset: z.string(),
+  recommended_preset_name: z.string(),
   reasons: z.array(z.string()),
   thumbnail_id: z.number().nullable().optional(),
   thumbnail_url: z.string().nullable().optional(),
 });
 
+const compressionSummarySchema = z.object({
+  total_candidates: z.number(),
+  total_estimated_savings_bytes: z.number(),
+  avg_estimated_savings_percent: z.number(),
+  historical_accuracy_note: z.string(),
+});
+
 export const compressionSuggestionsResponseSchema = z.object({
   success: z.literal(true),
   data: z.array(compressionSuggestionSchema),
+  summary: compressionSummarySchema,
+});
+
+const relatedVideoSchema = z.object({
+  video: videoSchema,
+  score: z.number(),
+  reasons: z.array(z.string()),
+});
+
+export const relatedVideosResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(relatedVideoSchema),
+  meta: z.object({
+    computed_at: z.string().nullable(),
+    refreshed: z.boolean(),
+    candidate_count: z.number(),
+  }),
 });
 
 // Duplicate files
@@ -470,7 +502,7 @@ const duplicateVideoSchema = z.object({
 const duplicateGroupSchema = z.object({
   file_hash: z.string(),
   count: z.number(),
-  total_size_bytes: z.number(),
+  total_size_bytes: z.string(),
   videos: z.array(duplicateVideoSchema),
 });
 

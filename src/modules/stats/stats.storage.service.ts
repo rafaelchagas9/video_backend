@@ -108,13 +108,14 @@ export class StorageStatsService {
     const storyboardsSize = this.getDirectorySize(env.STORYBOARDS_DIR);
     const profilePicturesSize = this.getDirectorySize(env.PROFILE_PICTURES_DIR);
     const convertedSize = this.getDirectorySize(env.CONVERTED_VIDEOS_DIR);
+    const facesSize = this.getDirectorySize(env.FACES_DIR);
 
     // Note: PostgreSQL stores data in its own data directory managed by the server
     // We no longer track database file size since it's not a local SQLite file
     const databaseSize = 0;
 
     const totalManagedSize =
-      thumbnailsSize + storyboardsSize + profilePicturesSize + convertedSize;
+      thumbnailsSize + storyboardsSize + profilePicturesSize + convertedSize + facesSize;
 
     return {
       total_video_size_bytes: videoStats.total_size,
@@ -123,6 +124,7 @@ export class StorageStatsService {
       storyboards_size_bytes: storyboardsSize,
       profile_pictures_size_bytes: profilePicturesSize,
       converted_size_bytes: convertedSize,
+      faces_size_bytes: facesSize,
       database_size_bytes: databaseSize,
       directory_breakdown: directoryBreakdown,
       total_managed_size_bytes: totalManagedSize,
@@ -144,6 +146,7 @@ export class StorageStatsService {
         storyboardsSizeBytes: current.storyboards_size_bytes,
         profilePicturesSizeBytes: current.profile_pictures_size_bytes,
         convertedSizeBytes: current.converted_size_bytes,
+        facesSizeBytes: current.faces_size_bytes,
         databaseSizeBytes: current.database_size_bytes,
         directoryBreakdown: JSON.stringify(current.directory_breakdown),
       })
@@ -250,6 +253,9 @@ export class StorageStatsService {
       ),
       converted_size_bytes: Number(
         row.converted_size_bytes ?? row.convertedSizeBytes ?? 0,
+      ),
+      faces_size_bytes: Number(
+        row.faces_size_bytes ?? row.facesSizeBytes ?? 0,
       ),
       database_size_bytes: Number(
         row.database_size_bytes ?? row.databaseSizeBytes ?? 0,

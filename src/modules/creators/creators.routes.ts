@@ -314,11 +314,12 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
           creator.face_thumbnail_path ??
           creator.profile_picture_path ??
           join(process.cwd(), "public", "pfp.png");
-      } else if (!creator.profile_picture_path) {
-        // Return default profile picture
-        filePath = join(process.cwd(), "public", "pfp.png");
-      } else {
+      } else if (creator.profile_picture_path) {
         filePath = creator.profile_picture_path;
+      } else if (creator.face_thumbnail_path) {
+        filePath = creator.face_thumbnail_path;
+      } else {
+        filePath = join(process.cwd(), "public", "pfp.png");
       }
 
       const ext = filePath.split(".").pop()?.toLowerCase();

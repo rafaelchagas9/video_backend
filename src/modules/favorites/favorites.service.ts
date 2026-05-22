@@ -9,6 +9,11 @@ export class FavoritesService {
     // Verify video exists
     await videosService.findById(videoId);
 
+    // Double check if already favorited to ensure idempotency even without DB constraint
+    if (await this.isFavorite(userId, videoId)) {
+      return;
+    }
+
     // Idempotent - ignore if already exists
     try {
       await db.insert(favoritesTable).values({
@@ -44,7 +49,9 @@ export class FavoritesService {
       SELECT v.*, f.added_at, t.id as thumbnail_id
       FROM videos v
       INNER JOIN favorites f ON v.id = f.video_id
-      LEFT JOIN thumbnails t ON v.id = t.video_id
+      LEFT JOIN (
+        SELECT DISTINCT ON (video_id) id, video_id FROM thumbnails
+      ) t ON v.id = t.video_id
       WHERE f.user_id = ${userId}
       ORDER BY f.added_at DESC
     `;

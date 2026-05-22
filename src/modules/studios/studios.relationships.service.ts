@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   studiosTable,
@@ -15,6 +15,22 @@ export class StudiosRelationshipsService {
   // Creator Relationship Methods
   async linkCreator(studioId: number, creatorId: number): Promise<void> {
     await this.findStudioById(studioId); // Ensure studio exists
+
+    // Check if association already exists
+    const existing = await db
+      .select()
+      .from(creatorStudiosTable)
+      .where(
+        and(
+          eq(creatorStudiosTable.creatorId, creatorId),
+          eq(creatorStudiosTable.studioId, studioId),
+        ),
+      )
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      throw new ConflictError("Creator is already linked to this studio");
+    }
 
     try {
       await db.insert(creatorStudiosTable).values({
@@ -85,6 +101,22 @@ export class StudiosRelationshipsService {
   async linkVideo(studioId: number, videoId: number): Promise<void> {
     await this.findStudioById(studioId); // Ensure studio exists
 
+    // Check if association already exists
+    const existing = await db
+      .select()
+      .from(videoStudiosTable)
+      .where(
+        and(
+          eq(videoStudiosTable.videoId, videoId),
+          eq(videoStudiosTable.studioId, studioId),
+        ),
+      )
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      throw new ConflictError("Video is already linked to this studio");
+    }
+
     try {
       await db.insert(videoStudiosTable).values({
         videoId,
@@ -121,7 +153,9 @@ export class StudiosRelationshipsService {
       SELECT v.*, t.id as thumbnail_id
       FROM videos v
       INNER JOIN video_studios vs ON v.id = vs.video_id
-      LEFT JOIN thumbnails t ON v.id = t.video_id
+      LEFT JOIN (
+        SELECT DISTINCT ON (video_id) id, video_id FROM thumbnails
+      ) t ON v.id = t.video_id
       WHERE vs.studio_id = ${studioId}
       ORDER BY v.created_at DESC
     `);

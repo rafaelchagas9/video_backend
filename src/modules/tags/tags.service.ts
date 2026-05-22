@@ -1,4 +1,4 @@
-import { eq, sql, isNull, or, like } from "drizzle-orm";
+import { eq, sql, isNull, or, like, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { tagsTable, videoTagsTable } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
@@ -378,11 +378,13 @@ export class TagsService {
   async getVideos(tagId: number): Promise<Video[]> {
     await this.findById(tagId); // Ensure tag exists
 
-    // Use raw query to join with videos table
+    const descendants = await this.getDescendants(tagId);
+    const tagIds = [tagId, ...descendants.map((d) => d.id)];
+
     const videos = await db.execute<any>(sql`
-      SELECT v.* FROM videos v
+      SELECT DISTINCT v.* FROM videos v
       INNER JOIN video_tags vt ON v.id = vt.video_id
-      WHERE vt.tag_id = ${tagId}
+      WHERE vt.tag_id = ANY(${sql.raw(`ARRAY[${tagIds.join(",")}]::int[]`)})
       ORDER BY v.created_at DESC
     `);
 
@@ -393,6 +395,22 @@ export class TagsService {
   async addToVideo(videoId: number, tagId: number): Promise<void> {
     // Verify tag exists
     await this.findById(tagId);
+
+    // Double check if already associated to prevent duplicate records
+    const existing = await db
+      .select()
+      .from(videoTagsTable)
+      .where(
+        and(
+          eq(videoTagsTable.videoId, videoId),
+          eq(videoTagsTable.tagId, tagId),
+        ),
+      )
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      throw new ConflictError("Tag is already associated with this video");
+    }
 
     try {
       await db.insert(videoTagsTable).values({

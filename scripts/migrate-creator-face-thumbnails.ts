@@ -15,22 +15,25 @@
  *   --help, -h            Show this help message
  */
 
-import { db } from '@/config/drizzle';
-import { creatorsTable, creatorFaceEmbeddingsTable } from '@/database/schema';
-import { isNotNull, isNull, and, eq } from 'drizzle-orm';
-import { getFaceRecognitionClient } from '@/modules/face-recognition';
-import { cropFaceThumbnail } from '@/utils/image-processing';
-import { logger } from '@/utils/logger';
-import { env } from '@/config/env';
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { db } from "../src/config/drizzle";
+import {
+  creatorsTable,
+  creatorFaceEmbeddingsTable,
+} from "../src/database/schema";
+import { isNotNull, isNull, and, eq } from "drizzle-orm";
+import { getFaceRecognitionClient } from "../src/modules/face-recognition";
+import { cropFaceThumbnail } from "../src/utils/image-processing";
+import { logger } from "../src/utils/logger";
+import { env } from "../src/config/env";
+import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { join } from "path";
 
 // CLI Arguments
 const args = {
-  generateEmbeddings: process.argv.includes('--generate-embeddings'),
-  force: process.argv.includes('--force'),
-  dryRun: process.argv.includes('--dry-run'),
-  help: process.argv.includes('--help') || process.argv.includes('-h'),
+  generateEmbeddings: process.argv.includes("--generate-embeddings"),
+  force: process.argv.includes("--force"),
+  dryRun: process.argv.includes("--dry-run"),
+  help: process.argv.includes("--help") || process.argv.includes("-h"),
 };
 
 // Statistics tracking
@@ -94,29 +97,32 @@ Examples:
  * Pre-flight checks to ensure service availability and directory structure
  */
 async function preflightChecks(): Promise<boolean> {
-  console.log('\n🔍 Running pre-flight checks...\n');
+  console.log("\n🔍 Running pre-flight checks...\n");
 
   // Check face recognition service
-  console.log('Checking face recognition service availability...');
+  console.log("Checking face recognition service availability...");
   const faceClient = getFaceRecognitionClient();
 
   const available = await faceClient.waitForAvailability(30000, 2000);
 
   if (!available) {
-    console.error('❌ Face recognition service unavailable at:', env.FACE_SERVICE_URL);
-    console.error('   Please ensure the service is running and try again.');
+    console.error(
+      "❌ Face recognition service unavailable at:",
+      env.FACE_SERVICE_URL,
+    );
+    console.error("   Please ensure the service is running and try again.");
     return false;
   }
 
-  console.log('✅ Face recognition service is available\n');
+  console.log("✅ Face recognition service is available\n");
 
   // Ensure faces directory exists
-  const faceDir = join(env.PROFILE_PICTURES_DIR, 'faces');
+  const faceDir = join(env.PROFILE_PICTURES_DIR, "faces");
   if (!existsSync(faceDir)) {
     console.log(`Creating faces directory: ${faceDir}`);
     mkdirSync(faceDir, { recursive: true });
   }
-  console.log('✅ Faces directory exists\n');
+  console.log("✅ Faces directory exists\n");
 
   return true;
 }
@@ -136,20 +142,28 @@ async function processCreator(creator: {
     if (!existsSync(creator.profilePicturePath)) {
       console.log(`📁 File missing for ${creator.name}`);
       stats.fileMissing++;
-      logger.error({ creatorId: creator.id, path: creator.profilePicturePath }, 'Profile picture file not found');
+      logger.error(
+        { creatorId: creator.id, path: creator.profilePicturePath },
+        "Profile picture file not found",
+      );
       return;
     }
 
     // Detect faces in profile picture
     const faceClient = getFaceRecognitionClient();
-    const result = await faceClient.detectFacesFromFile(creator.profilePicturePath);
+    const result = await faceClient.detectFacesFromFile(
+      creator.profilePicturePath,
+    );
 
     if (result.faces.length === 0) {
       console.log(`⚠️  No face detected for ${creator.name}`);
       stats.noFaceDetected++;
       stats.noFaceDetectedIds.push(creator.id);
       stats.noFaceDetectedPfpPaths.push(creator.profilePicturePath);
-      logger.warn({ creatorId: creator.id }, 'No face detected in profile picture');
+      logger.warn(
+        { creatorId: creator.id },
+        "No face detected in profile picture",
+      );
       return;
     }
 
@@ -160,19 +174,22 @@ async function processCreator(creator: {
 
     if (result.faces.length > 1) {
       logger.info(
-        { creatorId: creator.id, faceCount: result.faces.length, bestScore: bestFace.det_score },
-        'Multiple faces detected, using highest confidence',
+        {
+          creatorId: creator.id,
+          faceCount: result.faces.length,
+          bestScore: bestFace.det_score,
+        },
+        "Multiple faces detected, using highest confidence",
       );
     }
 
     // Generate face thumbnail filename
-    const faceDir = join(env.PROFILE_PICTURES_DIR, 'faces');
-    const faceFilename = `creator_${creator.id}_${Date.now()}_face.jpg`;
+    const faceDir = join(env.PROFILE_PICTURES_DIR, "faces");
+    const faceFilename = `creator_${creator.id}_${Date.now()}_face.${env.FACE_THUMBNAIL_FORMAT}`;
     const facePath = join(faceDir, faceFilename);
 
     if (!args.dryRun) {
-      // Crop and save face thumbnail
-      await cropFaceThumbnail({
+      const { outputPath } = await cropFaceThumbnail({
         inputPath: creator.profilePicturePath,
         outputPath: facePath,
         faceBox: bestFace.bbox,
@@ -180,16 +197,18 @@ async function processCreator(creator: {
         imageHeight: result.image_height,
       });
 
-      // Update database with face thumbnail path
       await db
         .update(creatorsTable)
         .set({
-          faceThumbnailPath: facePath,
+          faceThumbnailPath: outputPath,
           updatedAt: new Date(),
         })
         .where(eq(creatorsTable.id, creator.id));
 
-      logger.info({ creatorId: creator.id, facePath }, 'Face thumbnail generated');
+      logger.info(
+        { creatorId: creator.id, facePath: outputPath },
+        "Face thumbnail generated",
+      );
     }
 
     // Generate face embedding if requested
@@ -201,11 +220,13 @@ async function processCreator(creator: {
     console.log(`✅ ${creator.name} (${duration}ms)`);
     stats.success++;
   } catch (error) {
-    console.log(`❌ Failed: ${creator.name} - ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.log(
+      `❌ Failed: ${creator.name} - ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
     stats.errors++;
     stats.errorIds.push(creator.id);
     stats.errorPfpPaths.push(creator.profilePicturePath);
-    logger.error({ creatorId: creator.id, error }, 'Failed to process creator');
+    logger.error({ creatorId: creator.id, error }, "Failed to process creator");
   }
 }
 
@@ -224,7 +245,10 @@ async function generateFaceEmbedding(
     const embeddingResult = await faceClient.detectFacesFromFile(facePath);
 
     if (embeddingResult.faces.length === 0) {
-      logger.warn({ creatorId }, 'No face detected in cropped thumbnail for embedding');
+      logger.warn(
+        { creatorId },
+        "No face detected in cropped thumbnail for embedding",
+      );
       return;
     }
 
@@ -252,7 +276,7 @@ async function generateFaceEmbedding(
     await db.insert(creatorFaceEmbeddingsTable).values({
       creatorId,
       embedding,
-      sourceType: 'profile_picture',
+      sourceType: "profile_picture",
       detScore: face.det_score,
       isPrimary,
       estimatedAge: face.age,
@@ -268,10 +292,10 @@ async function generateFaceEmbedding(
 
     logger.info(
       { creatorId, isPrimary, detScore: face.det_score },
-      'Face embedding created',
+      "Face embedding created",
     );
   } catch (error) {
-    logger.error({ creatorId, error }, 'Failed to generate face embedding');
+    logger.error({ creatorId, error }, "Failed to generate face embedding");
   }
 }
 
@@ -279,19 +303,21 @@ async function generateFaceEmbedding(
  * Main migration execution
  */
 async function runMigration(): Promise<void> {
-  console.log('\n🚀 Creator Face Thumbnail Migration');
-  console.log('=====================================\n');
+  console.log("\n🚀 Creator Face Thumbnail Migration");
+  console.log("=====================================\n");
 
   if (args.dryRun) {
-    console.log('🔍 DRY RUN MODE - No changes will be made\n');
+    console.log("🔍 DRY RUN MODE - No changes will be made\n");
   }
 
   if (args.force) {
-    console.log('⚡ FORCE MODE - Regenerating existing thumbnails\n');
+    console.log("⚡ FORCE MODE - Regenerating existing thumbnails\n");
   }
 
   if (args.generateEmbeddings) {
-    console.log('🧠 EMBEDDINGS MODE - Generating face recognition embeddings\n');
+    console.log(
+      "🧠 EMBEDDINGS MODE - Generating face recognition embeddings\n",
+    );
   }
 
   // Pre-flight checks
@@ -305,7 +331,7 @@ async function runMigration(): Promise<void> {
     ? isNotNull(creatorsTable.profilePicturePath)
     : and(
         isNotNull(creatorsTable.profilePicturePath),
-        isNull(creatorsTable.faceThumbnailPath)
+        isNull(creatorsTable.faceThumbnailPath),
       );
 
   const creatorsToMigrate = await db
@@ -320,17 +346,17 @@ async function runMigration(): Promise<void> {
   stats.total = creatorsToMigrate.length;
 
   if (stats.total === 0) {
-    console.log('✅ No creators need migration. All done!\n');
+    console.log("✅ No creators need migration. All done!\n");
     return;
   }
 
   console.log(`Found ${stats.total} creator(s) to process\n`);
-  console.log('Processing creators...\n');
+  console.log("Processing creators...\n");
 
   // Process each creator
   for (let i = 0; i < creatorsToMigrate.length; i++) {
     const creator = creatorsToMigrate[i];
-    const progress = ((i + 1) / stats.total * 100).toFixed(1);
+    const progress = (((i + 1) / stats.total) * 100).toFixed(1);
 
     process.stdout.write(`[${i + 1}/${stats.total}] (${progress}%) `);
 
@@ -352,18 +378,28 @@ async function runMigration(): Promise<void> {
  * Print migration summary statistics
  */
 function printSummary(): void {
-  console.log('\n=====================================');
-  console.log('       Migration Summary');
-  console.log('=====================================\n');
+  console.log("\n=====================================");
+  console.log("       Migration Summary");
+  console.log("=====================================\n");
 
   console.log(`Total Creators:       ${stats.total}`);
-  console.log(`✅ Success:           ${stats.success} (${(stats.success / stats.total * 100).toFixed(1)}%)`);
-  console.log(`⚠️  No Face Detected:  ${stats.noFaceDetected} (${(stats.noFaceDetected / stats.total * 100).toFixed(1)}%)`);
-  console.log(`📁 File Missing:       ${stats.fileMissing} (${(stats.fileMissing / stats.total * 100).toFixed(1)}%)`);
-  console.log(`❌ Errors:             ${stats.errors} (${(stats.errors / stats.total * 100).toFixed(1)}%)`);
+  console.log(
+    `✅ Success:           ${stats.success} (${((stats.success / stats.total) * 100).toFixed(1)}%)`,
+  );
+  console.log(
+    `⚠️  No Face Detected:  ${stats.noFaceDetected} (${((stats.noFaceDetected / stats.total) * 100).toFixed(1)}%)`,
+  );
+  console.log(
+    `📁 File Missing:       ${stats.fileMissing} (${((stats.fileMissing / stats.total) * 100).toFixed(1)}%)`,
+  );
+  console.log(
+    `❌ Errors:             ${stats.errors} (${((stats.errors / stats.total) * 100).toFixed(1)}%)`,
+  );
 
   if (stats.noFaceDetectedIds.length > 0) {
-    console.log(`\n⚠️  Creators with no face detected (${stats.noFaceDetectedIds.length}):`);
+    console.log(
+      `\n⚠️  Creators with no face detected (${stats.noFaceDetectedIds.length}):`,
+    );
     stats.noFaceDetectedIds.forEach((id, index) => {
       console.log(`   [${id}] ${stats.noFaceDetectedPfpPaths[index]}`);
     });
@@ -383,10 +419,10 @@ function printSummary(): void {
   }
 
   if (args.dryRun) {
-    console.log('\n🔍 DRY RUN - No changes were made');
+    console.log("\n🔍 DRY RUN - No changes were made");
   }
 
-  console.log('\n✅ Migration complete!\n');
+  console.log("\n✅ Migration complete!\n");
 }
 
 // Run migration
@@ -395,7 +431,7 @@ runMigration()
     process.exit(0);
   })
   .catch((error) => {
-    console.error('\n❌ Migration failed:', error);
-    logger.error({ error }, 'Migration script failed');
+    console.error("\n❌ Migration failed:", error);
+    logger.error({ error }, "Migration script failed");
     process.exit(1);
   });

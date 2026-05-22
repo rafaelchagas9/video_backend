@@ -5,6 +5,8 @@ import { NotFoundError } from "@/utils/errors";
 import { env } from "@/config/env";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { processProfilePicture } from "@/utils/image-processing";
+import { imageDownloadRateLimiter } from "@/utils/async-rate-limiter";
 import type {
   Studio,
   StudioSocialLink,
@@ -19,7 +21,7 @@ export class StudiosSocialService {
   async uploadProfilePicture(
     id: number,
     fileBuffer: Buffer,
-    filename: string,
+    _filename: string,
   ): Promise<Studio> {
     const studio = await this.findStudioById(id);
 
@@ -36,13 +38,20 @@ export class StudiosSocialService {
       unlinkSync(studio.profile_picture_path);
     }
 
-    // Generate unique filename
-    const ext = filename.split(".").pop() || "jpg";
-    const newFilename = `studio_${id}_${Date.now()}.${ext}`;
+    const format = env.PROFILE_PICTURE_FORMAT;
+    const quality = env.PROFILE_PICTURE_QUALITY;
+    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
+    const newFilename = `studio_${id}_${Date.now()}.${format}`;
     const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
 
-    // Save file
-    writeFileSync(filePath, fileBuffer);
+    const processedBuffer = await processProfilePicture({
+      input: fileBuffer,
+      format,
+      maxSize,
+      quality,
+    });
+
+    writeFileSync(filePath, processedBuffer);
 
     // Update database
     await db
@@ -81,37 +90,35 @@ export class StudiosSocialService {
     const studio = await this.findStudioById(studioId);
 
     // Download image from URL
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(
-        `Failed to download image: ${response.status} ${response.statusText}`,
-      );
-    }
+    const buffer = await imageDownloadRateLimiter.schedule(async () => {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(
+          `Failed to download image: ${response.status} ${response.statusText}`,
+        );
+      }
 
-    const contentType = response.headers.get("content-type");
-    if (!contentType || !contentType.startsWith("image/")) {
-      throw new Error("URL does not point to a valid image");
-    }
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.startsWith("image/")) {
+        throw new Error("URL does not point to a valid image");
+      }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
+      return Buffer.from(await response.arrayBuffer());
+    });
 
     // Validate minimum size
     if (buffer.length < 100) {
       throw new Error("Downloaded image is too small");
     }
 
-    // Determine extension from content type
-    let ext = "jpg";
-    if (contentType.includes("png")) ext = "png";
-    else if (contentType.includes("webp")) ext = "webp";
-    else if (contentType.includes("gif")) ext = "gif";
+    const format = env.PROFILE_PICTURE_FORMAT;
+    const quality = env.PROFILE_PICTURE_QUALITY;
+    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
 
-    // Ensure directory exists
     if (!existsSync(env.PROFILE_PICTURES_DIR)) {
       mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
     }
 
-    // Delete old picture if exists
     if (
       studio.profile_picture_path &&
       existsSync(studio.profile_picture_path)
@@ -119,12 +126,17 @@ export class StudiosSocialService {
       unlinkSync(studio.profile_picture_path);
     }
 
-    // Generate unique filename
-    const newFilename = `studio_${studioId}_${Date.now()}.${ext}`;
+    const newFilename = `studio_${studioId}_${Date.now()}.${format}`;
     const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
 
-    // Save file
-    writeFileSync(filePath, buffer);
+    const processedBuffer = await processProfilePicture({
+      input: buffer,
+      format,
+      maxSize,
+      quality,
+    });
+
+    writeFileSync(filePath, processedBuffer);
 
     // Update database
     await db

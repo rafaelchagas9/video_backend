@@ -73,3 +73,36 @@ export const getVideosByFaceSchema = z.object({
 });
 
 export type GetVideosByFaceInput = z.infer<typeof getVideosByFaceSchema>;
+
+/**
+ * Enhanced face detection response schema (frontend-friendly)
+ */
+export const matchedCreatorSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  profilePictureUrl: z.string().nullable().optional(),
+});
+
+export const faceDetectionResponseSchema = z.object({
+  id: z.number(),
+  videoId: z.number(),
+  timestampSeconds: z.number(),
+  frameIndex: z.number().nullable(),
+  detectionConfidence: z.number(),
+  matchedCreator: matchedCreatorSchema.optional(),
+  matchConfidence: z.number().nullable().optional(),
+  matchStatus: z.enum(['pending', 'confirmed', 'rejected', 'no_match']),
+  estimatedAge: z.number().nullable().optional(),
+  estimatedGender: z.enum(['M', 'F']).nullable().optional(),
+  faceImageUrl: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const videoFacesResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(faceDetectionResponseSchema),
+});
+
+export type FaceDetectionResponse = z.infer<typeof faceDetectionResponseSchema>;
+export type MatchedCreator = z.infer<typeof matchedCreatorSchema>;

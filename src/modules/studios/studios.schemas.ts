@@ -92,7 +92,7 @@ const videoSchema = z.object({
   file_path: z.string(),
   file_name: z.string(),
   directory_id: z.number(),
-  file_size_bytes: z.number(),
+  file_size_bytes: z.preprocess(parseNullableNumber, z.number()),
   duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
   title: z.string().nullable(),
   is_available: z.boolean(),

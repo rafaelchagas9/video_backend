@@ -26,6 +26,7 @@ export function buildVideoFilters(
   const {
     directory_id,
     search,
+    searchFullPath = false,
     ids,
     include_hidden = false,
     // Resolution filters
@@ -95,12 +96,18 @@ export function buildVideoFilters(
   // Search filter
   if (search) {
     const searchPattern = `%${search}%`;
+    const searchConditions = [
+      ilike(videosTable.title, searchPattern),
+      ilike(videosTable.description, searchPattern),
+      ilike(videosTable.fileName, searchPattern),
+    ];
+
+    if (searchFullPath) {
+      searchConditions.push(ilike(videosTable.filePath, searchPattern));
+    }
+
     conditions.push(
-      or(
-        ilike(videosTable.title, searchPattern),
-        ilike(videosTable.description, searchPattern),
-        ilike(videosTable.fileName, searchPattern),
-      )!,
+      or(...searchConditions)!,
     );
   }
 

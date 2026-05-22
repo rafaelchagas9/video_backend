@@ -6,6 +6,7 @@ import { videosSearchService } from "./videos.search.service";
 import { videosSuggestionsService } from "./videos.suggestions.service";
 import { videosMetadataService } from "./videos.metadata.service";
 import { videosBulkService } from "./videos.bulk.service";
+import { videosRelatedService } from "./videos.related.service";
 import { streamingService } from "./streaming.service";
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
@@ -23,6 +24,8 @@ import {
   triageQueueResponseSchema,
   compressionSuggestionsQuerySchema,
   compressionSuggestionsResponseSchema,
+  relatedVideosQuerySchema,
+  relatedVideosResponseSchema,
   creatorIdParamSchema,
   tagIdParamSchema,
   studioIdParamSchema,
@@ -105,12 +108,16 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const suggestions =
-        await videosSuggestionsService.getCompressionSuggestions(request.query);
+      const { suggestions, summary } =
+        await videosSuggestionsService.getCompressionSuggestions(
+          request.user!.id,
+          request.query,
+        );
 
       return reply.send({
         success: true,
         data: suggestions,
+        summary,
       });
     },
   );
@@ -386,6 +393,39 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // Get related videos
+  app.get(
+    "/:id/related",
+    {
+      schema: {
+        tags: ["videos", "related"],
+        summary: "Get related videos",
+        description:
+          "Returns cached, explainable related-video recommendations for exploration.",
+        params: idParamSchema,
+        querystring: relatedVideosQuerySchema,
+        response: {
+          200: relatedVideosResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videosRelatedService.getRelated(
+        request.user!.id,
+        request.params.id,
+        request.query,
+      );
+
+      return reply.send({
+        success: true,
+        data: result.data,
+        meta: result.meta,
+      });
+    },
+  );
+
   // Get video by ID
   app.get(
     "/:id",
@@ -499,6 +539,38 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  // Refresh extracted metadata and thumbnail
+  app.post(
+    "/:id/refresh",
+    {
+      schema: {
+        tags: ["videos", "thumbnails"],
+        summary: "Refresh video metadata and thumbnail",
+        description:
+          "Re-extracts technical video metadata from disk and regenerates the thumbnail for a video.",
+        params: idParamSchema,
+        response: {
+          200: videoResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const video = await videosService.refreshDerivedData(
+        request.params.id,
+        request.user!.id,
+      );
+
+      return reply.send({
+        success: true,
+        data: video,
+        message: "Video metadata and thumbnail refreshed successfully",
+      });
+    },
+  );
+
   // Stream video with range request support (requires authentication)
   // Note: Response schema intentionally omits 200/206 because streaming returns raw bytes, not JSON
   app.get(
@@ -517,12 +589,6 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: number };
       const videoId = id;
       const rangeHeader = request.headers.range;
-
-      // Queue storyboard generation if not already exists/processing
-      const { storyboardsService } =
-        await import("@/modules/storyboards/storyboards.service");
-      // Non-blocking: queueGenerate handles deduplication and sequential processing
-      storyboardsService.queueGenerate(videoId);
 
       const result = await streamingService.createStream({
         videoId,

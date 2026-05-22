@@ -5,7 +5,6 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
-import websocket from "@fastify/websocket";
 import multipart from "@fastify/multipart";
 import {
   serializerCompiler,
@@ -17,6 +16,56 @@ import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
 import { getDatabase } from "./config/database";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
+
+type ValidationIssue = {
+  instancePath?: string;
+  path?: Array<string | number>;
+  message?: string;
+  keyword?: string;
+  params?: {
+    limit?: number;
+  };
+};
+
+type ValidationErrorLike = Error & {
+  validation?: ValidationIssue[];
+  validationContext?: string;
+};
+
+function formatValidationPath(context: string, issue: ValidationIssue): string {
+  if (issue.instancePath && issue.instancePath.length > 0) {
+    const segments = issue.instancePath
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment));
+
+    return segments.reduce<string>((acc, segment) => {
+      return /^\d+$/.test(segment) ? `${acc}[${segment}]` : `${acc}.${segment}`;
+    }, context);
+  }
+
+  if (issue.path && issue.path.length > 0) {
+    return issue.path.reduce<string>((acc, segment) => {
+      return typeof segment === "number"
+        ? `${acc}[${segment}]`
+        : `${acc}.${segment}`;
+    }, context);
+  }
+
+  return context;
+}
+
+function formatValidationIssue(
+  context: string,
+  issue: ValidationIssue,
+): string {
+  const path = formatValidationPath(context, issue);
+  const message = issue.message ?? "invalid value";
+  const hasLimit = typeof issue.params?.limit === "number";
+  const limitSuffix = hasLimit ? ` (limit: ${issue.params!.limit})` : "";
+
+  return `${path}: ${message}${limitSuffix}`;
+}
 
 export async function buildServer() {
   const fastify = Fastify({
@@ -56,7 +105,65 @@ export async function buildServer() {
     origin:
       env.NODE_ENV === "development"
         ? true
-        : [env.BASE_URL, "http://localhost:5173"],
+        : (origin, callback) => {
+            if (!origin) {
+              callback(null, true);
+              return;
+            }
+
+            const allowedOrigins = new Set(
+              [
+                env.BASE_URL,
+                "http://localhost:5173",
+                ...env.CORS_ORIGINS.split(","),
+              ]
+                .map((value) => value.trim())
+                .filter((value) => value.length > 0),
+            );
+
+            if (allowedOrigins.has(origin)) {
+              callback(null, true);
+              return;
+            }
+
+            let originHostname: string | null = null;
+            try {
+              originHostname = new URL(origin).hostname.toLowerCase();
+            } catch {
+              callback(null, false);
+              return;
+            }
+
+            const allowedHostnameSuffixes = new Set<string>();
+            for (const allowedOrigin of allowedOrigins) {
+              try {
+                const hostname = new URL(allowedOrigin).hostname.toLowerCase();
+                const parts = hostname.split(".");
+                if (parts.length >= 3) {
+                  allowedHostnameSuffixes.add(parts.slice(1).join("."));
+                }
+              } catch {
+                continue;
+              }
+            }
+
+            const matchesAllowedSuffix = Array.from(
+              allowedHostnameSuffixes,
+            ).some(
+              (suffix) =>
+                originHostname === suffix ||
+                originHostname.endsWith(`.${suffix}`),
+            );
+
+            if (!matchesAllowedSuffix) {
+              fastify.log.warn(
+                { origin, allowedOrigins: Array.from(allowedOrigins) },
+                "Blocked CORS origin",
+              );
+            }
+
+            callback(null, matchesAllowedSuffix);
+          },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Range"],
@@ -107,6 +214,7 @@ export async function buildServer() {
         { name: "conversion", description: "Video conversion and transcoding" },
         { name: "scheduler", description: "Scan scheduling" },
         { name: "storyboards", description: "Slider preview thumbnails" },
+        { name: "events", description: "Server-sent event streams" },
         { name: "stats", description: "System and library statistics" },
         { name: "system", description: "System health and status" },
       ],
@@ -121,9 +229,6 @@ export async function buildServer() {
     },
   });
 
-  // WebSocket support
-  await fastify.register(websocket);
-
   // Multipart form data support (for file uploads)
   await fastify.register(multipart, {
     limits: {
@@ -133,7 +238,9 @@ export async function buildServer() {
   });
 
   // Global error handler (must be registered BEFORE routes)
-  fastify.setErrorHandler((error, _request, reply) => {
+  fastify.setErrorHandler((error, request, reply) => {
+    const validationError = error as ValidationErrorLike;
+
     if (error instanceof AppError) {
       return reply.status(error.statusCode).send({
         success: false,
@@ -145,13 +252,45 @@ export async function buildServer() {
     }
 
     // Zod validation errors
-    if ((error as any).validation) {
+    if (validationError.validation) {
+      const validationContext =
+        typeof validationError.validationContext === "string"
+          ? validationError.validationContext
+          : "body";
+      const validationIssues: ValidationIssue[] = Array.isArray(
+        validationError.validation,
+      )
+        ? validationError.validation
+        : [];
+      const formattedIssues = validationIssues.map((issue) =>
+        formatValidationIssue(validationContext, issue),
+      );
+      const detailsSuffix =
+        formattedIssues.length > 1
+          ? ` (+${formattedIssues.length - 1} more issue${formattedIssues.length > 2 ? "s" : ""})`
+          : "";
+
+      fastify.log.warn(
+        {
+          requestId: request.id,
+          method: request.method,
+          url: request.url,
+          validationContext,
+          validationIssueCount: formattedIssues.length,
+          validationIssues: formattedIssues,
+        },
+        "Request validation failed",
+      );
+
       return reply.status(400).send({
         success: false,
         error: {
-          message: "Validation failed",
+          message:
+            formattedIssues.length > 0
+              ? `Validation failed: ${formattedIssues[0]}${detailsSuffix}`
+              : "Validation failed",
           statusCode: 400,
-          details: (error as any).validation,
+          details: validationIssues,
         },
       });
     }
@@ -162,7 +301,9 @@ export async function buildServer() {
     // Don't expose internal errors in production
     const message =
       env.NODE_ENV === "development"
-        ? (error as any).message || String(error)
+        ? error instanceof Error
+          ? error.message
+          : String(error)
         : "Internal server error";
 
     return reply.status(500).send({
@@ -216,10 +357,12 @@ export async function buildServer() {
       const { storyboardsRoutes } =
         await import("./modules/storyboards/storyboards.routes");
       const { statsRoutes } = await import("./modules/stats/stats.routes");
+      const { eventsRoutes } = await import("./modules/events/events.routes");
       const { taggingRulesRoutes } =
         await import("./modules/tagging-rules/tagging-rules.routes");
       const { faceRecognitionRoutes } =
         await import("./modules/face-recognition/face-recognition.routes");
+      const { editsRoutes } = await import("./modules/edits/edits.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -239,8 +382,10 @@ export async function buildServer() {
       await instance.register(settingsRoutes, { prefix: "/settings" });
       await instance.register(storyboardsRoutes, { prefix: "/" }); // Storyboards routes handle /videos/:id/storyboard.* paths
       await instance.register(statsRoutes, { prefix: "/stats" });
+      await instance.register(eventsRoutes, { prefix: "/events" });
       await instance.register(taggingRulesRoutes, { prefix: "/tagging-rules" });
       await instance.register(faceRecognitionRoutes, { prefix: "/" }); // Face recognition routes handle /creators/:id/face-embeddings, /videos/:id/faces, /faces/* paths
+      await instance.register(editsRoutes, { prefix: "/" }); // Edits routes handle /videos/:id/edits, /edits/jobs/:id, etc.
     },
     { prefix: API_PREFIX },
   );
@@ -251,13 +396,14 @@ export async function buildServer() {
       fastify.log.error(err, "Failed to start scheduler");
     });
 
-    // Register WebSocket service and start conversion queue
-    const { websocketService } = await import("./modules/websocket/websocket");
     const { conversionService } =
       await import("./modules/conversion/conversion.service");
+    const { editsQueue } = await import("./modules/edits/edits.queue");
+    // Ensure processor is initialized to register callback
+    await import("./modules/edits/edits.processor");
 
-    await websocketService.register(fastify);
     await conversionService.startQueue();
+    await editsQueue.start();
   }
 
   // 404 handler

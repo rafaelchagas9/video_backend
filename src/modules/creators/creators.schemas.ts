@@ -275,7 +275,7 @@ export const bulkCreatorImportItemSchema = z.object({
 });
 
 export const bulkCreatorImportSchema = z.object({
-  items: z.array(bulkCreatorImportItemSchema).min(1).max(100),
+  items: z.array(bulkCreatorImportItemSchema).min(1).max(1000),
   mode: z.enum(["merge", "replace"]).default("merge"),
 });
 

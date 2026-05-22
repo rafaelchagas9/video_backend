@@ -1,13 +1,24 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
-import { creatorSocialLinksTable, creatorsTable } from "@/database/schema";
+import {
+  creatorSocialLinksTable,
+  creatorsTable,
+  creatorFaceEmbeddingsTable,
+} from "@/database/schema";
 import { NotFoundError } from "@/utils/errors";
 import { env } from "@/config/env";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import { getFaceRecognitionClient } from "@/modules/face-recognition";
-import { cropFaceThumbnail } from "@/utils/image-processing";
+import {
+  getFaceRecognitionClient,
+  getFaceRecognitionService,
+} from "@/modules/face-recognition";
+import {
+  cropFaceThumbnail,
+  processProfilePicture,
+} from "@/utils/image-processing";
 import { logger } from "@/utils/logger";
+import { imageDownloadRateLimiter } from "@/utils/async-rate-limiter";
 import type {
   SocialLink,
   CreateSocialLinkInput,
@@ -195,7 +206,7 @@ export class CreatorsSocialService {
   async uploadProfilePicture(
     id: number,
     fileBuffer: Buffer,
-    filename: string,
+    _filename: string,
   ): Promise<Creator> {
     const creator = await this.findCreatorById(id);
 
@@ -219,21 +230,34 @@ export class CreatorsSocialService {
       unlinkSync(creator.face_thumbnail_path);
     }
 
-    // Generate unique filename
-    const ext = filename.split(".").pop() || "jpg";
-    const newFilename = `creator_${id}_${Date.now()}.${ext}`;
+    const format = env.PROFILE_PICTURE_FORMAT;
+    const quality = env.PROFILE_PICTURE_QUALITY;
+    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
+    const newFilename = `creator_${id}_${Date.now()}.${format}`;
     const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
 
-    // Save file
-    writeFileSync(filePath, fileBuffer);
+    const processedBuffer = await processProfilePicture({
+      input: fileBuffer,
+      format,
+      maxSize,
+      quality,
+    });
+
+    writeFileSync(filePath, processedBuffer);
 
     const faceThumbnailPath = await this.generateFaceThumbnail(filePath, id);
+
+    if (faceThumbnailPath) {
+      await this.generateProfilePictureEmbedding(filePath, id);
+    }
+
+    const profilePicturePath = filePath;
 
     // Update database
     await db
       .update(creatorsTable)
       .set({
-        profilePicturePath: filePath,
+        profilePicturePath,
         faceThumbnailPath,
         updatedAt: new Date(),
       })
@@ -275,37 +299,35 @@ export class CreatorsSocialService {
     const creator = await this.findCreatorById(creatorId);
 
     // Download image from URL
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(
-        `Failed to download image: ${response.status} ${response.statusText}`,
-      );
-    }
+    const buffer = await imageDownloadRateLimiter.schedule(async () => {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(
+          `Failed to download image: ${response.status} ${response.statusText}`,
+        );
+      }
 
-    const contentType = response.headers.get("content-type");
-    if (!contentType || !contentType.startsWith("image/")) {
-      throw new Error("URL does not point to a valid image");
-    }
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.startsWith("image/")) {
+        throw new Error("URL does not point to a valid image");
+      }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
+      return Buffer.from(await response.arrayBuffer());
+    });
 
     // Validate minimum size
     if (buffer.length < 100) {
       throw new Error("Downloaded image is too small");
     }
 
-    // Determine extension from content type
-    let ext = "jpg";
-    if (contentType.includes("png")) ext = "png";
-    else if (contentType.includes("webp")) ext = "webp";
-    else if (contentType.includes("gif")) ext = "gif";
+    const format = env.PROFILE_PICTURE_FORMAT;
+    const quality = env.PROFILE_PICTURE_QUALITY;
+    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
 
-    // Ensure directory exists
     if (!existsSync(env.PROFILE_PICTURES_DIR)) {
       mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
     }
 
-    // Delete old picture if exists
     if (
       creator.profile_picture_path &&
       existsSync(creator.profile_picture_path)
@@ -320,23 +342,34 @@ export class CreatorsSocialService {
       unlinkSync(creator.face_thumbnail_path);
     }
 
-    // Generate unique filename
-    const newFilename = `creator_${creatorId}_${Date.now()}.${ext}`;
+    const newFilename = `creator_${creatorId}_${Date.now()}.${format}`;
     const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
 
-    // Save file
-    writeFileSync(filePath, buffer);
+    const processedBuffer = await processProfilePicture({
+      input: buffer,
+      format,
+      maxSize,
+      quality,
+    });
+
+    writeFileSync(filePath, processedBuffer);
 
     const faceThumbnailPath = await this.generateFaceThumbnail(
       filePath,
       creatorId,
     );
 
+    if (faceThumbnailPath) {
+      await this.generateProfilePictureEmbedding(filePath, creatorId);
+    }
+
+    const profilePicturePath = filePath;
+
     // Update database
     await db
       .update(creatorsTable)
       .set({
-        profilePicturePath: filePath,
+        profilePicturePath,
         faceThumbnailPath,
         updatedAt: new Date(),
       })
@@ -433,10 +466,10 @@ export class CreatorsSocialService {
         mkdirSync(faceDir, { recursive: true });
       }
 
-      const faceFilename = `creator_${creatorId}_${Date.now()}_face.jpg`;
+      const faceFilename = `creator_${creatorId}_${Date.now()}_face.${env.FACE_THUMBNAIL_FORMAT}`;
       const facePath = join(faceDir, faceFilename);
 
-      await cropFaceThumbnail({
+      const { outputPath } = await cropFaceThumbnail({
         inputPath: profilePath,
         outputPath: facePath,
         faceBox: bestFace.bbox,
@@ -444,10 +477,37 @@ export class CreatorsSocialService {
         imageHeight: result.image_height,
       });
 
-      return facePath;
+      return outputPath;
     } catch (error) {
       logger.warn({ error, creatorId }, "Failed to generate face thumbnail");
       return null;
+    }
+  }
+
+  private async generateProfilePictureEmbedding(
+    profilePath: string,
+    creatorId: number,
+  ): Promise<void> {
+    try {
+      const existingEmbedding = await db
+        .select({ id: creatorFaceEmbeddingsTable.id })
+        .from(creatorFaceEmbeddingsTable)
+        .where(eq(creatorFaceEmbeddingsTable.creatorId, creatorId))
+        .limit(1);
+
+      const faceService = getFaceRecognitionService();
+
+      await faceService.addCreatorEmbedding({
+        creatorId,
+        imagePath: profilePath,
+        sourceType: "profile_picture",
+        isPrimary: existingEmbedding.length === 0,
+      });
+    } catch (error) {
+      logger.warn(
+        { error, creatorId },
+        "Failed to generate profile picture embedding",
+      );
     }
   }
 }

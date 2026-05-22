@@ -1,167 +1,129 @@
 # Developer Agent Guidelines
 
-This document provides essential information for AI agents and developers working on the Video Streaming Backend.
+This document provides essential information for AI agents working on the Video Streaming Backend.
 
 ## 🛠 Commands
 
 ### Development & Database
 
-- **Start Dev Server**: `bun dev` (auto-reloads on change)
-- **Start Production**: `bun start`
-- **Generate Migrations**: `bun db:generate` (generates Drizzle migrations from schema)
-- **Run Migrations**: `bun db:migrate` (applies pending migrations)
-- **Push Schema**: `bun db:push` (push schema changes directly - dev only)
-- **Database Studio**: `bun db:studio` (opens Drizzle Studio GUI)
+| Command           | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `bun dev`         | Start dev server with auto-reload               |
+| `bun start`       | Start production server                         |
+| `bun db:generate` | Generate Drizzle migrations from schema         |
+| `bun db:migrate`  | Apply pending migrations                        |
+| `bun db:push`     | Direct schema sync (dangerous; see rules below) |
+| `bun db:studio`   | Open Drizzle Studio GUI                         |
 
 ### Testing & Quality
 
-- **Run All Tests**: `bun test`
-- **Run Single Test File**: `bun test tests/integration/auth.test.ts`
-- **Run Tests by Pattern**: `bun test --filter "should register"`
-- **Linting**: `bunx eslint .`
-- **Type Checking**: `bunx tsc --noEmit`
-- **Important**: Do not run unit tests as they are currently broken.
+| Command                                   | Description          |
+| ----------------------------------------- | -------------------- |
+| `bun test`                                | Run all tests        |
+| `bun test tests/integration/auth.test.ts` | Run single test file |
+| `bun test --filter "should register"`     | Run tests by pattern |
+| `bunx eslint .`                           | Run linter           |
+| `bunx tsc --noEmit`                       | Run type checking    |
+
+**Note**: Unit tests are currently broken. Focus on integration tests.
 
 ## 🏗 Architecture & Patterns
 
 ### Module Structure
 
-Each feature in `src/modules/` should follow this file naming convention:
+Features in `src/modules/` follow this file pattern:
 
-- `*.types.ts`: TypeScript interfaces and types.
-- `*.service.ts`: Business logic and database interactions.
-- `*.routes.ts`: Fastify route definitions and registrations.
-- `*.schemas.ts`: Zod validation schemas.
-- `*.middleware.ts`: Feature-specific middleware (e.g., auth).
+- `*.types.ts` - TypeScript interfaces and types
+- `*.service.ts` - Business logic and database interactions
+- `*.routes.ts` - Fastify route definitions
+- `*.schemas.ts` - Zod validation schemas
+- `*.middleware.ts` - Feature-specific middleware
 
-### Database Access (PostgreSQL + Drizzle ORM)
-
-This project uses **PostgreSQL** with **Drizzle ORM**. Import the database from `@/config/drizzle`:
+### Database (PostgreSQL + Drizzle ORM)
 
 ```typescript
 import { db } from "@/config/drizzle";
 import { usersTable } from "@/database/schema";
 import { eq } from "drizzle-orm";
 
-// Simple query
+// Query examples
 const user = await db.query.usersTable.findFirst({
   where: (users, { eq }) => eq(users.id, userId),
 });
 
-// Insert with returning
 const [newUser] = await db.insert(usersTable).values({ name }).returning();
-
-// Update
 await db.update(usersTable).set({ name }).where(eq(usersTable.id, userId));
-
-// Delete
 await db.delete(usersTable).where(eq(usersTable.id, userId));
 ```
 
-**For complex queries**, use the `sql` template tag:
+For complex queries, use the `sql` template tag from `drizzle-orm`.
 
-```typescript
-import { sql } from "drizzle-orm";
+### Database Migration Safety Rules (MUST FOLLOW)
 
-const results = await db.execute(sql`
-  SELECT c.*, COUNT(vc.video_id) as video_count
-  FROM creators c
-  LEFT JOIN video_creators vc ON c.id = vc.creator_id
-  WHERE c.name LIKE ${`%${search}%`}
-  GROUP BY c.id
-  LIMIT ${limit}
-`);
-```
-
-### Schema Definition
-
-Schemas are defined in `src/database/schema/` using Drizzle's pg-core:
-
-```typescript
-import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
-
-export const usersTable = pgTable("users", {
-  id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-```
+- **Never run `bun db:push` on persistent/shared/prod-like databases**. It may propose unrelated schema diffs and destructive changes.
+- **Use this workflow for schema changes**: update `src/database/schema/*.ts` -> run `bun db:generate` -> review generated SQL -> run `bun db:migrate`.
+- **Migrations source of truth**: `drizzle.config.ts` points to `src/database/drizzle-migrations/`. Do not create migration files in `src/database/migrations/`.
+- **Do not apply manual SQL schema changes** (psql/manual ALTERs) unless explicitly requested by the user for an emergency.
+- **Before applying any potentially destructive migration**, stop and discuss impact first. No data-loss actions without explicit user approval.
+- **After migration**, verify expected columns/tables exist and confirm no unexpected row loss in critical tables.
 
 ### Path Aliases
 
-Use the following aliases for imports:
-
-- `@/*` -> `src/*`
-- `@/modules/*` -> `src/modules/*`
-- `@/utils/*` -> `src/utils/*`
-- `@/config/*` -> `src/config/*`
-- `@/database/*` -> `src/database/*`
-
-### Error Handling
-
-- Custom errors MUST extend `AppError`.
-- MUST include `Object.setPrototypeOf(this, MyCustomError.prototype)` in the constructor.
-- Global error handler is in `src/server.ts` and MUST be registered before routes.
-- PostgreSQL error codes: `23505` (unique violation), `23503` (foreign key violation).
-
-### Validation & Logging
-
-- **Validation**: Use Zod schemas with `validateSchema(schema, data)` from `@/utils/validation`.
-- **Logging**: Use the Pino logger from `@/utils/logger`. Avoid `console.log`.
+```
+@/* -> src/*
+@/modules/* -> src/modules/*
+@/utils/* -> src/utils/*
+@/config/* -> src/config/*
+@/database/* -> src/database/*
+```
 
 ## 🎨 Code Style
 
-### Formatting & Naming
+### General
 
-- **Naming**: Use `PascalCase` for classes/types, `camelCase` for variables/functions/properties, and `kebab-case` for file names.
-- **Imports**: Group imports (Built-ins, Third-party, Internal Aliases, Relative).
-- **Type Safety**: Avoid `any`. Use strict TypeScript. Define interfaces for all service method parameters and returns.
+- **Naming**: `PascalCase` for classes/types, `camelCase` for variables/functions, `kebab-case` for files
+- **Type Safety**: Avoid `any`. Use strict TypeScript with explicit interfaces
+- **Imports**: Group in order: Built-ins → Third-party → Internal aliases → Relative
+
+### Error Handling
+
+- Custom errors MUST extend `AppError`
+- Include `Object.setPrototypeOf(this, MyCustomError.prototype)` in constructor
+- Global error handler in `src/server.ts` (register before routes)
+- PostgreSQL codes: `23505` (unique), `23503` (FK violation)
+
+### Validation & Logging
+
+- Use Zod schemas with `validateSchema(schema, data)` from `@/utils/validation`
+- Use Pino logger from `@/utils/logger` (avoid `console.log`)
 
 ### Services
 
-- Instantiate services as singletons at the bottom of the `*.service.ts` file.
-- Export the instance, not the class.
+- Instantiate services as singletons at the bottom of `*.service.ts`
+- Export the instance, not the class
 
 ### Authentication
 
-- Single-user system: Registration is blocked after the first user is created.
-- Use `authenticateUser` middleware for protected routes.
-- Use `optionalAuth` for routes that behave differently for guests.
+- Single-user system: registration blocked after first user
+- Use `authenticateUser` middleware for protected routes
+- Use `optionalAuth` for guest-accessible routes
 
-## 🧪 Testing Guidelines
+## 🧪 Testing
 
-- Use Bun's built-in test runner (`bun:test`).
-- Integration tests should use Fastify's `.inject()` for HTTP simulation.
-- Use `setupTestServer()`, `cleanupTestServer()`, and `cleanupDatabase()` from `tests/helpers/test-utils.ts`.
-- Ensure tests are isolated by cleaning the database in `beforeEach`.
-- **Note**: Test utilities need to be updated for PostgreSQL (currently broken).
+Use Bun's built-in test runner (`bun:test`). Integration tests use Fastify's `.inject()`. Use helpers from `tests/helpers/test-utils.ts`. Clean database in `beforeEach` for isolation.
 
 ## ⚙️ Environment Configuration
 
-### Required PostgreSQL Variables
+Required PostgreSQL variables:
 
-- `POSTGRES_HOST`: PostgreSQL host (default: localhost)
-- `POSTGRES_PORT`: PostgreSQL port (default: 5432)
-- `POSTGRES_DB`: Database name (default: video_streaming_db)
-- `POSTGRES_USER`: Database user (required)
-- `POSTGRES_PASSWORD`: Database password (required)
-- `POSTGRES_MAX_CONNECTIONS`: Max pool connections (default: 20)
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+- `POSTGRES_MAX_CONNECTIONS` (default: 20)
 
-### Other Configuration
+Other keys: `SESSION_SECRET` (min 32 chars), `FFMPEG_PATH`, `FFPROBE_PATH`. See `.env.example`.
 
-- `SESSION_SECRET`: Minimum 32 characters for cookie signing.
-- `FFMPEG_PATH` & `FFPROBE_PATH`: Paths to FFmpeg binaries.
-- See `.env.example` for all available options.
+## 🛠 Useful Utilities
 
-## 📝 Implementation Status & Roadmap
-
-- **Completed**: Auth, Directory scanning, Metadata extraction, Video CRUD, Streaming, Creators, Tags, Ratings, Playlists, Favorites, Bookmarks, Thumbnails, Backup, Scheduler, Stats, Conversion, Triage, Auto-tagging.
-- **In Progress**: Swagger documentation (infrastructure ready, schemas pending).
-- **Pending**: Advanced analytics, Transcoding (future scope), Test suite migration to PostgreSQL.
-
-## 🛠 Useful File Utilities
-
-- `isVideoFile(path)`: Checks supported extensions.
-- `computeFileHash(path)`: Generates SHA256 for file integrity.
-- `getFileSize(path)`: Returns size in bytes.
-- Located in `src/utils/file-utils.ts`.
+- `isVideoFile(path)` - Check supported extensions
+- `computeFileHash(path)` - SHA256 for integrity
+- `getFileSize(path)` - Size in bytes
+- Located in `src/utils/file-utils.ts`

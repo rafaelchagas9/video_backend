@@ -21,7 +21,7 @@ import {
   videoStudiosTable,
 } from "@/database/schema";
 import { API_PREFIX } from "@/config/constants";
-import { readFileSync, existsSync } from "fs";
+import { tagsService } from "@/modules/tags/tags.service";
 import type {
   ListVideosOptions,
   NextVideoOptions,
@@ -46,16 +46,14 @@ interface PaginatedVideos {
  * Service for video search, list, and navigation operations
  */
 export class VideosSearchService {
-  private readThumbnailAsBase64(filePath: string | null): string | null {
-    if (!filePath || !existsSync(filePath)) {
-      return null;
+  private async expandTagIds(tagIds?: number[]): Promise<number[] | undefined> {
+    if (!tagIds || tagIds.length === 0) return tagIds;
+    const expanded = new Set(tagIds);
+    for (const id of tagIds) {
+      const descendants = await tagsService.getDescendants(id);
+      descendants.forEach((d) => expanded.add(d.id));
     }
-    try {
-      const buffer = readFileSync(filePath);
-      return `data:image/jpeg;base64,${buffer.toString("base64")}`;
-    } catch {
-      return null;
-    }
+    return Array.from(expanded);
   }
 
   private async checkIsFavorite(
@@ -88,13 +86,15 @@ export class VideosSearchService {
       sort = "created_at",
       order = "desc",
       creatorIds,
-      tagIds,
       studioIds,
       isFavorite,
       hasThumbnail,
       minRating,
       maxRating,
     } = options;
+
+    const tagIds = await this.expandTagIds(options.tagIds);
+    const resolvedOptions = { ...options, tagIds };
 
     const offset = (page - 1) * limit;
 
@@ -106,7 +106,7 @@ export class VideosSearchService {
       needsStudioJoin,
       needsRatingJoin,
       matchMode,
-    } = buildVideoFilters(userId, options);
+    } = buildVideoFilters(userId, resolvedOptions);
 
     // Get sort column
     const sortColumn = getValidSortColumn(sort);
@@ -368,7 +368,6 @@ export class VideosSearchService {
             thumbnail_url: v.thumbnail_id
               ? `${API_PREFIX}/thumbnails/${v.thumbnail_id}/image`
               : null,
-            thumbnail_base64: this.readThumbnailAsBase64(v.thumbnail_file_path),
           };
         }),
       );
@@ -500,7 +499,6 @@ export class VideosSearchService {
           thumbnail_url: v.thumbnailId
             ? `${API_PREFIX}/thumbnails/${v.thumbnailId}/image`
             : null,
-          thumbnail_base64: this.readThumbnailAsBase64(v.thumbnailFilePath),
         };
       }),
     );
@@ -727,9 +725,6 @@ export class VideosSearchService {
         thumbnail_id: nextVideo.thumbnailId,
         thumbnail_url: nextVideo.thumbnailId
           ? `${API_PREFIX}/thumbnails/${nextVideo.thumbnailId}/image`
-          : null,
-        thumbnail_base64: nextVideo.thumbnailFilePath
-          ? this.readThumbnailAsBase64(nextVideo.thumbnailFilePath)
           : null,
       } as Video;
     }

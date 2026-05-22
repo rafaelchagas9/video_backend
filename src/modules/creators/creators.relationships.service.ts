@@ -57,6 +57,22 @@ export class CreatorsRelationshipsService {
     // Verify creator exists
     await this.verifyCreatorExists(creatorId);
 
+    // Check if association already exists
+    const existing = await db
+      .select()
+      .from(videoCreatorsTable)
+      .where(
+        and(
+          eq(videoCreatorsTable.videoId, videoId),
+          eq(videoCreatorsTable.creatorId, creatorId),
+        ),
+      )
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      throw new ConflictError("Creator is already associated with this video");
+    }
+
     try {
       await db.insert(videoCreatorsTable).values({
         videoId,
@@ -116,6 +132,22 @@ export class CreatorsRelationshipsService {
   async linkStudio(creatorId: number, studioId: number): Promise<void> {
     // Verify creator exists
     await this.verifyCreatorExists(creatorId);
+
+    // Check if association already exists
+    const existing = await db
+      .select()
+      .from(creatorStudiosTable)
+      .where(
+        and(
+          eq(creatorStudiosTable.creatorId, creatorId),
+          eq(creatorStudiosTable.studioId, studioId),
+        ),
+      )
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      throw new ConflictError("Creator is already linked to this studio");
+    }
 
     try {
       await db.insert(creatorStudiosTable).values({

@@ -43,6 +43,62 @@
       "when": 1768763449436,
       "tag": "0005_jittery_omega_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1768771605545,
+      "tag": "0006_brainy_eddie_brock",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1768771700000,
+      "tag": "0007_add_face_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1768771800000,
+      "tag": "0008_add_faces_to_storage_stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1771377937215,
+      "tag": "0009_marvelous_redwing",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1771596174296,
+      "tag": "0010_sticky_mojo",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1771598517868,
+      "tag": "0011_fresh_lilith",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1771969166596,
+      "tag": "0012_naive_matthew_murdock",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1779258497089,
+      "tag": "0013_yummy_mattie_franklin",
+      "breakpoints": true
     }
   ]
 }

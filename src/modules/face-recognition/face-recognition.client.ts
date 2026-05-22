@@ -28,7 +28,7 @@ export class FaceRecognitionClient {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      console.log(`${this.baseUrl}/health`);
+      logger.debug({ url: `${this.baseUrl}/health` }, "Face health check");
 
       const response = await fetch(`${this.baseUrl}/health`, {
         method: "GET",

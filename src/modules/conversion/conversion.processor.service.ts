@@ -2,13 +2,15 @@
  * Conversion processor service
  * Handles the processing of conversion jobs from the queue
  */
-import { statSync } from "fs";
+import { statSync, unlinkSync } from "fs";
+import { basename } from "path";
 import { getPreset } from "@/config/presets";
 import { videosService } from "@/modules/videos/videos.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionBatchService } from "./conversion.batch.service";
-import { websocketService } from "@/modules/websocket/websocket";
+import { conversionHistoryService } from "./conversion.history.service";
+import { eventsService } from "@/modules/events/events.service";
 import { logger } from "@/utils/logger";
 import type { QueueJobPayload, ConversionEvent } from "./conversion.types";
 
@@ -28,10 +30,12 @@ export class ConversionProcessorService {
     } = payload;
 
     try {
+      const startedAt = new Date();
+
       // Update job status to processing
       await conversionJobsService.markAsProcessing(jobId);
 
-      // Notify via WebSocket
+      // Notify via SSE
       this.emitEvent({
         type: "conversion:started",
         message: {
@@ -48,9 +52,19 @@ export class ConversionProcessorService {
 
       const job = await conversionJobsService.findById(jobId);
       const video = await videosService.findById(videoId);
+      let originalSizeBytes = video.file_size_bytes;
+
+      try {
+        originalSizeBytes = statSync(inputPath).size;
+      } catch (error) {
+        logger.warn(
+          { error, inputPath, jobId },
+          "Failed to stat original file, using indexed size",
+        );
+      }
 
       // Build and run FFmpeg command with progress callback
-      await ffmpegService.runConversion(
+      const ffmpegResult = await ffmpegService.runConversion(
         jobId,
         video,
         inputPath,
@@ -61,7 +75,7 @@ export class ConversionProcessorService {
           // Update progress in database
           await conversionJobsService.updateProgress(jobId, progress);
 
-          // Emit progress event via WebSocket
+          // Emit progress event via SSE
           this.emitEvent({
             type: "conversion:progress",
             message: {
@@ -76,11 +90,36 @@ export class ConversionProcessorService {
 
       // Get output file size
       const stats = statSync(outputPath);
+      const completedAt = new Date();
 
       // Update job as completed
       await conversionJobsService.markAsCompleted(jobId, stats.size);
 
-      // Notify via WebSocket
+      try {
+        await conversionHistoryService.createCompletedEntry({
+          conversionJobId: jobId,
+          videoId,
+          sourceFilePath: inputPath,
+          sourceFileName: video.file_name || basename(inputPath),
+          outputFilePath: outputPath,
+          preset: presetId,
+          codec: preset.codec,
+          targetResolution: job.target_resolution,
+          ffmpegCommand: ffmpegResult.command,
+          originalSizeBytes,
+          outputSizeBytes: stats.size,
+          conversionDurationMs: ffmpegResult.durationMs,
+          startedAt,
+          completedAt,
+        });
+      } catch (error) {
+        logger.error(
+          { error, jobId, videoId },
+          "Failed to persist conversion history entry",
+        );
+      }
+
+      // Notify via SSE
       this.emitEvent({
         type: "conversion:completed",
         message: {
@@ -93,22 +132,29 @@ export class ConversionProcessorService {
       });
 
       logger.info(
-        { jobId, outputPath, size: stats.size },
+        {
+          jobId,
+          outputPath,
+          size: stats.size,
+          originalSizeBytes,
+          sizeDeltaBytes: stats.size - originalSizeBytes,
+        },
         "Conversion completed",
       );
 
-      // Handle Original File Deletion
+      // Handle Original File Replacement (in-place)
       if (deleteOriginal) {
         try {
           logger.info(
             { videoId, jobId },
-            "Deleting original file as requested",
+            "Replacing original file in-place (preserving video record and relations)",
           );
-          await videosService.delete(videoId);
+          unlinkSync(inputPath);
+          await videosService.replaceFile(videoId, outputPath);
         } catch (error) {
           logger.error(
             { error, videoId },
-            "Failed to delete original video after conversion",
+            "Failed to replace original video after conversion",
           );
           // We don't fail job because conversion itself succeeded
         }
@@ -121,11 +167,17 @@ export class ConversionProcessorService {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+      const ffmpegOutput =
+        (error as Error & { stderrOutput?: string }).stderrOutput ?? undefined;
 
       // Update job as failed
-      await conversionJobsService.markAsFailed(jobId, errorMessage);
+      await conversionJobsService.markAsFailed(
+        jobId,
+        errorMessage,
+        ffmpegOutput,
+      );
 
-      // Notify via WebSocket
+      // Notify via SSE
       this.emitEvent({
         type: "conversion:failed",
         message: {
@@ -148,13 +200,13 @@ export class ConversionProcessorService {
   }
 
   /**
-   * Emit WebSocket event
+   * Emit SSE event
    */
   private emitEvent(event: ConversionEvent): void {
     try {
-      websocketService.broadcast(event);
+      eventsService.broadcast(event);
     } catch (error) {
-      logger.error({ error }, "Failed to emit WebSocket event");
+      logger.error({ error }, "Failed to emit SSE event");
     }
   }
 }
