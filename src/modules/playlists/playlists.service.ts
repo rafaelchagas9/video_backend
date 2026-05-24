@@ -1,5 +1,5 @@
 import { db } from "@/config/drizzle";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { playlistsTable, playlistVideosTable } from "@/database/schema";
 import { NotFoundError, ForbiddenError, ConflictError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
@@ -255,18 +255,22 @@ export class PlaylistsService {
       );
     }
 
-    // Update positions
-    for (const { video_id, position } of positions) {
-      await db
-        .update(playlistVideosTable)
-        .set({ position })
-        .where(
-          and(
-            eq(playlistVideosTable.playlistId, playlistId),
-            eq(playlistVideosTable.videoId, video_id),
-          ),
-        );
-    }
+    if (positions.length === 0) return;
+
+    const videoIds = positions.map((p) => p.video_id);
+
+    // Construct the SQL CASE expression
+    const cases = positions
+      .map((p) => sql`WHEN video_id = ${p.video_id} THEN ${p.position}`)
+      .reduce((acc, curr) => sql`${acc} ${curr}`);
+
+    const query = sql`
+      UPDATE playlist_videos
+      SET position = CASE ${cases} END
+      WHERE playlist_id = ${playlistId} AND video_id = ANY(${videoIds})
+    `;
+
+    await db.execute(query);
   }
 
   // Bulk Actions
@@ -295,43 +299,42 @@ export class PlaylistsService {
 
       let nextPos = (maxPosResult[0]?.maxPos ?? -1) + 1;
 
-      for (const videoId of videoIds) {
-        // Check if exists to avoid duplicates
-        const exists = await db
-          .select()
-          .from(playlistVideosTable)
-          .where(
-            and(
-              eq(playlistVideosTable.playlistId, playlistId),
-              eq(playlistVideosTable.videoId, videoId),
-            ),
-          )
-          .limit(1);
+      // Check which video IDs are already in the playlist
+      const existingRows = await db
+        .select({ videoId: playlistVideosTable.videoId })
+        .from(playlistVideosTable)
+        .where(
+          and(
+            eq(playlistVideosTable.playlistId, playlistId),
+            inArray(playlistVideosTable.videoId, videoIds),
+          ),
+        );
 
-        if (!exists || exists.length === 0) {
-          try {
-            await db.insert(playlistVideosTable).values({
-              playlistId,
-              videoId,
-              position: nextPos++,
-            });
-          } catch {
-            // Ignore duplicates from race conditions
-          }
-        }
+      const existingIds = new Set(existingRows.map((r) => r.videoId));
+      const toAdd = videoIds.filter((id) => !existingIds.has(id));
+
+      if (toAdd.length > 0) {
+        const values = toAdd.map((videoId) => ({
+          playlistId,
+          videoId,
+          position: nextPos++,
+        }));
+
+        await db
+          .insert(playlistVideosTable)
+          .values(values)
+          .onConflictDoNothing();
       }
     } else {
       // Delete multiple videos
-      for (const videoId of videoIds) {
-        await db
-          .delete(playlistVideosTable)
-          .where(
-            and(
-              eq(playlistVideosTable.playlistId, playlistId),
-              eq(playlistVideosTable.videoId, videoId),
-            ),
-          );
-      }
+      await db
+        .delete(playlistVideosTable)
+        .where(
+          and(
+            eq(playlistVideosTable.playlistId, playlistId),
+            inArray(playlistVideosTable.videoId, videoIds),
+          ),
+        );
     }
   }
 

@@ -14,6 +14,9 @@ import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionHistoryService } from "./conversion.history.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { logger } from "@/utils/logger";
+import { db } from "@/config/drizzle";
+import { and, inArray, eq } from "drizzle-orm";
+import { videosTable, conversionJobsTable } from "@/database/schema";
 import type {
   ConversionJob,
   CreateConversionJobInput,
@@ -109,6 +112,133 @@ export class ConversionService {
     await conversionQueue.enqueue(queuePayload);
 
     return job;
+  }
+
+  /**
+   * Bulk create conversion jobs and add them to queue
+   */
+  async bulkCreateJobs(input: {
+    videoIds: number[];
+    preset: string;
+    deleteOriginal?: boolean;
+    batchId?: string;
+  }): Promise<ConversionJob[]> {
+    const { videoIds, preset: presetId, deleteOriginal, batchId } = input;
+    if (videoIds.length === 0) return [];
+
+    const preset = getPreset(presetId);
+    if (!preset) {
+      throw new BadRequestError(`Invalid preset: ${presetId}`);
+    }
+
+    // 1. Fetch all videos in a single query
+    const videos = await db
+      .select({
+        id: videosTable.id,
+        filePath: videosTable.filePath,
+        fileName: videosTable.fileName,
+        width: videosTable.width,
+        height: videosTable.height,
+      })
+      .from(videosTable)
+      .where(inArray(videosTable.id, videoIds));
+
+    // 2. Fetch existing pending/processing jobs in a single query
+    const existingJobs = await db
+      .select({ videoId: conversionJobsTable.videoId })
+      .from(conversionJobsTable)
+      .where(
+        and(
+          inArray(conversionJobsTable.videoId, videoIds),
+          eq(conversionJobsTable.preset, presetId),
+          inArray(conversionJobsTable.status, ["pending", "processing"]),
+        ),
+      );
+
+    const existingVideoIds = new Set(existingJobs.map((j) => j.videoId));
+    const createdJobs: ConversionJob[] = [];
+
+    // Filter out videos that already have a pending/processing job
+    const videosToProcess = videos.filter((v) => !existingVideoIds.has(v.id));
+    if (videosToProcess.length === 0) return [];
+
+    // 3. Prepare bulk insert values
+    const insertValues = videosToProcess.map((video) => {
+      const targetResolution = ffmpegService.calculateTargetResolution(
+        video.width,
+        video.height,
+        preset,
+      );
+
+      const outputFileName = this.generateOutputFileName(video.fileName, preset);
+      let outputPath: string;
+
+      if (deleteOriginal) {
+        const originalDir = dirname(video.filePath);
+        outputPath = join(originalDir, outputFileName);
+      } else {
+        outputPath = join(env.CONVERTED_VIDEOS_DIR, outputFileName);
+      }
+
+      return {
+        videoId: video.id,
+        status: "pending" as const,
+        preset: presetId,
+        targetResolution,
+        codec: preset.codec,
+        outputPath,
+        deleteOriginal: deleteOriginal ?? false,
+        batchId: batchId || null,
+        progressPercent: 0,
+      };
+    });
+
+    // 4. Perform bulk insert inside a transaction
+    const results = await db.transaction(async (tx) => {
+      return tx
+        .insert(conversionJobsTable)
+        .values(insertValues)
+        .returning();
+    });
+
+    // 5. Enqueue each created job
+    for (const row of results) {
+      const video = videosToProcess.find((v) => v.id === row.videoId)!;
+      const job: ConversionJob = {
+        id: row.id,
+        video_id: row.videoId,
+        status: row.status as any,
+        preset: row.preset,
+        target_resolution: row.targetResolution,
+        codec: row.codec,
+        output_path: row.outputPath,
+        output_size_bytes: row.outputSizeBytes,
+        progress_percent: row.progressPercent ?? 0,
+        error_message: row.errorMessage,
+        ffmpeg_output: row.ffmpegOutput,
+        delete_original: row.deleteOriginal,
+        batch_id: row.batchId,
+        started_at: row.startedAt?.toISOString() ?? null,
+        completed_at: row.completedAt?.toISOString() ?? null,
+        created_at: row.createdAt.toISOString(),
+      };
+      createdJobs.push(job);
+
+      const queuePayload: QueueJobPayload = {
+        jobId: job.id,
+        videoId: job.video_id,
+        preset: job.preset,
+        inputPath: video.filePath,
+        outputPath: job.output_path!,
+        createdAt: new Date().toISOString(),
+        deleteOriginal: job.delete_original,
+        batchId: job.batch_id ?? undefined,
+      };
+
+      await conversionQueue.enqueue(queuePayload);
+    }
+
+    return createdJobs;
   }
 
   /**

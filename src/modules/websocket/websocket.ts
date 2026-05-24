@@ -13,8 +13,16 @@ interface ClientConnection {
   connectedAt: Date;
 }
 
+interface WatchSession {
+  videoId: number;
+  watchedSecondsAccum: number;
+  lastPositionSeconds?: number;
+  lastRecordedAt: number;
+}
+
 class WebSocketService {
   private clients: Map<WebSocket, ClientConnection> = new Map();
+  private watchSessions: Map<WebSocket, Map<number, WatchSession>> = new Map();
 
   /**
    * Initialize WebSocket with Fastify instance
@@ -32,6 +40,7 @@ class WebSocketService {
       };
 
       this.clients.set(socket, connection);
+      this.watchSessions.set(socket, new Map());
       logger.info(
         { userId, totalClients: this.clients.size },
         "WebSocket client connected",
@@ -56,7 +65,11 @@ class WebSocketService {
       });
 
       socket.on("close", () => {
+        this.flushWatchSessions(socket).catch((error) => {
+          logger.error({ error }, "Failed to flush watch sessions on close");
+        });
         this.clients.delete(socket);
+        this.watchSessions.delete(socket);
         logger.info(
           { userId, totalClients: this.clients.size },
           "WebSocket client disconnected",
@@ -93,6 +106,45 @@ class WebSocketService {
   }
 
   /**
+   * Flush in-memory buffered watch sessions to the database
+   */
+  private async flushWatchSessions(socket: WebSocket, specificVideoId?: number): Promise<void> {
+    const clientSessions = this.watchSessions.get(socket);
+    if (!clientSessions) return;
+
+    const connection = this.clients.get(socket);
+    if (!connection?.userId) return;
+
+    const flushVideo = async (videoId: number, session: WatchSession) => {
+      if (session.watchedSecondsAccum > 0) {
+        try {
+          await videoStatsService.recordWatch(connection.userId!, videoId, {
+            watched_seconds: session.watchedSecondsAccum,
+            last_position_seconds: session.lastPositionSeconds,
+          });
+          session.watchedSecondsAccum = 0;
+        } catch (error) {
+          logger.error({ error, videoId }, "Failed to record buffered watch stats");
+        }
+      }
+    };
+
+    if (specificVideoId !== undefined) {
+      const session = clientSessions.get(specificVideoId);
+      if (session) {
+        await flushVideo(specificVideoId, session);
+        clientSessions.delete(specificVideoId);
+      }
+    } else {
+      const promises = Array.from(clientSessions.entries()).map(([videoId, session]) =>
+        flushVideo(videoId, session)
+      );
+      await Promise.all(promises);
+      clientSessions.clear();
+    }
+  }
+
+  /**
    * Handle incoming WebSocket messages
    */
   private async handleMessage(socket: WebSocket, message: any): Promise<void> {
@@ -124,10 +176,44 @@ class WebSocketService {
       )
         return;
 
-      await videoStatsService.recordWatch(connection.userId, videoId, {
-        watched_seconds: watchedSeconds,
-        last_position_seconds: lastPositionSeconds,
-      });
+      let clientSessions = this.watchSessions.get(socket);
+      if (!clientSessions) {
+        clientSessions = new Map();
+        this.watchSessions.set(socket, clientSessions);
+      }
+
+      // If switching videos, flush the old video stats first
+      for (const [activeVideoId] of clientSessions) {
+        if (activeVideoId !== videoId) {
+          await this.flushWatchSessions(socket, activeVideoId);
+        }
+      }
+
+      let session = clientSessions.get(videoId);
+      const now = Date.now();
+      if (!session) {
+        session = {
+          videoId,
+          watchedSecondsAccum: watchedSeconds,
+          lastPositionSeconds,
+          lastRecordedAt: now,
+        };
+        clientSessions.set(videoId, session);
+      } else {
+        session.watchedSecondsAccum += watchedSeconds;
+        session.lastPositionSeconds = lastPositionSeconds;
+      }
+
+      // Flush if 5 seconds have elapsed since last recorded time
+      if (now - session.lastRecordedAt >= 5000) {
+        await this.flushWatchSessions(socket, videoId);
+        clientSessions.set(videoId, {
+          videoId,
+          watchedSecondsAccum: 0,
+          lastPositionSeconds,
+          lastRecordedAt: now,
+        });
+      }
     }
   }
 

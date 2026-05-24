@@ -4,20 +4,19 @@ import {
   videosTable,
   studiosTable,
   videoStudiosTable,
-  conversionJobsTable,
   thumbnailsTable,
   favoritesTable,
+  storyboardsTable,
 } from "@/database/schema";
 import { BadRequestError, NotFoundError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import { logger } from "@/utils/logger";
-import { existsSync, unlinkSync, statSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { basename } from "path";
 import type { Video, UpdateVideoInput } from "./videos.types";
 import { computeFileHash } from "@/utils/file-utils";
 import { metadataService } from "./metadata.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
-import { conversionService } from "@/modules/conversion/conversion.service";
 import { videoCollectionsService } from "@/modules/video-collections/video-collections.service";
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { tagsService } from "@/modules/tags/tags.service";
@@ -34,6 +33,32 @@ import type { VideoInclude } from "./videos.types";
  * Main video service - Core CRUD operations
  */
 export class VideosService {
+  /**
+   * Find video file path and availability by ID (lightweight lookup for streaming)
+   */
+  async findFilePathById(
+    id: number,
+  ): Promise<{ file_path: string; is_available: boolean }> {
+    const results = await db
+      .select({
+        filePath: videosTable.filePath,
+        isAvailable: videosTable.isAvailable,
+      })
+      .from(videosTable)
+      .where(eq(videosTable.id, id))
+      .limit(1);
+
+    const video = results[0];
+    if (!video) {
+      throw new NotFoundError(`Video not found with id: ${id}`);
+    }
+
+    return {
+      file_path: video.filePath,
+      is_available: video.isAvailable,
+    };
+  }
+
   /**
    * Find video by ID
    */
@@ -122,28 +147,50 @@ export class VideosService {
         : null,
     } as Video;
 
+    const promises: Promise<void>[] = [];
+
     if (include.includes("collection")) {
-      response.collection =
-        await videoCollectionsService.getCollectionContextByVideoId(id);
+      promises.push(
+        videoCollectionsService.getCollectionContextByVideoId(id).then((res) => {
+          response.collection = res;
+        })
+      );
     }
 
     if (include.includes("collection_neighbors")) {
-      response.collection_neighbors =
-        await videoCollectionsService.getNeighborsByVideoId(id);
+      promises.push(
+        videoCollectionsService.getNeighborsByVideoId(id).then((res) => {
+          response.collection_neighbors = res;
+        })
+      );
     }
 
     if (include.includes("creators")) {
-      response.creators =
-        await creatorsRelationshipsService.getCreatorsForVideo(id);
+      promises.push(
+        creatorsRelationshipsService.getCreatorsForVideo(id).then((res) => {
+          response.creators = res;
+        })
+      );
     }
 
     if (include.includes("tags")) {
-      response.tags = await tagsService.getTagsForVideo(id);
+      promises.push(
+        tagsService.getTagsForVideo(id).then((res) => {
+          response.tags = res;
+        })
+      );
     }
 
     if (include.includes("studios")) {
-      response.studios =
-        await studiosRelationshipsService.getStudiosForVideo(id);
+      promises.push(
+        studiosRelationshipsService.getStudiosForVideo(id).then((res) => {
+          response.studios = res;
+        })
+      );
+    }
+
+    if (promises.length > 0) {
+      await Promise.all(promises);
     }
 
     return response;
@@ -171,8 +218,6 @@ export class VideosService {
    * Update video
    */
   async update(id: number, input: UpdateVideoInput): Promise<Video> {
-    await this.findById(id); // Ensure exists
-
     const updateData: Partial<typeof videosTable.$inferInsert> = {};
 
     if (input.title !== undefined) updateData.title = input.title;
@@ -186,7 +231,15 @@ export class VideosService {
 
     updateData.updatedAt = new Date();
 
-    await db.update(videosTable).set(updateData).where(eq(videosTable.id, id));
+    const [updated] = await db
+      .update(videosTable)
+      .set(updateData)
+      .where(eq(videosTable.id, id))
+      .returning({ id: videosTable.id });
+
+    if (!updated) {
+      throw new NotFoundError(`Video not found with id: ${id}`);
+    }
 
     return this.findById(id);
   }
@@ -197,46 +250,53 @@ export class VideosService {
   async delete(id: number): Promise<void> {
     const video = await this.findById(id); // Ensure exists
 
-    // Delete all thumbnails (both file and DB)
-    const thumbnails = await thumbnailsService.getByVideoId(id);
+    // Query associated thumbnail paths
+    const thumbnails = await db
+      .select({ filePath: thumbnailsTable.filePath })
+      .from(thumbnailsTable)
+      .where(eq(thumbnailsTable.videoId, id));
+
+    // Query associated storyboard paths
+    const storyboards = await db
+      .select({ spritePath: storyboardsTable.spritePath, vttPath: storyboardsTable.vttPath })
+      .from(storyboardsTable)
+      .where(eq(storyboardsTable.videoId, id));
+
+    const fs = await import("fs");
+
+    // Delete physical files
     for (const thumbnail of thumbnails) {
-      try {
-        await thumbnailsService.delete(thumbnail.id);
-      } catch (error) {
-        logger.warn(
-          { error, thumbnailId: thumbnail.id },
-          "Failed to delete thumbnail",
-        );
-      }
-    }
-
-    // Delete conversion DB records (keep converted files - they're valuable outputs)
-    const conversions = await conversionService.listByVideoId(id);
-    for (const conversion of conversions) {
-      try {
-        await db
-          .delete(conversionJobsTable)
-          .where(eq(conversionJobsTable.id, conversion.id));
-      } catch (error) {
-        logger.warn(
-          { error, conversionId: conversion.id },
-          "Failed to delete conversion record",
-        );
-      }
-    }
-
-    // Delete the video file itself
-    if (video.file_path) {
-      try {
-        if (existsSync(video.file_path)) {
-          unlinkSync(video.file_path);
+      if (thumbnail.filePath && fs.existsSync(thumbnail.filePath)) {
+        try {
+          fs.unlinkSync(thumbnail.filePath);
+        } catch (error) {
+          logger.warn({ error, path: thumbnail.filePath }, "Failed to delete thumbnail file");
         }
+      }
+    }
+
+    for (const storyboard of storyboards) {
+      if (storyboard.spritePath && fs.existsSync(storyboard.spritePath)) {
+        try {
+          fs.unlinkSync(storyboard.spritePath);
+        } catch (error) {
+          logger.warn({ error, path: storyboard.spritePath }, "Failed to delete storyboard sprite");
+        }
+      }
+      if (storyboard.vttPath && fs.existsSync(storyboard.vttPath)) {
+        try {
+          fs.unlinkSync(storyboard.vttPath);
+        } catch (error) {
+          logger.warn({ error, path: storyboard.vttPath }, "Failed to delete storyboard VTT");
+        }
+      }
+    }
+
+    if (video.file_path && fs.existsSync(video.file_path)) {
+      try {
+        fs.unlinkSync(video.file_path);
       } catch (error) {
-        logger.warn(
-          { error, path: video.file_path },
-          "Failed to delete video file",
-        );
-        // Continue with database deletion even if file deletion fails
+        logger.warn({ error, path: video.file_path }, "Failed to delete video file");
       }
     }
 
@@ -252,16 +312,14 @@ export class VideosService {
 
     const fs = await import("fs");
     const exists = fs.existsSync(video.file_path);
+    const lastVerifiedAt = new Date();
 
     await db
       .update(videosTable)
-      .set({
-        isAvailable: exists,
-        lastVerifiedAt: new Date(),
-      })
+      .set({ isAvailable: exists, lastVerifiedAt })
       .where(eq(videosTable.id, id));
 
-    return this.findById(id);
+    return { ...video, is_available: exists, last_verified_at: lastVerifiedAt.toISOString() };
   }
 
   /**

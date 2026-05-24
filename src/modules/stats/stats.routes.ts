@@ -370,10 +370,12 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const storage = await storageStatsService.createStorageSnapshot();
-      const library = await libraryStatsService.createLibrarySnapshot();
-      const content = await contentStatsService.createContentSnapshot();
-      const usage = await usageStatsService.createUsageSnapshot();
+      const [storage, library, content, usage] = await Promise.all([
+        storageStatsService.createStorageSnapshot(),
+        libraryStatsService.createLibrarySnapshot(),
+        contentStatsService.createContentSnapshot(),
+        usageStatsService.createUsageSnapshot(),
+      ]);
 
       return reply.status(201).send({
         success: true,

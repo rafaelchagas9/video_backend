@@ -94,23 +94,13 @@ export async function conversionRoutes(fastify: FastifyInstance) {
         deleteOriginal?: boolean;
       };
       const batchId = randomUUID();
-      const jobs = [];
 
-      for (const videoId of videoIds) {
-        try {
-          const job = await conversionService.createJob({
-            video_id: videoId,
-            preset,
-            deleteOriginal,
-            batchId,
-          });
-          jobs.push(job);
-        } catch (error) {
-          // Log error but continue with other videos?
-          // Or fail entire batch?
-          // Usually bulk actions try to succeed as much as possible, especially if just "already pending" error.
-        }
-      }
+      const jobs = await conversionService.bulkCreateJobs({
+        videoIds,
+        preset,
+        deleteOriginal,
+        batchId,
+      });
 
       return reply.status(201).send({
         success: true,

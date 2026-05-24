@@ -28,7 +28,65 @@ export class UsageStatsService {
       WHERE play_count > 0
     `;
 
-    const watchStatsRows = await db.execute(watchStatsQuery);
+    // Videos never watched
+    const neverWatchedQuery = sql`
+      SELECT COUNT(*) as count FROM videos
+      WHERE id NOT IN (SELECT video_id FROM video_stats WHERE play_count > 0)
+    `;
+
+    // Calculate average completion rate
+    const completionDataQuery = sql`
+      SELECT
+        AVG(CASE
+          WHEN v.duration_seconds > 0
+          THEN LEAST(vs.total_watch_seconds / v.duration_seconds, 1.0) * 100
+          ELSE NULL
+        END) as avg_completion
+      FROM video_stats vs
+      JOIN videos v ON v.id = vs.video_id
+      WHERE vs.total_watch_seconds > 0
+    `;
+
+    // Top watched videos
+    const topWatchedQuery = sql`
+      SELECT
+        vs.video_id,
+        COALESCE(v.title, v.file_name) as title,
+        vs.play_count,
+        vs.total_watch_seconds
+      FROM video_stats vs
+      JOIN videos v ON v.id = vs.video_id
+      WHERE vs.play_count > 0
+      ORDER BY vs.play_count DESC, vs.total_watch_seconds DESC
+      LIMIT 10
+    `;
+
+    // Activity by hour (from last_watch_at timestamps)
+    const hourlyActivityQuery = sql`
+      SELECT
+        TO_CHAR(last_watch_at, 'HH24') as hour,
+        COUNT(*) as count
+      FROM video_stats
+      WHERE last_watch_at IS NOT NULL
+      GROUP BY hour
+      ORDER BY hour
+    `;
+
+    // Fetch all usage stats concurrently
+    const [
+      watchStatsRows,
+      neverWatchedRows,
+      completionDataRows,
+      topWatchedRawResult,
+      hourlyActivityResult,
+    ] = await Promise.all([
+      db.execute(watchStatsQuery),
+      db.execute(neverWatchedQuery),
+      db.execute(completionDataQuery),
+      db.execute(topWatchedQuery),
+      db.execute(hourlyActivityQuery),
+    ]);
+
     const watchStatsRaw = watchStatsRows[0] as {
       total_watch: string | number;
       total_plays: string | number;
@@ -45,50 +103,13 @@ export class UsageStatsService {
       unique_watched: Number(watchStatsRaw.unique_watched),
     };
 
-    // Videos never watched
-    const neverWatchedQuery = sql`
-      SELECT COUNT(*) as count FROM videos
-      WHERE id NOT IN (SELECT video_id FROM video_stats WHERE play_count > 0)
-    `;
-
-    const neverWatchedRows = await db.execute(neverWatchedQuery);
     const neverWatched = neverWatchedRows[0] as { count: string | number };
 
-    // Calculate average completion rate
-    const completionDataQuery = sql`
-      SELECT
-        AVG(CASE
-          WHEN v.duration_seconds > 0
-          THEN LEAST(vs.total_watch_seconds / v.duration_seconds, 1.0) * 100
-          ELSE NULL
-        END) as avg_completion
-      FROM video_stats vs
-      JOIN videos v ON v.id = vs.video_id
-      WHERE vs.total_watch_seconds > 0
-    `;
-
-    const completionDataRows = await db.execute(completionDataQuery);
     const completionData = completionDataRows[0] as {
       avg_completion: number | null;
     };
 
-    // Top watched videos
-    const topWatchedQuery = sql`
-      SELECT
-        vs.video_id,
-        COALESCE(v.title, v.file_name) as title,
-        vs.play_count,
-        vs.total_watch_seconds
-      FROM video_stats vs
-      JOIN videos v ON v.id = vs.video_id
-      WHERE vs.play_count > 0
-      ORDER BY vs.play_count DESC, vs.total_watch_seconds DESC
-      LIMIT 10
-    `;
-
-    const topWatchedRaw = (await db.execute(
-      topWatchedQuery,
-    )) as unknown as Array<{
+    const topWatchedRaw = topWatchedRawResult as unknown as Array<{
       video_id: string | number;
       title: string;
       play_count: string | number;
@@ -102,18 +123,7 @@ export class UsageStatsService {
       total_watch_seconds: Number(item.total_watch_seconds),
     }));
 
-    // Activity by hour (from last_watch_at timestamps)
-    const hourlyActivityQuery = sql`
-      SELECT
-        TO_CHAR(last_watch_at, 'HH24') as hour,
-        COUNT(*) as count
-      FROM video_stats
-      WHERE last_watch_at IS NOT NULL
-      GROUP BY hour
-      ORDER BY hour
-    `;
-
-    const hourlyActivity = (await db.execute(hourlyActivityQuery)) as {
+    const hourlyActivity = hourlyActivityResult as unknown as {
       hour: string;
       count: string | number;
     }[];

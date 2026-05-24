@@ -12,16 +12,35 @@ const DEFAULT_SETTINGS: Record<string, SettingValue> = {
 };
 
 export class SettingsService {
-  private async ensureDefaults(): Promise<void> {
-    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-      await db
-        .insert(appSettingsTable)
-        .values({
+  private cache: Map<string, SettingValue> | null = null;
+  private initPromise: Promise<void> | null = null;
+
+  private async init(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._loadAndEnsureDefaults();
+    return this.initPromise;
+  }
+
+  private async _loadAndEnsureDefaults(): Promise<void> {
+    await db
+      .insert(appSettingsTable)
+      .values(
+        Object.entries(DEFAULT_SETTINGS).map(([key, value]) => ({
           key,
           value: String(value),
-        })
-        .onConflictDoNothing();
-    }
+        })),
+      )
+      .onConflictDoNothing();
+
+    const rows = await db.query.appSettingsTable.findMany();
+    this.cache = new Map(
+      rows.map((row) => [row.key, this.parseSettingValue(row.key, row.value)]),
+    );
+  }
+
+  private invalidateCache(): void {
+    this.cache = null;
+    this.initPromise = null;
   }
 
   private parseSettingValue(key: string, value: string): SettingValue {
@@ -41,8 +60,7 @@ export class SettingsService {
   }
 
   async getAll(): Promise<AppSetting[]> {
-    await this.ensureDefaults();
-
+    await this.init();
     const rows = await db.query.appSettingsTable.findMany({
       orderBy: (settings, { asc }) => [asc(settings.key)],
     });
@@ -55,31 +73,17 @@ export class SettingsService {
   }
 
   async getValue(key: string): Promise<SettingValue> {
-    await this.ensureDefaults();
+    await this.init();
 
-    const row = await db.query.appSettingsTable.findFirst({
-      where: (settings, { eq }) => eq(settings.key, key),
-      columns: { key: true, value: true },
-    });
-
-    if (!row) {
-      const defaultValue = Object.prototype.hasOwnProperty.call(
-        DEFAULT_SETTINGS,
-        key,
-      )
-        ? DEFAULT_SETTINGS[key]
-        : "";
-      await db
-        .insert(appSettingsTable)
-        .values({
-          key,
-          value: String(defaultValue),
-        })
-        .onConflictDoNothing();
-      return defaultValue;
+    if (this.cache!.has(key)) {
+      return this.cache!.get(key)!;
     }
 
-    return this.parseSettingValue(row.key, row.value);
+    const defaultValue = Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key)
+      ? DEFAULT_SETTINGS[key]
+      : "";
+    this.cache!.set(key, defaultValue);
+    return defaultValue;
   }
 
   async getNumber(key: string): Promise<number> {
@@ -98,8 +102,6 @@ export class SettingsService {
   async updateValues(
     values: Record<string, SettingValue>,
   ): Promise<AppSetting[]> {
-    await this.ensureDefaults();
-
     const entries = Object.entries(values);
     if (entries.length === 0) return this.getAll();
 
@@ -121,6 +123,7 @@ export class SettingsService {
       }
     });
 
+    this.invalidateCache();
     return this.getAll();
   }
 }

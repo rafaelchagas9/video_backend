@@ -1,11 +1,12 @@
 import { db } from "@/config/drizzle";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   videoTagsTable,
   videoCreatorsTable,
   videoStudiosTable,
   creatorsTable,
   studiosTable,
+  videosTable,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
 import { taggingRulesService } from "../tagging-rules/tagging-rules.service";
@@ -22,6 +23,72 @@ export interface AutoTagResult {
 
 export class AutoTaggingService {
   async tagNewVideo(videoId: number, filePath: string): Promise<AutoTagResult> {
+    try {
+      const rules = await taggingRulesService.list(false);
+      return await this.tagSingleVideoInternal(videoId, filePath, rules);
+    } catch (error) {
+      logger.warn(
+        { error, video_id: videoId, file_path: filePath },
+        "Failed to auto-tag video",
+      );
+      return {
+        video_id: videoId,
+        file_path: filePath,
+        creators_added: 0,
+        studios_added: 0,
+        tags_added: 0,
+        matched_rules: [],
+      };
+    }
+  }
+
+  async tagMultipleVideos(videoIds: number[]): Promise<AutoTagResult[]> {
+    if (videoIds.length === 0) return [];
+
+    const results: AutoTagResult[] = [];
+    const rules = await taggingRulesService.list(false);
+    if (rules.length === 0) {
+      return videoIds.map((id) => ({
+        video_id: id,
+        file_path: "",
+        creators_added: 0,
+        studios_added: 0,
+        tags_added: 0,
+        matched_rules: [],
+      }));
+    }
+
+    // 1. Fetch all videos in a single query
+    const videos = await db
+      .select({ id: videosTable.id, filePath: videosTable.filePath })
+      .from(videosTable)
+      .where(inArray(videosTable.id, videoIds));
+
+    // Caches to avoid duplicate DB queries for creators and studios
+    const creatorsCache = new Map<string, number>();
+    const studiosCache = new Map<string, number>();
+
+    for (const video of videos) {
+      const result = await this.tagSingleVideoInternal(
+        video.id,
+        video.filePath,
+        rules,
+        creatorsCache,
+        studiosCache,
+      );
+      results.push(result);
+    }
+
+    return results;
+  }
+
+  private async tagSingleVideoInternal(
+    videoId: number,
+    filePath: string,
+    rules: any[],
+    creatorsCache?: Map<string, number>,
+    studiosCache?: Map<string, number>,
+  ): Promise<AutoTagResult> {
     const result: AutoTagResult = {
       video_id: videoId,
       file_path: filePath,
@@ -31,90 +98,64 @@ export class AutoTaggingService {
       matched_rules: [],
     };
 
-    try {
-      const rules = await taggingRulesService.list(false);
-      if (rules.length === 0) {
-        return result;
+    if (rules.length === 0) {
+      return result;
+    }
+
+    const pathResult = parseVideoPath(filePath);
+
+    for (const rule of rules) {
+      const conditions = rule.conditions || [];
+      const actions = rule.actions || [];
+
+      if (conditions.length === 0 || actions.length === 0) {
+        continue;
       }
 
-      const pathResult = parseVideoPath(filePath);
+      const matchedConditions = this.evaluateConditionsForVideo(
+        filePath,
+        pathResult,
+        conditions,
+      );
 
-      for (const rule of rules) {
-        const conditions = rule.conditions || [];
-        const actions = rule.actions || [];
+      if (matchedConditions.length > 0) {
+        result.matched_rules.push(rule.name);
 
-        if (conditions.length === 0 || actions.length === 0) {
-          continue;
-        }
-
-        const matchedConditions = this.evaluateConditionsForVideo(
-          filePath,
-          pathResult,
-          conditions,
-        );
-
-        if (matchedConditions.length > 0) {
-          result.matched_rules.push(rule.name);
-
-          for (const action of actions) {
-            const actionResult = await this.applyActionForVideo(
-              videoId,
-              action,
-              filePath,
-              pathResult,
-            );
-            if (actionResult.success) {
-              if (actionResult.type === "creator") result.creators_added++;
-              if (actionResult.type === "studio") result.studios_added++;
-              if (actionResult.type === "tag") result.tags_added++;
-            }
+        for (const action of actions) {
+          const actionResult = await this.applyActionForVideo(
+            videoId,
+            action,
+            filePath,
+            pathResult,
+            creatorsCache,
+            studiosCache,
+          );
+          if (actionResult.success) {
+            if (actionResult.type === "creator") result.creators_added++;
+            if (actionResult.type === "studio") result.studios_added++;
+            if (actionResult.type === "tag") result.tags_added++;
           }
         }
       }
-
-      if (
-        result.creators_added > 0 ||
-        result.studios_added > 0 ||
-        result.tags_added > 0
-      ) {
-        logger.info(
-          {
-            video_id: videoId,
-            creators_added: result.creators_added,
-            studios_added: result.studios_added,
-            tags_added: result.tags_added,
-          },
-          `Auto-tagged video with ${result.creators_added} creators, ${result.studios_added} studios, ${result.tags_added} tags`,
-        );
-      }
-
-      return result;
-    } catch (error) {
-      logger.warn(
-        { error, video_id: videoId, file_path: filePath },
-        "Failed to auto-tag video",
-      );
-      return result;
-    }
-  }
-
-  async tagMultipleVideos(videoIds: number[]): Promise<AutoTagResult[]> {
-    const results: AutoTagResult[] = [];
-
-    for (const videoId of videoIds) {
-      const videosResult = await db.execute(
-        sql`SELECT id, file_path FROM videos WHERE id = ${videoId}`,
-      );
-      const videos = videosResult as any[];
-
-      if (videos.length > 0) {
-        const video = videos[0];
-        const result = await this.tagNewVideo(video.id, video.file_path);
-        results.push(result);
-      }
     }
 
-    return results;
+    if (
+      result.creators_added > 0 ||
+      result.studios_added > 0 ||
+      result.tags_added > 0
+    ) {
+      logger.info(
+        {
+          video_id: videoId,
+          creators_added: result.creators_added,
+          studios_added: result.studios_added,
+          tags_added: result.tags_added,
+        },
+        `Auto-tagged video with ${result.creators_added} creators, ${result.studios_added} studios, ${result.tags_added} tags`,
+      );
+    }
+
+    return result;
   }
 
   private evaluateConditionsForVideo(
@@ -214,6 +255,8 @@ export class AutoTaggingService {
     },
     _filePath: string,
     pathResult: ReturnType<typeof parseVideoPath>,
+    creatorsCache?: Map<string, number>,
+    studiosCache?: Map<string, number>,
   ): Promise<{ success: boolean; type: "creator" | "studio" | "tag" }> {
     try {
       switch (action.action_type) {
@@ -234,20 +277,24 @@ export class AutoTaggingService {
               pathResult.extracted.creator ||
               (pathResult.extracted as any)[groupName];
             if (creatorName) {
-              const existingCreator = await db
-                .select()
-                .from(creatorsTable)
-                .where(eq(creatorsTable.name, creatorName));
+              let creatorId = creatorsCache?.get(creatorName);
 
-              let creatorId: number;
-              if (existingCreator.length === 0) {
-                const result = await db
-                  .insert(creatorsTable)
-                  .values({ name: creatorName })
-                  .returning({ id: creatorsTable.id });
-                creatorId = result[0].id;
-              } else {
-                creatorId = existingCreator[0].id;
+              if (creatorId === undefined) {
+                const existingCreator = await db
+                  .select()
+                  .from(creatorsTable)
+                  .where(eq(creatorsTable.name, creatorName));
+
+                if (existingCreator.length === 0) {
+                  const result = await db
+                    .insert(creatorsTable)
+                    .values({ name: creatorName })
+                    .returning({ id: creatorsTable.id });
+                  creatorId = result[0].id;
+                } else {
+                  creatorId = existingCreator[0].id;
+                }
+                creatorsCache?.set(creatorName, creatorId);
               }
 
               await db
@@ -272,20 +319,24 @@ export class AutoTaggingService {
               pathResult.extracted.studio ||
               (pathResult.extracted as any)[groupName];
             if (studioName) {
-              const existingStudio = await db
-                .select()
-                .from(studiosTable)
-                .where(eq(studiosTable.name, studioName));
+              let studioId = studiosCache?.get(studioName);
 
-              let studioId: number;
-              if (existingStudio.length === 0) {
-                const result = await db
-                  .insert(studiosTable)
-                  .values({ name: studioName })
-                  .returning({ id: studiosTable.id });
-                studioId = result[0].id;
-              } else {
-                studioId = existingStudio[0].id;
+              if (studioId === undefined) {
+                const existingStudio = await db
+                  .select()
+                  .from(studiosTable)
+                  .where(eq(studiosTable.name, studioName));
+
+                if (existingStudio.length === 0) {
+                  const result = await db
+                    .insert(studiosTable)
+                    .values({ name: studioName })
+                    .returning({ id: studiosTable.id });
+                  studioId = result[0].id;
+                } else {
+                  studioId = existingStudio[0].id;
+                }
+                studiosCache?.set(studioName, studioId);
               }
 
               await db

@@ -1,4 +1,5 @@
-import { existsSync, statSync, readdirSync } from "fs";
+import { existsSync } from "fs";
+import { readdir, stat as statAsync } from "fs/promises";
 import { resolve, join } from "path";
 import { sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
@@ -19,7 +20,7 @@ export class StorageStatsService {
   /**
    * Get size of a directory recursively
    */
-  private getDirectorySize(dirPath: string): number {
+  private async getDirectorySize(dirPath: string): Promise<number> {
     const fullPath = resolve(process.cwd(), dirPath);
 
     if (!existsSync(fullPath)) {
@@ -29,16 +30,18 @@ export class StorageStatsService {
     let totalSize = 0;
 
     try {
-      const items = readdirSync(fullPath, { withFileTypes: true });
+      const items = await readdir(fullPath, { withFileTypes: true });
 
-      for (const item of items) {
-        const itemPath = join(fullPath, item.name);
-        if (item.isDirectory()) {
-          totalSize += this.getDirectorySize(itemPath);
-        } else if (item.isFile()) {
-          totalSize += statSync(itemPath).size;
-        }
-      }
+      await Promise.all(
+        items.map(async (item) => {
+          const itemPath = join(fullPath, item.name);
+          if (item.isDirectory()) {
+            totalSize += await this.getDirectorySize(itemPath);
+          } else if (item.isFile()) {
+            totalSize += (await statAsync(itemPath)).size;
+          }
+        }),
+      );
     } catch (error) {
       logger.warn({ dirPath, error }, "Failed to calculate directory size");
     }
@@ -103,12 +106,15 @@ export class StorageStatsService {
         video_count: Number(row.video_count),
       }));
 
-    // Get managed directory sizes
-    const thumbnailsSize = this.getDirectorySize(env.THUMBNAILS_DIR);
-    const storyboardsSize = this.getDirectorySize(env.STORYBOARDS_DIR);
-    const profilePicturesSize = this.getDirectorySize(env.PROFILE_PICTURES_DIR);
-    const convertedSize = this.getDirectorySize(env.CONVERTED_VIDEOS_DIR);
-    const facesSize = this.getDirectorySize(env.FACES_DIR);
+    // Get managed directory sizes in parallel
+    const [thumbnailsSize, storyboardsSize, profilePicturesSize, convertedSize, facesSize] =
+      await Promise.all([
+        this.getDirectorySize(env.THUMBNAILS_DIR),
+        this.getDirectorySize(env.STORYBOARDS_DIR),
+        this.getDirectorySize(env.PROFILE_PICTURES_DIR),
+        this.getDirectorySize(env.CONVERTED_VIDEOS_DIR),
+        this.getDirectorySize(env.FACES_DIR),
+      ]);
 
     // Note: PostgreSQL stores data in its own data directory managed by the server
     // We no longer track database file size since it's not a local SQLite file

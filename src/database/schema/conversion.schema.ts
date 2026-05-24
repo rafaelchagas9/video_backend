@@ -38,8 +38,11 @@ export const conversionJobsTable = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
-    videoIdx: index("idx_conversion_jobs_video").on(table.videoId),
-    statusIdx: index("idx_conversion_jobs_status").on(table.status),
+    videoPresetStatusIdx: index("idx_conversion_jobs_video_preset_status").on(
+      table.videoId,
+      table.preset,
+      table.status,
+    ),
     batchIdx: index("idx_conversion_jobs_batch").on(table.batchId),
   }),
 );

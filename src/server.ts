@@ -6,6 +6,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
+import compress from "@fastify/compress";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -14,7 +15,6 @@ import {
 import { env } from "./config/env";
 import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
-import { getDatabase } from "./config/database";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
 
 type ValidationIssue = {
@@ -93,12 +93,15 @@ export async function buildServer() {
   fastify.setValidatorCompiler(validatorCompiler);
   fastify.setSerializerCompiler(serializerCompiler);
 
-  // Initialize database
-  getDatabase();
+  // Database is initialized via drizzle.ts on import; no separate pool needed
 
   // Register plugins
   await fastify.register(cookie, {
     secret: env.SESSION_SECRET,
+  });
+
+  await fastify.register(compress, {
+    threshold: 1024,
   });
 
   await fastify.register(cors, {

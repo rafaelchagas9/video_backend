@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import { readFileSync } from "fs";
+import { createReadStream } from "fs";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { thumbnailsService } from "./thumbnails.service";
 import {
@@ -100,8 +100,8 @@ export async function thumbnailsRoutes(
       const mimeType = ext === 'webp' ? 'image/webp' : 'image/jpeg';
 
       reply.header("Content-Type", mimeType);
-      const buffer = readFileSync(thumbnail.file_path);
-      return reply.send(buffer);
+      reply.header("Cache-Control", "public, max-age=86400");
+      return reply.send(createReadStream(thumbnail.file_path));
     },
   );
 

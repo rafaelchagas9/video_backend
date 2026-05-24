@@ -94,8 +94,8 @@ export class StreamingService {
   async createStream(options: StreamOptions): Promise<StreamResult> {
     const { videoId, rangeHeader } = options;
 
-    // Get video details
-    const video = await videosService.findById(videoId);
+    // Get video details (lightweight query)
+    const video = await videosService.findFilePathById(videoId);
 
     // Check file availability
     if (!video.is_available || !fileExists(video.file_path)) {

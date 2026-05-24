@@ -128,9 +128,12 @@ export class TagsService {
       .limit(limit)
       .offset(offset);
 
+    // Fetch all tags once to build tree in-memory
+    const allTags = await this.list({ limit: 10000 }).then((r) => r.data as Tag[]);
+
     // Build tree with children
     const treeWithChildren = await Promise.all(
-      rootTags.map((tag) => this.buildTreeWithDescendants(tag.id)),
+      rootTags.map((tag) => this.buildTreeWithDescendants(tag.id, allTags)),
     );
 
     return {
@@ -144,23 +147,27 @@ export class TagsService {
     };
   }
 
-  private async buildTreeWithDescendants(tagId: number): Promise<TagTreeNode> {
-    const tag = await this.findById(tagId);
+  private async buildTreeWithDescendants(tagId: number, preFetchedTags?: Tag[]): Promise<TagTreeNode> {
+    const allTags: Tag[] = preFetchedTags ?? (await this.list({ limit: 10000 }).then((r) => (r.data as Tag[]) || []));
 
-    const children = await db
-      .select()
-      .from(tagsTable)
-      .where(eq(tagsTable.parentId, tagId))
-      .orderBy(tagsTable.name);
+    const tag = allTags.find((t) => t.id === tagId);
+    if (!tag) {
+      throw new NotFoundError(`Tag not found with id: ${tagId}`);
+    }
 
-    const childrenTree = await Promise.all(
-      children.map((child) => this.buildTreeWithDescendants(child.id)),
-    );
+    const buildNode = (nodeId: number): TagTreeNode => {
+      const node = allTags.find((t) => t.id === nodeId)!;
+      const children = allTags
+        .filter((t) => t.parent_id === nodeId)
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-    return {
-      ...tag,
-      children: childrenTree,
+      return {
+        ...node,
+        children: children.map((child) => buildNode(child.id)),
+      };
     };
+
+    return buildNode(tagId);
   }
 
   async getTree(): Promise<TagTreeNode[]> {

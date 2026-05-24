@@ -11,7 +11,9 @@ export const playlistsTable = pgTable('playlists', {
   description: text('description'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  userIdx: index('idx_playlists_user').on(table.userId),
+}));
 
 // Playlist-Video relationship (many-to-many with position)
 export const playlistVideosTable = pgTable('playlist_videos', {

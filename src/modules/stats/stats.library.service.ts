@@ -31,7 +31,41 @@ export class LibraryStatsService {
       FROM videos
     `;
 
-    const countsRows = await db.execute(countsQuery);
+    // Resolution breakdown
+    const resolutionsQuery = sql`
+      SELECT
+        CASE
+          WHEN height >= 2160 THEN '4K'
+          WHEN height >= 1440 THEN '1440p'
+          WHEN height >= 1080 THEN '1080p'
+          WHEN height >= 720 THEN '720p'
+          WHEN height >= 480 THEN '480p'
+          WHEN height IS NULL THEN 'Unknown'
+          ELSE 'Other'
+        END as resolution,
+        COUNT(*) as count
+      FROM videos
+      GROUP BY resolution
+      ORDER BY count DESC
+    `;
+
+    // Codec breakdown
+    const codecsQuery = sql`
+      SELECT
+        COALESCE(codec, 'Unknown') as codec,
+        COUNT(*) as count
+      FROM videos
+      GROUP BY codec
+      ORDER BY count DESC
+    `;
+
+    // Fetch all library stats concurrently
+    const [countsRows, resolutionsResult, codecsResult] = await Promise.all([
+      db.execute(countsQuery),
+      db.execute(resolutionsQuery),
+      db.execute(codecsQuery),
+    ]);
+
     const countsRaw = countsRows[0] as {
       total: string | number;
       available: string | number;
@@ -56,25 +90,7 @@ export class LibraryStatsService {
       avg_duration: Number(countsRaw.avg_duration),
     };
 
-    // Resolution breakdown
-    const resolutionsQuery = sql`
-      SELECT
-        CASE
-          WHEN height >= 2160 THEN '4K'
-          WHEN height >= 1440 THEN '1440p'
-          WHEN height >= 1080 THEN '1080p'
-          WHEN height >= 720 THEN '720p'
-          WHEN height >= 480 THEN '480p'
-          WHEN height IS NULL THEN 'Unknown'
-          ELSE 'Other'
-        END as resolution,
-        COUNT(*) as count
-      FROM videos
-      GROUP BY resolution
-      ORDER BY count DESC
-    `;
-
-    const resolutions = (await db.execute(resolutionsQuery)) as {
+    const resolutions = resolutionsResult as unknown as {
       resolution: string;
       count: string | number;
     }[];
@@ -88,17 +104,7 @@ export class LibraryStatsService {
           : 0,
     }));
 
-    // Codec breakdown
-    const codecsQuery = sql`
-      SELECT
-        COALESCE(codec, 'Unknown') as codec,
-        COUNT(*) as count
-      FROM videos
-      GROUP BY codec
-      ORDER BY count DESC
-    `;
-
-    const codecs = (await db.execute(codecsQuery)) as {
+    const codecs = codecsResult as unknown as {
       codec: string;
       count: string | number;
     }[];

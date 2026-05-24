@@ -17,17 +17,60 @@ export class ContentStatsService {
    * Get current content organization statistics
    */
   async getCurrentContentStats(): Promise<CurrentContentStats> {
-    // Videos without organization
+    // Videos without organization using optimized NOT EXISTS subqueries
     const gapsQuery = sql`
       SELECT
-        (SELECT COUNT(*) FROM videos WHERE id NOT IN (SELECT video_id FROM video_tags)) as no_tags,
-        (SELECT COUNT(*) FROM videos WHERE id NOT IN (SELECT video_id FROM video_creators)) as no_creators,
-        (SELECT COUNT(*) FROM videos WHERE id NOT IN (SELECT video_id FROM ratings)) as no_ratings,
-        (SELECT COUNT(*) FROM videos WHERE id NOT IN (SELECT video_id FROM thumbnails)) as no_thumbnails,
-        (SELECT COUNT(*) FROM videos WHERE id NOT IN (SELECT video_id FROM storyboards)) as no_storyboards
+        (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = v.id)) as no_tags,
+        (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM video_creators vc WHERE vc.video_id = v.id)) as no_creators,
+        (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM ratings r WHERE r.video_id = v.id)) as no_ratings,
+        (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM thumbnails t WHERE t.video_id = v.id)) as no_thumbnails,
+        (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM storyboards s WHERE s.video_id = v.id)) as no_storyboards
     `;
 
-    const gapsRows = await db.execute(gapsQuery);
+    // Entity counts
+    const countsQuery = sql`
+      SELECT
+        (SELECT COUNT(*) FROM tags) as tags,
+        (SELECT COUNT(*) FROM creators) as creators,
+        (SELECT COUNT(*) FROM studios) as studios,
+        (SELECT COUNT(*) FROM playlists) as playlists
+    `;
+
+    // Top tags
+    const topTagsQuery = sql`
+      SELECT t.id, t.name, COUNT(vt.video_id) as video_count
+      FROM tags t
+      LEFT JOIN video_tags vt ON vt.tag_id = t.id
+      GROUP BY t.id, t.name
+      HAVING COUNT(vt.video_id) > 0
+      ORDER BY video_count DESC
+      LIMIT 10
+    `;
+
+    // Top creators
+    const topCreatorsQuery = sql`
+      SELECT c.id, c.name, COUNT(vc.video_id) as video_count
+      FROM creators c
+      LEFT JOIN video_creators vc ON vc.creator_id = c.id
+      GROUP BY c.id, c.name
+      HAVING COUNT(vc.video_id) > 0
+      ORDER BY video_count DESC
+      LIMIT 10
+    `;
+
+    // Fetch all content stats concurrently
+    const [
+      gapsRows,
+      countsRows,
+      topTagsRawResult,
+      topCreatorsRawResult,
+    ] = await Promise.all([
+      db.execute(gapsQuery),
+      db.execute(countsQuery),
+      db.execute(topTagsQuery),
+      db.execute(topCreatorsQuery),
+    ]);
+
     const gapsRaw = gapsRows[0] as {
       no_tags: string | number;
       no_creators: string | number;
@@ -48,16 +91,6 @@ export class ContentStatsService {
       no_storyboards: Number(gapsRaw.no_storyboards),
     };
 
-    // Entity counts
-    const countsQuery = sql`
-      SELECT
-        (SELECT COUNT(*) FROM tags) as tags,
-        (SELECT COUNT(*) FROM creators) as creators,
-        (SELECT COUNT(*) FROM studios) as studios,
-        (SELECT COUNT(*) FROM playlists) as playlists
-    `;
-
-    const countsRows = await db.execute(countsQuery);
     const countsRaw = countsRows[0] as {
       tags: string | number;
       creators: string | number;
@@ -76,18 +109,7 @@ export class ContentStatsService {
       playlists: Number(countsRaw.playlists),
     };
 
-    // Top tags
-    const topTagsQuery = sql`
-      SELECT t.id, t.name, COUNT(vt.video_id) as video_count
-      FROM tags t
-      LEFT JOIN video_tags vt ON vt.tag_id = t.id
-      GROUP BY t.id, t.name
-      HAVING COUNT(vt.video_id) > 0
-      ORDER BY video_count DESC
-      LIMIT 10
-    `;
-
-    const topTagsRaw = (await db.execute(topTagsQuery)) as unknown as Array<{
+    const topTagsRaw = topTagsRawResult as unknown as Array<{
       id: string | number;
       name: string;
       video_count: string | number;
@@ -99,20 +121,7 @@ export class ContentStatsService {
       video_count: Number(item.video_count),
     }));
 
-    // Top creators
-    const topCreatorsQuery = sql`
-      SELECT c.id, c.name, COUNT(vc.video_id) as video_count
-      FROM creators c
-      LEFT JOIN video_creators vc ON vc.creator_id = c.id
-      GROUP BY c.id, c.name
-      HAVING COUNT(vc.video_id) > 0
-      ORDER BY video_count DESC
-      LIMIT 10
-    `;
-
-    const topCreatorsRaw = (await db.execute(
-      topCreatorsQuery,
-    )) as unknown as Array<{
+    const topCreatorsRaw = topCreatorsRawResult as unknown as Array<{
       id: string | number;
       name: string;
       video_count: string | number;

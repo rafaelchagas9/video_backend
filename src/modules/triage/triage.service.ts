@@ -205,102 +205,109 @@ export class TriageService {
     let studiosAdded = 0;
     let studiosRemoved = 0;
 
-    // Process each video
-    for (const videoId of videoIds) {
-      try {
+    try {
+      await db.transaction(async (tx) => {
         // Add creators
         if (actions.addCreatorIds && actions.addCreatorIds.length > 0) {
-          for (const creatorId of actions.addCreatorIds) {
-            try {
-              await db
-                .insert(videoCreatorsTable)
-                .values({ videoId, creatorId })
-                .onConflictDoNothing();
-              creatorsAdded++;
-            } catch (e: any) {
-              if (e.code !== "23505") {
-                // Not a unique violation
-                errors++;
-              }
-            }
-          }
+          const values = videoIds.flatMap((videoId) =>
+            actions.addCreatorIds!.map((creatorId) => ({
+              videoId,
+              creatorId,
+            })),
+          );
+
+          const result = await tx
+            .insert(videoCreatorsTable)
+            .values(values)
+            .onConflictDoNothing()
+            .returning({ videoId: videoCreatorsTable.videoId });
+
+          creatorsAdded = result.length;
         }
 
         // Remove creators
         if (actions.removeCreatorIds && actions.removeCreatorIds.length > 0) {
-          await db
+          const result = await tx
             .delete(videoCreatorsTable)
             .where(
               and(
-                eq(videoCreatorsTable.videoId, videoId),
+                inArray(videoCreatorsTable.videoId, videoIds),
                 inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds),
               ),
-            );
-          creatorsRemoved += actions.removeCreatorIds.length;
+            )
+            .returning({ videoId: videoCreatorsTable.videoId });
+
+          creatorsRemoved = result.length;
         }
 
         // Add tags
         if (actions.addTagIds && actions.addTagIds.length > 0) {
-          for (const tagId of actions.addTagIds) {
-            try {
-              await db
-                .insert(videoTagsTable)
-                .values({ videoId, tagId })
-                .onConflictDoNothing();
-              tagsAdded++;
-            } catch (e: any) {
-              if (e.code !== "23505") {
-                errors++;
-              }
-            }
-          }
+          const values = videoIds.flatMap((videoId) =>
+            actions.addTagIds!.map((tagId) => ({
+              videoId,
+              tagId,
+            })),
+          );
+
+          const result = await tx
+            .insert(videoTagsTable)
+            .values(values)
+            .onConflictDoNothing()
+            .returning({ videoId: videoTagsTable.videoId });
+
+          tagsAdded = result.length;
         }
 
         // Remove tags
         if (actions.removeTagIds && actions.removeTagIds.length > 0) {
-          await db
+          const result = await tx
             .delete(videoTagsTable)
             .where(
               and(
-                eq(videoTagsTable.videoId, videoId),
+                inArray(videoTagsTable.videoId, videoIds),
                 inArray(videoTagsTable.tagId, actions.removeTagIds),
               ),
-            );
-          tagsRemoved += actions.removeTagIds.length;
+            )
+            .returning({ videoId: videoTagsTable.videoId });
+
+          tagsRemoved = result.length;
         }
 
         // Add studios
         if (actions.addStudioIds && actions.addStudioIds.length > 0) {
-          for (const studioId of actions.addStudioIds) {
-            try {
-              await db
-                .insert(videoStudiosTable)
-                .values({ videoId, studioId })
-                .onConflictDoNothing();
-              studiosAdded++;
-            } catch (e: any) {
-              if (e.code !== "23505") {
-                errors++;
-              }
-            }
-          }
+          const values = videoIds.flatMap((videoId) =>
+            actions.addStudioIds!.map((studioId) => ({
+              videoId,
+              studioId,
+            })),
+          );
+
+          const result = await tx
+            .insert(videoStudiosTable)
+            .values(values)
+            .onConflictDoNothing()
+            .returning({ videoId: videoStudiosTable.videoId });
+
+          studiosAdded = result.length;
         }
 
         // Remove studios
         if (actions.removeStudioIds && actions.removeStudioIds.length > 0) {
-          await db
+          const result = await tx
             .delete(videoStudiosTable)
             .where(
               and(
-                eq(videoStudiosTable.videoId, videoId),
+                inArray(videoStudiosTable.videoId, videoIds),
                 inArray(videoStudiosTable.studioId, actions.removeStudioIds),
               ),
-            );
-          studiosRemoved += actions.removeStudioIds.length;
+            )
+            .returning({ videoId: videoStudiosTable.videoId });
+
+          studiosRemoved = result.length;
         }
-      } catch (e) {
-        errors++;
-      }
+      });
+    } catch {
+      errors++;
     }
 
     return {

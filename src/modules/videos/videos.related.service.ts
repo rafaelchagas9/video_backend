@@ -188,15 +188,17 @@ export class VideosRelatedService {
       .delete(videoRelatedScoresTable)
       .where(eq(videoRelatedScoresTable.sourceVideoId, sourceVideoId));
 
-    const computedAt = new Date();
-    for (const candidate of scored) {
-      await db.insert(videoRelatedScoresTable).values({
-        sourceVideoId,
-        relatedVideoId: candidate.videoId,
-        score: candidate.score,
-        reasonsJson: JSON.stringify(candidate.reasons),
-        computedAt,
-      });
+    if (scored.length > 0) {
+      const computedAt = new Date();
+      await db.insert(videoRelatedScoresTable).values(
+        scored.map((candidate) => ({
+          sourceVideoId,
+          relatedVideoId: candidate.videoId,
+          score: candidate.score,
+          reasonsJson: JSON.stringify(candidate.reasons),
+          computedAt,
+        })),
+      );
     }
   }
 

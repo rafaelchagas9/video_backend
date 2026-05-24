@@ -6,6 +6,8 @@ import {
   videoTagsTable,
   videoStudiosTable,
   favoritesTable,
+  thumbnailsTable,
+  storyboardsTable,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
 import type { ListVideosOptions } from "./videos.types";
@@ -23,20 +25,70 @@ export class VideosBulkService {
   async bulkDelete(ids: number[]): Promise<void> {
     if (ids.length === 0) return;
 
-    // Import here to avoid circular dependency
-    const { videosService } = await import("./videos.service");
+    try {
+      // 1. Fetch all matching videos
+      const videos = await db
+        .select({ id: videosTable.id, filePath: videosTable.filePath })
+        .from(videosTable)
+        .where(inArray(videosTable.id, ids));
 
-    // Delete each video individually to ensure file cleanup
-    for (const id of ids) {
-      try {
-        await videosService.delete(id);
-      } catch (error) {
-        logger.warn(
-          { error, videoId: id },
-          "Failed to delete video in bulk operation",
-        );
-        // Continue with remaining videos even if one fails
+      // 2. Fetch all associated thumbnails
+      const thumbnails = await db
+        .select({ filePath: thumbnailsTable.filePath })
+        .from(thumbnailsTable)
+        .where(inArray(thumbnailsTable.videoId, ids));
+
+      // 3. Fetch all associated storyboards
+      const storyboards = await db
+        .select({ spritePath: storyboardsTable.spritePath, vttPath: storyboardsTable.vttPath })
+        .from(storyboardsTable)
+        .where(inArray(storyboardsTable.videoId, ids));
+
+      const fs = await import("fs");
+
+      // 4. Delete physical files
+      for (const video of videos) {
+        if (video.filePath && fs.existsSync(video.filePath)) {
+          try {
+            fs.unlinkSync(video.filePath);
+          } catch (error) {
+            logger.warn({ error, path: video.filePath }, "Failed to delete video file in bulk operation");
+          }
+        }
       }
+
+      for (const thumbnail of thumbnails) {
+        if (thumbnail.filePath && fs.existsSync(thumbnail.filePath)) {
+          try {
+            fs.unlinkSync(thumbnail.filePath);
+          } catch (error) {
+            logger.warn({ error, path: thumbnail.filePath }, "Failed to delete thumbnail file in bulk operation");
+          }
+        }
+      }
+
+      for (const storyboard of storyboards) {
+        if (storyboard.spritePath && fs.existsSync(storyboard.spritePath)) {
+          try {
+            fs.unlinkSync(storyboard.spritePath);
+          } catch (error) {
+            logger.warn({ error, path: storyboard.spritePath }, "Failed to delete storyboard sprite in bulk operation");
+          }
+        }
+        if (storyboard.vttPath && fs.existsSync(storyboard.vttPath)) {
+          try {
+            fs.unlinkSync(storyboard.vttPath);
+          } catch (error) {
+            logger.warn({ error, path: storyboard.vttPath }, "Failed to delete storyboard VTT in bulk operation");
+          }
+        }
+      }
+
+      // 5. Delete videos from database (CASCADE handles relations automatically)
+      await db.delete(videosTable).where(inArray(videosTable.id, ids));
+    } catch (error) {
+      logger.error({ error, ids }, "Failed to execute bulk delete operation");
+      throw error;
     }
   }
 
@@ -219,37 +271,48 @@ export class VideosBulkService {
       .having(sql`COUNT(*) > 1`)
       .orderBy(desc(sql`SUM(${videosTable.fileSizeBytes})`));
 
-    // For each duplicate hash, get the video details
-    const result = await Promise.all(
-      duplicateHashes.map(async (dup) => {
-        const videos = await db
-          .select({
-            id: videosTable.id,
-            fileName: videosTable.fileName,
-            filePath: videosTable.filePath,
-            fileSizeBytes: videosTable.fileSizeBytes,
-            indexedAt: videosTable.indexedAt,
-          })
-          .from(videosTable)
-          .where(eq(videosTable.fileHash, dup.fileHash!))
-          .orderBy(asc(videosTable.indexedAt));
+    const hashes = duplicateHashes.map((dup) => dup.fileHash!).filter(Boolean);
+    if (hashes.length === 0) return [];
 
-        return {
-          file_hash: dup.fileHash!,
-          count: dup.count,
-          total_size_bytes: dup.totalSizeBytes?.toString() ?? "0",
-          videos: videos.map((v) => ({
-            id: v.id,
-            file_name: v.fileName,
-            file_path: v.filePath,
-            file_size_bytes: v.fileSizeBytes,
-            indexed_at: v.indexedAt.toISOString(),
-          })),
-        };
-      }),
-    );
+    // Fetch all videos matching the duplicate hashes in a single query
+    const allVideos = await db
+      .select({
+        id: videosTable.id,
+        fileName: videosTable.fileName,
+        filePath: videosTable.filePath,
+        fileSizeBytes: videosTable.fileSizeBytes,
+        indexedAt: videosTable.indexedAt,
+        fileHash: videosTable.fileHash,
+      })
+      .from(videosTable)
+      .where(inArray(videosTable.fileHash, hashes))
+      .orderBy(asc(videosTable.indexedAt));
 
-    return result;
+    // Group videos by file hash in memory
+    const videosByHash = new Map<string, typeof allVideos>();
+    for (const video of allVideos) {
+      if (video.fileHash) {
+        const list = videosByHash.get(video.fileHash) ?? [];
+        list.push(video);
+        videosByHash.set(video.fileHash, list);
+      }
+    }
+
+    return duplicateHashes.map((dup) => {
+      const videos = videosByHash.get(dup.fileHash!) ?? [];
+      return {
+        file_hash: dup.fileHash!,
+        count: dup.count,
+        total_size_bytes: dup.totalSizeBytes?.toString() ?? "0",
+        videos: videos.map((v) => ({
+          id: v.id,
+          file_name: v.fileName,
+          file_path: v.filePath,
+          file_size_bytes: v.fileSizeBytes,
+          indexed_at: v.indexedAt.toISOString(),
+        })),
+      };
+    });
   }
 
   /**

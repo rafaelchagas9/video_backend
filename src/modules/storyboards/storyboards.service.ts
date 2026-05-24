@@ -3,9 +3,6 @@ import {
   createReadStream,
   existsSync,
   mkdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
 } from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import { db } from "@/config/drizzle";
@@ -18,7 +15,7 @@ import { eventsService } from "@/modules/events/events.service";
 import { logger } from "@/utils/logger";
 import { recordPerfStage } from "@/utils/performance-profiler";
 import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
-import { copyFile, unlink, stat, readFile } from "fs/promises";
+import { copyFile, unlink, stat, readFile, writeFile } from "fs/promises";
 import { freemem } from "os";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
 
@@ -286,7 +283,7 @@ export class StoryboardsService {
 
     // Generate VTT file
     const vttStart = Date.now();
-    this.generateVttFile(
+    await this.generateVttFile(
       vttPath,
       videoId,
       tileWidth,
@@ -398,7 +395,7 @@ export class StoryboardsService {
     const spriteSizeBytes = stats.size;
 
     // Generate VTT file
-    this.generateVttFile(
+    await this.generateVttFile(
       vttPath,
       videoId,
       tileWidth,
@@ -450,7 +447,7 @@ export class StoryboardsService {
     const inputListContent = frames
       .map((frame) => `file '${frame.filePath}'`)
       .join("\n");
-    writeFileSync(inputListPath, inputListContent, "utf-8");
+    await writeFile(inputListPath, inputListContent, "utf-8");
 
     const qualityOptions = this.getQualityOptions(format, quality);
 
@@ -486,7 +483,7 @@ export class StoryboardsService {
     } finally {
       // Clean up input list file
       try {
-        unlinkSync(inputListPath);
+        await unlink(inputListPath);
       } catch (error) {
         logger.warn(
           { path: inputListPath },
@@ -573,11 +570,11 @@ export class StoryboardsService {
 
   private async getAvailableShm(): Promise<number> {
     try {
-      const { execSync } = await import("child_process");
-      const output = execSync("df -B1 /dev/shm | tail -1 | awk '{print $4}'")
-        .toString()
-        .trim();
-      return parseInt(output, 10);
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
+      const execAsync = promisify(exec);
+      const { stdout } = await execAsync("df -B1 /dev/shm | tail -1 | awk '{print $4}'");
+      return parseInt(stdout.trim(), 10);
     } catch {
       return 0;
     }
@@ -783,7 +780,7 @@ export class StoryboardsService {
   /**
    * Generate WebVTT file with sprite coordinates.
    */
-  private generateVttFile(
+  private async generateVttFile(
     vttPath: string,
     videoId: number,
     tileWidth: number,
@@ -793,7 +790,7 @@ export class StoryboardsService {
     cols: number,
     duration: number,
     spriteFormat: string,
-  ): void {
+  ): Promise<void> {
     let vttContent = "WEBVTT\n\n";
     const spriteExtension = spriteFormat.startsWith(".")
       ? spriteFormat.slice(1)
@@ -818,7 +815,7 @@ export class StoryboardsService {
       vttContent += `/api/videos/${videoId}/storyboard.${spriteExtension}#xywh=${x},${y},${tileWidth},${tileHeight}\n\n`;
     }
 
-    writeFileSync(vttPath, vttContent, "utf-8");
+    await writeFile(vttPath, vttContent, "utf-8");
   }
 
   /**
@@ -877,7 +874,7 @@ export class StoryboardsService {
       throw new NotFoundError(`VTT file not found: ${storyboard.vtt_path}`);
     }
 
-    return readFileSync(storyboard.vtt_path, "utf-8");
+    return readFile(storyboard.vtt_path, "utf-8");
   }
 
   /**
@@ -901,7 +898,7 @@ export class StoryboardsService {
     const extension = this.getExtension(storyboard.sprite_path).toLowerCase();
     const contentType = extension === ".webp" ? "image/webp" : "image/jpeg";
 
-    return { buffer: readFileSync(storyboard.sprite_path), contentType };
+    return { buffer: await readFile(storyboard.sprite_path), contentType };
   }
 
   /**
@@ -924,12 +921,10 @@ export class StoryboardsService {
 
     // Delete files
     try {
-      if (existsSync(storyboard.sprite_path)) {
-        unlinkSync(storyboard.sprite_path);
-      }
-      if (existsSync(storyboard.vtt_path)) {
-        unlinkSync(storyboard.vtt_path);
-      }
+      await Promise.all([
+        existsSync(storyboard.sprite_path) ? unlink(storyboard.sprite_path) : Promise.resolve(),
+        existsSync(storyboard.vtt_path) ? unlink(storyboard.vtt_path) : Promise.resolve(),
+      ]);
     } catch (error) {
       logger.error(
         { videoId, error },

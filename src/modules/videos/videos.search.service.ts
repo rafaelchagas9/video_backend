@@ -60,21 +60,21 @@ export class VideosSearchService {
     return Array.from(expanded);
   }
 
-  private async checkIsFavorite(
+  private async checkIsFavoritesBatch(
     userId: number,
-    videoId: number,
-  ): Promise<boolean> {
-    const result = await db
-      .select({ id: favoritesTable.videoId })
+    videoIds: number[],
+  ): Promise<Set<number>> {
+    if (videoIds.length === 0) return new Set();
+    const rows = await db
+      .select({ videoId: favoritesTable.videoId })
       .from(favoritesTable)
       .where(
         and(
           eq(favoritesTable.userId, userId),
-          eq(favoritesTable.videoId, videoId),
+          inArray(favoritesTable.videoId, videoIds),
         ),
-      )
-      .limit(1);
-    return result.length > 0;
+      );
+    return new Set(rows.map((r) => r.videoId));
   }
 
   /**
@@ -362,20 +362,19 @@ export class VideosSearchService {
         LIMIT ${limit} OFFSET ${offset}
       `);
 
-      // Check favorites for each video
-      const videosWithFavorites = await Promise.all(
-        results.map(async (v) => {
-          const isFav = await this.checkIsFavorite(userId, v.id);
-
-          return {
-            ...v,
-            is_favorite: isFav,
-            thumbnail_url: v.thumbnail_id
-              ? `${API_PREFIX}/thumbnails/${v.thumbnail_id}/image`
-              : null,
-          };
-        }),
+      // Check favorites for all videos in a single query
+      const favoriteIdsSet = await this.checkIsFavoritesBatch(
+        userId,
+        results.map((v) => v.id),
       );
+
+      const videosWithFavorites = results.map((v) => ({
+        ...v,
+        is_favorite: favoriteIdsSet.has(v.id),
+        thumbnail_url: v.thumbnail_id
+          ? `${API_PREFIX}/thumbnails/${v.thumbnail_id}/image`
+          : null,
+      }));
 
       const enrichedVideos = await this.attachIncludes(
         videosWithFavorites as Video[],
@@ -477,10 +476,14 @@ export class VideosSearchService {
       .limit(limit)
       .offset(offset);
 
-    // Check favorites for each video
-    const videosWithFavorites = await Promise.all(
-      videos.map(async (v) => {
-        const isFav = await this.checkIsFavorite(userId, v.id);
+    // Check favorites for all videos in a single query
+    const favoriteIds = await this.checkIsFavoritesBatch(
+      userId,
+      videos.map((v) => v.id),
+    );
+
+    const videosWithFavorites = videos.map((v) => {
+        const isFav = favoriteIds.has(v.id);
 
         return {
           id: v.id,
@@ -510,8 +513,7 @@ export class VideosSearchService {
             ? `${API_PREFIX}/thumbnails/${v.thumbnailId}/image`
             : null,
         };
-      }),
-    );
+      });
 
     const enrichedVideos = await this.attachIncludes(
       videosWithFavorites as Video[],
@@ -751,7 +753,8 @@ export class VideosSearchService {
     // Prepare video response
     let videoResponse: Video | null = null;
     if (nextVideo) {
-      const isFav = await this.checkIsFavorite(userId, nextVideo.id);
+      const favSet = await this.checkIsFavoritesBatch(userId, [nextVideo.id]);
+      const isFav = favSet.has(nextVideo.id);
 
       videoResponse = {
         id: nextVideo.id,

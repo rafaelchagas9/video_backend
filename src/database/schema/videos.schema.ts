@@ -106,8 +106,7 @@ export const videoMetadataTable = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => ({
-    videoIdx: index("idx_video_metadata_video").on(table.videoId),
-    keyIdx: index("idx_video_metadata_key").on(table.key),
+    videoKeyIdx: index("idx_video_metadata_video_key").on(table.videoId, table.key),
   }),
 );
 
@@ -131,11 +130,12 @@ export const videoRelatedScoresTable = pgTable(
       table.sourceVideoId,
       table.score,
     ),
+    sourceComputedIdx: index("idx_video_related_scores_source_computed").on(
+      table.sourceVideoId,
+      table.computedAt,
+    ),
     relatedIdx: index("idx_video_related_scores_related").on(
       table.relatedVideoId,
-    ),
-    computedAtIdx: index("idx_video_related_scores_computed_at").on(
-      table.computedAt,
     ),
   }),
 );

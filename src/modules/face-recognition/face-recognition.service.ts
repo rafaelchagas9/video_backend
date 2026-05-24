@@ -4,7 +4,7 @@
  */
 
 import { db } from "@/config/drizzle";
-import { eq, sql, and, desc } from "drizzle-orm";
+import { eq, sql, and, desc, inArray } from "drizzle-orm";
 import {
   creatorFaceEmbeddingsTable,
   videoFaceDetectionsTable,
@@ -378,38 +378,76 @@ export class FaceRecognitionService {
       }
     >();
 
-    for (const detection of rawDetections) {
-      try {
-        const matches = await this.findSimilarCreators(
-          detection.embedding,
-          1,
-          similarityThreshold,
-        );
+    try {
+      const embeddingsArray = rawDetections.map((d) => `[${d.embedding.join(",")}]`);
+      const indicesArray = rawDetections.map((_, i) => i);
 
-        if (matches.length > 0) {
-          const bestMatch = matches[0];
-          const creatorId = bestMatch.creator_id;
+      // Cosine distance <=> operator: similarity = 1 - distance
+      const query = sql`
+        WITH detections AS (
+          SELECT 
+            d.idx, 
+            d.emb::vector AS embedding
+          FROM UNNEST(${embeddingsArray}::text[], ${indicesArray}::int[]) AS d(emb, idx)
+        ),
+        all_matches AS (
+          SELECT 
+            d.idx,
+            cfe.id AS reference_embedding_id,
+            cfe.creator_id,
+            c.name AS creator_name,
+            cfe.source_type as reference_source_type,
+            1 - (cfe.embedding::vector <=> d.embedding) AS similarity,
+            ROW_NUMBER() OVER (
+              PARTITION BY d.idx 
+              ORDER BY cfe.embedding::vector <=> d.embedding ASC
+            ) as rn
+          FROM detections d
+          CROSS JOIN creator_face_embeddings cfe
+          JOIN creators c ON c.id = cfe.creator_id
+          WHERE 1 - (cfe.embedding::vector <=> d.embedding) >= ${similarityThreshold}
+        )
+        SELECT * FROM all_matches WHERE rn = 1
+      `;
 
-          if (!creatorMatches.has(creatorId)) {
-            creatorMatches.set(creatorId, {
-              creatorId,
-              maxConfidence: 0,
-              detections: [],
-            });
-          }
+      const matchesResult = await db.execute(query);
+      const matchesList = matchesResult as any[];
 
-          const group = creatorMatches.get(creatorId)!;
-          group.detections.push(detection);
-          if (bestMatch.similarity > group.maxConfidence) {
-            group.maxConfidence = bestMatch.similarity;
-          }
+      for (const row of matchesList) {
+        const idx = Number(row.idx);
+        const detection = rawDetections[idx];
+        const match = {
+          creator_id: Number(row.creator_id),
+          creator_name: row.creator_name,
+          similarity: Number(row.similarity),
+          reference_embedding_id: Number(row.reference_embedding_id),
+          reference_source_type: row.reference_source_type,
+        };
 
-          (detection as any)._matchInfo = bestMatch;
+        (detection as any)._matchInfo = match;
+
+        const creatorId = match.creator_id;
+        if (!creatorMatches.has(creatorId)) {
+          creatorMatches.set(creatorId, {
+            creatorId,
+            maxConfidence: 0,
+            detections: [],
+          });
         }
-      } catch (error) {
-        logger.error({ error }, "Failed to compute match");
+
+        const group = creatorMatches.get(creatorId)!;
+        group.detections.push(detection);
+        if (match.similarity > group.maxConfidence) {
+          group.maxConfidence = match.similarity;
+        }
       }
+    } catch (error) {
+      logger.error({ error }, "Failed to compute batch face matching");
     }
+
+    const detectionsToInsert: any[] = [];
+    const videoCreatorsToInsert: any[] = [];
+    const creatorsToCleanupDetections = new Set<number>();
 
     for (const group of creatorMatches.values()) {
       const { creatorId, maxConfidence, detections: groupDetections } = group;
@@ -427,43 +465,13 @@ export class FaceRecognitionService {
           "High confidence match found, auto-tagging creator",
         );
 
-        const existing = await db
-          .select()
-          .from(videoCreatorsTable)
-          .where(
-            and(
-              eq(videoCreatorsTable.videoId, videoId),
-              eq(videoCreatorsTable.creatorId, creatorId),
-            ),
-          )
-          .limit(1)
-          .then((rows) => rows[0]);
+        videoCreatorsToInsert.push({ videoId, creatorId });
+        creatorsToCleanupDetections.add(creatorId);
 
-        if (!existing) {
-          await db
-            .insert(videoCreatorsTable)
-            .values({
-              videoId,
-              creatorId,
-            })
-            .onConflictDoNothing();
-        }
-
-        // Clean up ALL detections for this creator on this video
-        await db
-          .delete(videoFaceDetectionsTable)
-          .where(
-            and(
-              eq(videoFaceDetectionsTable.videoId, videoId),
-              eq(videoFaceDetectionsTable.matchedCreatorId, creatorId),
-            ),
-          );
-
-        // Save ONLY the single best match as confirmed
         const bestDetection = groupDetections[0];
         const matchInfo = (bestDetection as any)._matchInfo;
 
-        await db.insert(videoFaceDetectionsTable).values({
+        detectionsToInsert.push({
           videoId,
           embedding: JSON.stringify(bestDetection.embedding),
           timestampSeconds: bestDetection.timestampSeconds,
@@ -477,20 +485,18 @@ export class FaceRecognitionService {
           estimatedGender: bestDetection.estimatedGender,
           matchedCreatorId: matchInfo.creator_id,
           matchConfidence: matchInfo.similarity,
-          matchStatus: "confirmed",
+          matchStatus: "confirmed" as const,
         });
       } else {
-        // Pending matches - limit to top N
         const limit = env.FACE_MAX_PENDING_PER_VIDEO;
         const detectionsToSave = groupDetections.slice(0, limit);
 
         for (const detection of detectionsToSave) {
           const matchInfo = (detection as any)._matchInfo;
-          // Double check status, though it should be pending here based on logic
           const matchStatus =
             matchInfo.similarity >= autoTagThreshold ? "confirmed" : "pending";
 
-          await db.insert(videoFaceDetectionsTable).values({
+          detectionsToInsert.push({
             videoId,
             embedding: JSON.stringify(detection.embedding),
             timestampSeconds: detection.timestampSeconds,
@@ -504,10 +510,40 @@ export class FaceRecognitionService {
             estimatedGender: detection.estimatedGender,
             matchedCreatorId: matchInfo.creator_id,
             matchConfidence: matchInfo.similarity,
-            matchStatus,
+            matchStatus: matchStatus as any,
           });
         }
       }
+    }
+
+    if (videoCreatorsToInsert.length > 0 || creatorsToCleanupDetections.size > 0 || detectionsToInsert.length > 0) {
+      await db.transaction(async (tx) => {
+        // 1. Tag creators
+        if (videoCreatorsToInsert.length > 0) {
+          await tx
+            .insert(videoCreatorsTable)
+            .values(videoCreatorsToInsert)
+            .onConflictDoNothing();
+        }
+
+        // 2. Clean up old detections for matched creators
+        if (creatorsToCleanupDetections.size > 0) {
+          const creatorIdsArray = Array.from(creatorsToCleanupDetections);
+          await tx
+            .delete(videoFaceDetectionsTable)
+            .where(
+              and(
+                eq(videoFaceDetectionsTable.videoId, videoId),
+                inArray(videoFaceDetectionsTable.matchedCreatorId, creatorIdsArray),
+              ),
+            );
+        }
+
+        // 3. Batch insert face detections
+        if (detectionsToInsert.length > 0) {
+          await tx.insert(videoFaceDetectionsTable).values(detectionsToInsert);
+        }
+      });
     }
   }
 

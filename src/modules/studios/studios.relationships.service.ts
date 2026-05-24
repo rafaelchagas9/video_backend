@@ -92,8 +92,8 @@ export class StudiosRelationshipsService {
       face_thumbnail_url: c.face_thumbnail_path
         ? `/api/creators/${c.id}/picture?type=face`
         : undefined,
-      created_at: c.created_at.toISOString(),
-      updated_at: c.updated_at.toISOString(),
+      created_at: new Date(c.created_at).toISOString(),
+      updated_at: new Date(c.updated_at).toISOString(),
     }));
   }
 
@@ -190,8 +190,8 @@ export class StudiosRelationshipsService {
       name: s.name,
       description: s.description,
       profile_picture_path: s.profile_picture_path,
-      created_at: s.created_at.toISOString(),
-      updated_at: s.updated_at.toISOString(),
+      created_at: new Date(s.created_at).toISOString(),
+      updated_at: new Date(s.updated_at).toISOString(),
     }));
   }
 
@@ -231,8 +231,8 @@ export class StudiosRelationshipsService {
         name: row.name,
         description: row.description,
         profile_picture_path: row.profile_picture_path,
-        created_at: row.created_at.toISOString(),
-        updated_at: row.updated_at.toISOString(),
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: new Date(row.updated_at).toISOString(),
       };
       const existing = grouped.get(Number(row.video_id)) ?? [];
       existing.push(studio);

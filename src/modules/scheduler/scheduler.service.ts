@@ -212,9 +212,11 @@ export class SchedulerService {
     const dailyStatsJob = cron.schedule("0 0 * * *", async () => {
       logger.info({ job: "daily-stats" }, "Running daily stats snapshots");
       try {
-        await libraryStatsService.createLibrarySnapshot();
-        await contentStatsService.createContentSnapshot();
-        await usageStatsService.createUsageSnapshot();
+        await Promise.all([
+          libraryStatsService.createLibrarySnapshot(),
+          contentStatsService.createContentSnapshot(),
+          usageStatsService.createUsageSnapshot(),
+        ]);
         logger.info({ job: "daily-stats" }, "Daily stats snapshots completed");
       } catch (error) {
         logger.error(
