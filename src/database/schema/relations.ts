@@ -29,6 +29,10 @@ import {
   bookmarksTable,
   ratingsTable,
 } from "./content.schema";
+import {
+  videoCollectionsTable,
+  videoCollectionEntriesTable,
+} from "./video-collections.schema";
 import { thumbnailsTable, storyboardsTable } from "./media.schema";
 import {
   conversionJobsTable,
@@ -106,6 +110,7 @@ export const videosRelations = relations(videosTable, ({ one, many }) => ({
   relatedScoresTo: many(videoRelatedScoresTable, {
     relationName: "relatedScoresTo",
   }),
+  collectionEntry: many(videoCollectionEntriesTable),
   conversionJobs: many(conversionJobsTable),
   conversionHistory: many(conversionHistoryTable),
   taggingRuleLogs: many(taggingRuleLogTable),
@@ -146,6 +151,27 @@ export const videoMetadataRelations = relations(
   ({ one }) => ({
     video: one(videosTable, {
       fields: [videoMetadataTable.videoId],
+      references: [videosTable.id],
+    }),
+  }),
+);
+
+export const videoCollectionsRelations = relations(
+  videoCollectionsTable,
+  ({ many }) => ({
+    entries: many(videoCollectionEntriesTable),
+  }),
+);
+
+export const videoCollectionEntriesRelations = relations(
+  videoCollectionEntriesTable,
+  ({ one }) => ({
+    collection: one(videoCollectionsTable, {
+      fields: [videoCollectionEntriesTable.collectionId],
+      references: [videoCollectionsTable.id],
+    }),
+    video: one(videosTable, {
+      fields: [videoCollectionEntriesTable.videoId],
       references: [videosTable.id],
     }),
   }),

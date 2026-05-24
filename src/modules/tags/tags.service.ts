@@ -1,4 +1,4 @@
-import { eq, sql, isNull, or, like, and } from "drizzle-orm";
+import { eq, sql, isNull, or, and, ilike } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { tagsTable, videoTagsTable } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
@@ -35,8 +35,8 @@ export class TagsService {
     if (search) {
       whereClauses.push(
         or(
-          like(tagsTable.name, `%${search}%`),
-          like(tagsTable.description, `%${search}%`),
+          ilike(tagsTable.name, `%${search}%`),
+          ilike(tagsTable.description, `%${search}%`),
         ),
       );
     }
@@ -94,8 +94,8 @@ export class TagsService {
     if (search) {
       whereClauses.push(
         or(
-          like(tagsTable.name, `%${search}%`),
-          like(tagsTable.description, `%${search}%`),
+          ilike(tagsTable.name, `%${search}%`),
+          ilike(tagsTable.description, `%${search}%`),
         )!,
       );
     }
@@ -467,6 +467,56 @@ export class TagsService {
       created_at: this.toIsoString(row.created_at),
       updated_at: this.toIsoString(row.updated_at),
     }));
+  }
+
+  async getTagsForVideos(videoIds: number[]): Promise<Map<number, Tag[]>> {
+    const grouped = new Map<number, Tag[]>();
+    if (videoIds.length === 0) {
+      return grouped;
+    }
+
+    const rows = await db.execute<{
+      video_id: number;
+      id: number;
+      name: string;
+      parent_id: number | null;
+      description: string | null;
+      color: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(sql`
+      SELECT
+        vt.video_id,
+        t.id,
+        t.name,
+        t.parent_id,
+        t.description,
+        t.color,
+        t.created_at,
+        t.updated_at
+      FROM tags t
+      INNER JOIN video_tags vt ON t.id = vt.tag_id
+      WHERE vt.video_id = ANY(${sql.raw(`ARRAY[${videoIds.join(",")}]::int[]`)})
+      ORDER BY vt.video_id ASC, t.name ASC
+    `);
+
+    const results = Array.isArray(rows) ? rows : [];
+    for (const row of results) {
+      const tag: Tag = {
+        id: Number(row.id),
+        name: row.name,
+        parent_id: row.parent_id != null ? Number(row.parent_id) : null,
+        description: row.description,
+        color: row.color,
+        created_at: this.toIsoString(row.created_at),
+        updated_at: this.toIsoString(row.updated_at),
+      };
+      const existing = grouped.get(Number(row.video_id)) ?? [];
+      existing.push(tag);
+      grouped.set(Number(row.video_id), existing);
+    }
+
+    return grouped;
   }
 
   // Helper to safely convert Date or string to ISO string

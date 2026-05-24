@@ -15,6 +15,7 @@ This is the main frontend surface. It powers browsing, detail screens, playback,
 - `is_favorite` is user-context aware.
 - Streaming supports HTTP `Range` and may return `200`, `206`, `410`, or `416`.
 - The frontend should use a dedicated API client/store layer for this module because the filter surface is large.
+- List/detail endpoints support include-based enrichment for common related data.
 
 ## Core video model
 
@@ -45,6 +46,11 @@ Returned by detail/list/random/verify/refresh endpoints.
 - `thumbnail_url` string | null | optional
 - `thumbnail_base64` string | null | optional
 - `is_favorite` boolean
+- `collection` object | null | optional
+- `collection_neighbors` object | null | optional
+- `creators` Creator[] | optional
+- `tags` Tag[] | optional
+- `studios` Studio[] | optional
 
 ## 1) Listing and discovery
 
@@ -101,6 +107,12 @@ Paginated listing with extensive filtering.
   - `hasCreator`
   - `hasStudio`
   - `hasRating`
+- Includes
+  - `collection`
+  - `creators`
+  - `tags`
+  - `studios`
+  - comma-separated combinations are supported
 
 #### Success
 
@@ -116,6 +128,8 @@ Paginated listing with extensive filtering.
 - Query state should be centralized because many screens will reuse filters.
 - `creatorIds`, `tagIds`, `studioIds` are ideal candidates for URL-driven state.
 - Validation can fail when any min/max pair is inverted.
+- Prefer `include=collection,creators,tags,studios` on screens that render those associations.
+- Avoid unconditional includes on every generic grid because payload size increases.
 
 ### GET /api/videos/compression-suggestions
 
@@ -220,8 +234,21 @@ Lightweight ID queue for client-side navigation.
 ### GET /api/videos/:id
 
 - Params: `id` positive int
+- Query:
+  - `include=collection`
+  - `include=collection_neighbors`
+  - `include=creators`
+  - `include=tags`
+  - `include=studios`
+  - comma-separated combinations are supported
 - Success: `200` -> `{ success: true, data: Video }`
 - Errors: `401`, `404`
+
+#### Frontend notes
+
+- Recommended default for detail/player pages:
+  - `include=collection,collection_neighbors,creators,tags,studios`
+- This avoids the common fan-out pattern of separately loading creators, tags, studios, and collection context after the base video request.
 
 ### PATCH /api/videos/:id
 
@@ -346,6 +373,11 @@ Raw media stream with `Range` support.
 - `studios_removed`
 
 ## 6) Per-video associations and metadata
+
+Important:
+
+- `creators`, `tags`, `studios`, and `collection` can now be embedded through `include` on `/api/videos` and `/api/videos/:id`.
+- Keep the separate endpoints below for edit flows, focused refreshes, or screens that intentionally load one relation at a time.
 
 ### Creators
 

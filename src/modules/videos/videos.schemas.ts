@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  videoCollectionContextSchema,
+  videoCollectionNeighborsSchema,
+} from "@/modules/video-collections/video-collections.schemas";
 
 // Re-export from types for consistency
 export { updateVideoSchema } from "./videos.types";
@@ -45,6 +49,19 @@ const parseNullableNumber = (val: unknown) => {
     return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
+};
+
+const parseIncludeList = (val: unknown) => {
+  if (typeof val === "string" && val.trim().length > 0) {
+    return val
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+  if (Array.isArray(val)) {
+    return val;
+  }
+  return undefined;
 };
 
 export const listVideosQuerySchema = z
@@ -132,6 +149,14 @@ export const listVideosQuerySchema = z
     hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasRating: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    include: z
+      .preprocess(
+        parseIncludeList,
+        z
+          .array(z.enum(["collection", "creators", "tags", "studios"]))
+          .optional(),
+      )
+      .optional(),
   })
   .refine(
     (data) => {
@@ -220,45 +245,46 @@ export const setMetadataBodySchema = z.object({
   value: z.string().max(10000),
 });
 
-// Response schemas
-const videoSchema = z.object({
-  id: z.number(),
-  file_path: z.string(),
-  file_name: z.string(),
-  directory_id: z.number(),
-  file_size_bytes: z.number(),
-  file_hash: z.string().nullable(),
-  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
-  width: z.number().nullable(),
-  height: z.number().nullable(),
-  codec: z.string().nullable(),
-  bitrate: z.number().nullable(),
-  fps: z.number().nullable(),
-  audio_codec: z.string().nullable(),
-  title: z.string().nullable(),
-  description: z.string().nullable(),
-  themes: z.string().nullable(),
-  is_available: z.boolean(),
-  last_verified_at: z.string().nullable(),
-  indexed_at: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
-  thumbnail_id: z.number().nullable().optional(),
-  thumbnail_url: z.string().nullable().optional(),
-  is_favorite: z.boolean(),
+export const getVideoQuerySchema = z.object({
+  include: z
+    .preprocess(
+      parseIncludeList,
+      z
+        .array(
+          z.enum([
+            "collection",
+            "collection_neighbors",
+            "creators",
+            "tags",
+            "studios",
+          ]),
+        )
+        .optional(),
+    )
+    .optional(),
 });
 
+// Response schemas
 const creatorSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().nullable(),
+  profile_picture_path: z.string().nullable().optional(),
+  face_thumbnail_path: z.string().nullable().optional(),
+  profile_picture_url: z.string().optional(),
+  face_thumbnail_url: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 const tagSchema = z.object({
   id: z.number(),
   name: z.string(),
   parent_id: z.number().nullable(),
+  description: z.string().nullable(),
   color: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 const metadataSchema = z.object({
@@ -286,8 +312,41 @@ const studioSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().nullable(),
+  profile_picture_url: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),
+});
+
+const videoSchema = z.object({
+  id: z.number(),
+  file_path: z.string(),
+  file_name: z.string(),
+  directory_id: z.number(),
+  file_size_bytes: z.number(),
+  file_hash: z.string().nullable(),
+  duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
+  width: z.number().nullable(),
+  height: z.number().nullable(),
+  codec: z.string().nullable(),
+  bitrate: z.number().nullable(),
+  fps: z.number().nullable(),
+  audio_codec: z.string().nullable(),
+  title: z.string().nullable(),
+  description: z.string().nullable(),
+  themes: z.string().nullable(),
+  is_available: z.boolean(),
+  last_verified_at: z.string().nullable(),
+  indexed_at: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  thumbnail_id: z.number().nullable().optional(),
+  thumbnail_url: z.string().nullable().optional(),
+  is_favorite: z.boolean(),
+  collection: videoCollectionContextSchema.nullable().optional(),
+  collection_neighbors: videoCollectionNeighborsSchema.nullable().optional(),
+  creators: z.array(creatorSchema).optional(),
+  tags: z.array(tagSchema).optional(),
+  studios: z.array(studioSchema).optional(),
 });
 
 const errorSchema = z.object({

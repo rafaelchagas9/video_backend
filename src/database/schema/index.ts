@@ -16,6 +16,9 @@ export * from "./organization.schema";
 // Content (Playlists, Favorites, Bookmarks, Ratings)
 export * from "./content.schema";
 
+// Video Collections
+export * from "./video-collections.schema";
+
 // Media (Thumbnails, Storyboards)
 export * from "./media.schema";
 

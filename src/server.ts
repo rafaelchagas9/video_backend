@@ -208,6 +208,10 @@ export async function buildServer() {
         { name: "ratings", description: "Rating management" },
         { name: "thumbnails", description: "Thumbnail management" },
         { name: "playlists", description: "Playlist management" },
+        {
+          name: "video-collections",
+          description: "Canonical series and episodic collection management",
+        },
         { name: "favorites", description: "Favorites management" },
         { name: "bookmarks", description: "Bookmark management" },
         { name: "backup", description: "Database backup and export" },
@@ -342,6 +346,9 @@ export async function buildServer() {
         await import("./modules/thumbnails/thumbnails.routes");
       const { playlistsRoutes } =
         await import("./modules/playlists/playlists.routes");
+      const { videoCollectionsRoutes } = await import(
+        "./modules/video-collections/video-collections.routes"
+      );
       const { favoritesRoutes } =
         await import("./modules/favorites/favorites.routes");
       const { bookmarksRoutes } =
@@ -373,6 +380,9 @@ export async function buildServer() {
       await instance.register(ratingsRoutes, { prefix: "/ratings" });
       await instance.register(thumbnailsRoutes, { prefix: "/" }); // Register at root so it can handle /videos/... and /thumbnails/... prefixes itself or via internally defined paths
       await instance.register(playlistsRoutes, { prefix: "/playlists" });
+      await instance.register(videoCollectionsRoutes, {
+        prefix: "/video-collections",
+      });
       await instance.register(favoritesRoutes, { prefix: "/favorites" });
       await instance.register(bookmarksRoutes, { prefix: "/bookmarks" });
       await instance.register(backupRoutes, { prefix: "/backup" });

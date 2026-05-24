@@ -30,6 +30,7 @@ import {
   tagIdParamSchema,
   studioIdParamSchema,
   metadataKeyParamSchema,
+  getVideoQuerySchema,
   addCreatorBodySchema,
   addTagBodySchema,
   setMetadataBodySchema,
@@ -435,6 +436,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         summary: "Get video by ID",
         description: "Returns detailed information about a specific video.",
         params: idParamSchema,
+        querystring: getVideoQuerySchema,
         response: {
           200: videoResponseSchema,
           401: errorResponseSchema,
@@ -446,6 +448,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       const video = await videosService.findById(
         request.params.id,
         request.user!.id,
+        request.query.include,
       );
       return reply.send({
         success: true,

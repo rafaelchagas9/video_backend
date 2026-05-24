@@ -18,12 +18,17 @@ import { computeFileHash } from "@/utils/file-utils";
 import { metadataService } from "./metadata.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
 import { conversionService } from "@/modules/conversion/conversion.service";
+import { videoCollectionsService } from "@/modules/video-collections/video-collections.service";
+import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
+import { tagsService } from "@/modules/tags/tags.service";
+import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
 
 // Import specialized services
 export { videosSearchService } from "./videos.search.service";
 export { videosSuggestionsService } from "./videos.suggestions.service";
 export { videosMetadataService } from "./videos.metadata.service";
 export { videosBulkService } from "./videos.bulk.service";
+import type { VideoInclude } from "./videos.types";
 
 /**
  * Main video service - Core CRUD operations
@@ -32,7 +37,11 @@ export class VideosService {
   /**
    * Find video by ID
    */
-  async findById(id: number, userId?: number): Promise<Video> {
+  async findById(
+    id: number,
+    userId?: number,
+    include: VideoInclude[] = [],
+  ): Promise<Video> {
     const results = await db
       .select({
         id: videosTable.id,
@@ -84,7 +93,7 @@ export class VideosService {
       isFavorite = favoriteCheck.length > 0;
     }
 
-    return {
+    const response: Video = {
       id: video.id,
       file_path: video.filePath,
       file_name: video.fileName,
@@ -112,6 +121,32 @@ export class VideosService {
         ? `${API_PREFIX}/thumbnails/${video.thumbnailId}/image`
         : null,
     } as Video;
+
+    if (include.includes("collection")) {
+      response.collection =
+        await videoCollectionsService.getCollectionContextByVideoId(id);
+    }
+
+    if (include.includes("collection_neighbors")) {
+      response.collection_neighbors =
+        await videoCollectionsService.getNeighborsByVideoId(id);
+    }
+
+    if (include.includes("creators")) {
+      response.creators =
+        await creatorsRelationshipsService.getCreatorsForVideo(id);
+    }
+
+    if (include.includes("tags")) {
+      response.tags = await tagsService.getTagsForVideo(id);
+    }
+
+    if (include.includes("studios")) {
+      response.studios =
+        await studiosRelationshipsService.getStudiosForVideo(id);
+    }
+
+    return response;
   }
 
   /**

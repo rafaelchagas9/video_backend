@@ -27,6 +27,7 @@ This directory contains the current backend-to-frontend handoff documentation se
 - Ratings and Bookmarks: `endpoints/ratings-and-bookmarks.md`
 - Favorites: `endpoints/favorites.md`
 - Playlists: `endpoints/playlists.md`
+- Video Collections: `endpoints/video-collections.md`
 
 ### Media and processing
 

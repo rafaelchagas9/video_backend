@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   videoCreatorsTable,
@@ -126,6 +126,41 @@ export class CreatorsRelationshipsService {
       .orderBy(creatorsTable.name);
 
     return creators.map(this.mapCreatorToSnakeCase);
+  }
+
+  async getCreatorsForVideos(videoIds: number[]): Promise<Map<number, Creator[]>> {
+    const grouped = new Map<number, Creator[]>();
+    if (videoIds.length === 0) {
+      return grouped;
+    }
+
+    const rows = await db
+      .select({
+        videoId: videoCreatorsTable.videoId,
+        id: creatorsTable.id,
+        name: creatorsTable.name,
+        description: creatorsTable.description,
+        profilePicturePath: creatorsTable.profilePicturePath,
+        faceThumbnailPath: creatorsTable.faceThumbnailPath,
+        createdAt: creatorsTable.createdAt,
+        updatedAt: creatorsTable.updatedAt,
+      })
+      .from(videoCreatorsTable)
+      .innerJoin(
+        creatorsTable,
+        eq(creatorsTable.id, videoCreatorsTable.creatorId),
+      )
+      .where(inArray(videoCreatorsTable.videoId, videoIds))
+      .orderBy(videoCreatorsTable.videoId, creatorsTable.name);
+
+    for (const row of rows) {
+      const creator = this.mapCreatorToSnakeCase(row);
+      const existing = grouped.get(row.videoId) ?? [];
+      existing.push(creator);
+      grouped.set(row.videoId, existing);
+    }
+
+    return grouped;
   }
 
   // Studio Relationship Methods

@@ -22,6 +22,9 @@ import {
 } from "@/database/schema";
 import { API_PREFIX } from "@/config/constants";
 import { tagsService } from "@/modules/tags/tags.service";
+import { videoCollectionsService } from "@/modules/video-collections/video-collections.service";
+import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
+import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
 import type {
   ListVideosOptions,
   NextVideoOptions,
@@ -29,6 +32,7 @@ import type {
   TriageQueueOptions,
   TriageQueueResult,
   Video,
+  VideoListInclude,
 } from "./videos.types";
 import { buildVideoFilters, getValidSortColumn } from "./videos.query-builder";
 
@@ -91,6 +95,7 @@ export class VideosSearchService {
       hasThumbnail,
       minRating,
       maxRating,
+      include = [],
     } = options;
 
     const tagIds = await this.expandTagIds(options.tagIds);
@@ -372,8 +377,13 @@ export class VideosSearchService {
         }),
       );
 
+      const enrichedVideos = await this.attachIncludes(
+        videosWithFavorites as Video[],
+        include,
+      );
+
       return {
-        data: videosWithFavorites as Video[],
+        data: enrichedVideos,
         pagination: {
           page,
           limit,
@@ -503,8 +513,13 @@ export class VideosSearchService {
       }),
     );
 
+    const enrichedVideos = await this.attachIncludes(
+      videosWithFavorites as Video[],
+      include,
+    );
+
     return {
-      data: videosWithFavorites as Video[],
+      data: enrichedVideos,
       pagination: {
         page,
         limit,
@@ -512,6 +527,45 @@ export class VideosSearchService {
         totalPages,
       },
     };
+  }
+
+  private async attachIncludes(
+    videos: Video[],
+    include: VideoListInclude[],
+  ): Promise<Video[]> {
+    if (videos.length === 0 || include.length === 0) {
+      return videos;
+    }
+
+    const videoIds = videos.map((video) => video.id);
+    const [collections, creators, tags, studios] = await Promise.all([
+      include.includes("collection")
+        ? videoCollectionsService.getCollectionContextsByVideoIds(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("creators")
+        ? creatorsRelationshipsService.getCreatorsForVideos(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("tags")
+        ? tagsService.getTagsForVideos(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("studios")
+        ? studiosRelationshipsService.getStudiosForVideos(videoIds)
+        : Promise.resolve(new Map()),
+    ]);
+
+    return videos.map((video) => ({
+      ...video,
+      ...(include.includes("collection")
+        ? { collection: collections.get(video.id) ?? null }
+        : {}),
+      ...(include.includes("creators")
+        ? { creators: creators.get(video.id) ?? [] }
+        : {}),
+      ...(include.includes("tags") ? { tags: tags.get(video.id) ?? [] } : {}),
+      ...(include.includes("studios")
+        ? { studios: studios.get(video.id) ?? [] }
+        : {}),
+    }));
   }
 
   /**

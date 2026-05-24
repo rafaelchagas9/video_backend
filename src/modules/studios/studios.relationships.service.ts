@@ -195,6 +195,53 @@ export class StudiosRelationshipsService {
     }));
   }
 
+  async getStudiosForVideos(videoIds: number[]): Promise<Map<number, Studio[]>> {
+    const grouped = new Map<number, Studio[]>();
+    if (videoIds.length === 0) {
+      return grouped;
+    }
+
+    const rows = await db.execute<{
+      video_id: number;
+      id: number;
+      name: string;
+      description: string | null;
+      profile_picture_path: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(sql`
+      SELECT
+        vs.video_id,
+        s.id,
+        s.name,
+        s.description,
+        s.profile_picture_path,
+        s.created_at,
+        s.updated_at
+      FROM studios s
+      INNER JOIN video_studios vs ON s.id = vs.studio_id
+      WHERE vs.video_id = ANY(${sql.raw(`ARRAY[${videoIds.join(",")}]::int[]`)})
+      ORDER BY vs.video_id ASC, s.name ASC
+    `);
+
+    const results = Array.isArray(rows) ? rows : [];
+    for (const row of results) {
+      const studio: Studio = {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        profile_picture_path: row.profile_picture_path,
+        created_at: row.created_at.toISOString(),
+        updated_at: row.updated_at.toISOString(),
+      };
+      const existing = grouped.get(Number(row.video_id)) ?? [];
+      existing.push(studio);
+      grouped.set(Number(row.video_id), existing);
+    }
+
+    return grouped;
+  }
+
   // Bulk Update Creators
   async bulkUpdateCreators(
     studioId: number,

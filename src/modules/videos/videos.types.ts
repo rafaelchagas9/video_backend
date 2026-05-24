@@ -1,4 +1,19 @@
 import { z } from "zod";
+import type { Creator } from "@/modules/creators/creators.types";
+import type { Tag } from "@/modules/tags/tags.types";
+import type { Studio } from "@/modules/studios/studios.types";
+import type {
+  VideoCollectionContext,
+  VideoCollectionNeighbors,
+} from "@/modules/video-collections/video-collections.types";
+
+export type VideoInclude =
+  | "collection"
+  | "collection_neighbors"
+  | "creators"
+  | "tags"
+  | "studios";
+export type VideoListInclude = Exclude<VideoInclude, "collection_neighbors">;
 
 export interface Video {
   id: number;
@@ -25,6 +40,11 @@ export interface Video {
   is_favorite: boolean;
   thumbnail_id?: number | null;
   thumbnail_url?: string | null;
+  collection?: VideoCollectionContext | null;
+  collection_neighbors?: VideoCollectionNeighbors | null;
+  creators?: Creator[];
+  tags?: Tag[];
+  studios?: Studio[];
 }
 
 export interface VideoMetadata {
@@ -103,6 +123,7 @@ export interface ListVideosOptions {
   hasCreator?: boolean;
   hasStudio?: boolean;
   hasRating?: boolean;
+  include?: VideoListInclude[];
 }
 
 export interface BulkUpdateCreatorsInput {
