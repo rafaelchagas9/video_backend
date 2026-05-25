@@ -2,6 +2,7 @@ import { eq, sql, isNull, or, and, ilike } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { tagsTable, videoTagsTable } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
+import { API_PREFIX } from "@/config/constants";
 import type {
   Tag,
   TagWithPath,
@@ -388,15 +389,25 @@ export class TagsService {
     const descendants = await this.getDescendants(tagId);
     const tagIds = [tagId, ...descendants.map((d) => d.id)];
 
-    const videos = await db.execute<any>(sql`
-      SELECT DISTINCT v.* FROM videos v
+    const videos = await db.execute<Record<string, unknown> & { thumbnail_id?: unknown }>(sql`
+      SELECT DISTINCT 
+        v.*, 
+        t.id as thumbnail_id
+      FROM videos v
       INNER JOIN video_tags vt ON v.id = vt.video_id
+      LEFT JOIN thumbnails t ON v.id = t.video_id
       WHERE vt.tag_id = ANY(${sql.raw(`ARRAY[${tagIds.join(",")}]::int[]`)})
       ORDER BY v.created_at DESC
     `);
 
     const results = Array.isArray(videos) ? videos : [];
-    return results;
+    return results.map((row) => ({
+      ...row,
+      thumbnail_id: row.thumbnail_id != null ? Number(row.thumbnail_id) : null,
+      thumbnail_url: row.thumbnail_id != null
+        ? `${API_PREFIX}/thumbnails/${row.thumbnail_id}/image`
+        : null,
+    })) as unknown as Video[];
   }
 
   async addToVideo(videoId: number, tagId: number): Promise<void> {

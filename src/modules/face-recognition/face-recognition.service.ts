@@ -378,71 +378,37 @@ export class FaceRecognitionService {
       }
     >();
 
-    try {
-      const embeddingsArray = rawDetections.map((d) => `[${d.embedding.join(",")}]`);
-      const indicesArray = rawDetections.map((_, i) => i);
+    for (const detection of rawDetections) {
+      try {
+        const matches = await this.findSimilarCreators(
+          detection.embedding,
+          1,
+          similarityThreshold,
+        );
 
-      // Cosine distance <=> operator: similarity = 1 - distance
-      const query = sql`
-        WITH detections AS (
-          SELECT 
-            d.idx, 
-            d.emb::vector AS embedding
-          FROM UNNEST(${embeddingsArray}::text[], ${indicesArray}::int[]) AS d(emb, idx)
-        ),
-        all_matches AS (
-          SELECT 
-            d.idx,
-            cfe.id AS reference_embedding_id,
-            cfe.creator_id,
-            c.name AS creator_name,
-            cfe.source_type as reference_source_type,
-            1 - (cfe.embedding::vector <=> d.embedding) AS similarity,
-            ROW_NUMBER() OVER (
-              PARTITION BY d.idx 
-              ORDER BY cfe.embedding::vector <=> d.embedding ASC
-            ) as rn
-          FROM detections d
-          CROSS JOIN creator_face_embeddings cfe
-          JOIN creators c ON c.id = cfe.creator_id
-          WHERE 1 - (cfe.embedding::vector <=> d.embedding) >= ${similarityThreshold}
-        )
-        SELECT * FROM all_matches WHERE rn = 1
-      `;
+        if (matches.length > 0) {
+          const bestMatch = matches[0];
+          const creatorId = bestMatch.creator_id;
 
-      const matchesResult = await db.execute(query);
-      const matchesList = matchesResult as any[];
+          if (!creatorMatches.has(creatorId)) {
+            creatorMatches.set(creatorId, {
+              creatorId,
+              maxConfidence: 0,
+              detections: [],
+            });
+          }
 
-      for (const row of matchesList) {
-        const idx = Number(row.idx);
-        const detection = rawDetections[idx];
-        const match = {
-          creator_id: Number(row.creator_id),
-          creator_name: row.creator_name,
-          similarity: Number(row.similarity),
-          reference_embedding_id: Number(row.reference_embedding_id),
-          reference_source_type: row.reference_source_type,
-        };
+          const group = creatorMatches.get(creatorId)!;
+          group.detections.push(detection);
+          if (bestMatch.similarity > group.maxConfidence) {
+            group.maxConfidence = bestMatch.similarity;
+          }
 
-        (detection as any)._matchInfo = match;
-
-        const creatorId = match.creator_id;
-        if (!creatorMatches.has(creatorId)) {
-          creatorMatches.set(creatorId, {
-            creatorId,
-            maxConfidence: 0,
-            detections: [],
-          });
+          (detection as any)._matchInfo = bestMatch;
         }
-
-        const group = creatorMatches.get(creatorId)!;
-        group.detections.push(detection);
-        if (match.similarity > group.maxConfidence) {
-          group.maxConfidence = match.similarity;
-        }
+      } catch (error) {
+        logger.error({ error }, "Failed to compute match");
       }
-    } catch (error) {
-      logger.error({ error }, "Failed to compute batch face matching");
     }
 
     const detectionsToInsert: any[] = [];

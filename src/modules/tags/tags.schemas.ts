@@ -71,6 +71,8 @@ const videoSchema = z.object({
   file_name: z.string(),
   title: z.string().nullable(),
   duration_seconds: z.preprocess(parseNullableNumber, z.number().nullable()),
+  thumbnail_id: z.number().nullable().optional(),
+  thumbnail_url: z.string().nullable().optional(),
 });
 
 const errorSchema = z.object({
