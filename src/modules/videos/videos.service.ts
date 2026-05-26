@@ -1,8 +1,11 @@
-import { eq, sql, and } from "drizzle-orm";
+import { eq, sql, and, inArray } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   videosTable,
+  videoStatsTable,
   studiosTable,
+  videoCreatorsTable,
+  videoTagsTable,
   videoStudiosTable,
   thumbnailsTable,
   favoritesTable,
@@ -13,7 +16,11 @@ import { API_PREFIX } from "@/config/constants";
 import { logger } from "@/utils/logger";
 import { existsSync, statSync } from "fs";
 import { basename } from "path";
-import type { Video, UpdateVideoInput } from "./videos.types";
+import type {
+  RandomVideoOptions,
+  Video,
+  UpdateVideoInput,
+} from "./videos.types";
 import { computeFileHash } from "@/utils/file-utils";
 import { metadataService } from "./metadata.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
@@ -21,6 +28,7 @@ import { videoCollectionsService } from "@/modules/video-collections/video-colle
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { tagsService } from "@/modules/tags/tags.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
+import { buildVideoFilters } from "./videos.query-builder";
 
 // Import specialized services
 export { videosSearchService } from "./videos.search.service";
@@ -33,6 +41,18 @@ import type { VideoInclude } from "./videos.types";
  * Main video service - Core CRUD operations
  */
 export class VideosService {
+  private async expandTagIds(tagIds?: number[]): Promise<number[] | undefined> {
+    if (!tagIds || tagIds.length === 0) return tagIds;
+
+    const expanded = new Set(tagIds);
+    for (const id of tagIds) {
+      const descendants = await tagsService.getDescendants(id);
+      descendants.forEach((tag) => expanded.add(tag.id));
+    }
+
+    return Array.from(expanded);
+  }
+
   /**
    * Find video file path and availability by ID (lightweight lookup for streaming)
    */
@@ -197,21 +217,134 @@ export class VideosService {
   }
 
   /**
-   * Get random video
+   * Get random video(s)
    */
-  async getRandomVideo(userId: number): Promise<Video> {
-    const randomVideo = await db
-      .select({ id: videosTable.id })
-      .from(videosTable)
-      .where(eq(videosTable.isAvailable, true))
-      .orderBy(sql`RANDOM()`)
-      .limit(1);
+  async getRandomVideo(
+    userId: number,
+    options: RandomVideoOptions = {},
+  ): Promise<Video | Video[]> {
+    const tagIds = await this.expandTagIds(options.tagIds);
+    const resolvedOptions = { ...options, tagIds };
+    const { conditions } = buildVideoFilters(userId, resolvedOptions);
+    const matchMode = resolvedOptions.matchMode ?? "any";
 
-    if (!randomVideo || randomVideo.length === 0) {
-      throw new NotFoundError("No available videos found");
+    if (
+      resolvedOptions.creatorIds !== undefined &&
+      resolvedOptions.creatorIds.length > 0
+    ) {
+      if (matchMode === "all") {
+        conditions.push(sql`
+          (
+            SELECT COUNT(DISTINCT ${videoCreatorsTable.creatorId})
+            FROM ${videoCreatorsTable}
+            WHERE ${videoCreatorsTable.videoId} = ${videosTable.id}
+              AND ${inArray(videoCreatorsTable.creatorId, resolvedOptions.creatorIds)}
+          ) >= ${resolvedOptions.creatorIds.length}
+        `);
+      } else {
+        conditions.push(sql`
+          EXISTS (
+            SELECT 1 FROM ${videoCreatorsTable}
+            WHERE ${videoCreatorsTable.videoId} = ${videosTable.id}
+              AND ${inArray(videoCreatorsTable.creatorId, resolvedOptions.creatorIds)}
+          )
+        `);
+      }
     }
 
-    return this.findById(randomVideo[0].id, userId);
+    if (tagIds !== undefined && tagIds.length > 0) {
+      if (matchMode === "all") {
+        conditions.push(sql`
+          (
+            SELECT COUNT(DISTINCT ${videoTagsTable.tagId})
+            FROM ${videoTagsTable}
+            WHERE ${videoTagsTable.videoId} = ${videosTable.id}
+              AND ${inArray(videoTagsTable.tagId, tagIds)}
+          ) >= ${tagIds.length}
+        `);
+      } else {
+        conditions.push(sql`
+          EXISTS (
+            SELECT 1 FROM ${videoTagsTable}
+            WHERE ${videoTagsTable.videoId} = ${videosTable.id}
+              AND ${inArray(videoTagsTable.tagId, tagIds)}
+          )
+        `);
+      }
+    }
+
+    if (
+      resolvedOptions.studioIds !== undefined &&
+      resolvedOptions.studioIds.length > 0
+    ) {
+      if (matchMode === "all") {
+        conditions.push(sql`
+          (
+            SELECT COUNT(DISTINCT ${videoStudiosTable.studioId})
+            FROM ${videoStudiosTable}
+            WHERE ${videoStudiosTable.videoId} = ${videosTable.id}
+              AND ${inArray(videoStudiosTable.studioId, resolvedOptions.studioIds)}
+          ) >= ${resolvedOptions.studioIds.length}
+        `);
+      } else {
+        conditions.push(sql`
+          EXISTS (
+            SELECT 1 FROM ${videoStudiosTable}
+            WHERE ${videoStudiosTable.videoId} = ${videosTable.id}
+              AND ${inArray(videoStudiosTable.studioId, resolvedOptions.studioIds)}
+          )
+        `);
+      }
+    }
+
+    if (resolvedOptions.minPlayCount !== undefined) {
+      conditions.push(sql`
+        COALESCE(
+          (
+            SELECT ${videoStatsTable.playCount}
+            FROM ${videoStatsTable}
+            WHERE ${videoStatsTable.videoId} = ${videosTable.id}
+              AND ${videoStatsTable.userId} = ${userId}
+          ),
+          0
+        ) >= ${resolvedOptions.minPlayCount}
+      `);
+    }
+
+    if (resolvedOptions.maxPlayCount !== undefined) {
+      conditions.push(sql`
+        COALESCE(
+          (
+            SELECT ${videoStatsTable.playCount}
+            FROM ${videoStatsTable}
+            WHERE ${videoStatsTable.videoId} = ${videosTable.id}
+              AND ${videoStatsTable.userId} = ${userId}
+          ),
+          0
+        ) <= ${resolvedOptions.maxPlayCount}
+      `);
+    }
+
+    const limit = resolvedOptions.limit !== undefined ? resolvedOptions.limit : 1;
+
+    const randomVideos = await db
+      .select({ id: videosTable.id })
+      .from(videosTable)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(sql`RANDOM()`)
+      .limit(limit);
+
+    if (!randomVideos || randomVideos.length === 0) {
+      throw new NotFoundError("No matching videos found");
+    }
+
+    if (resolvedOptions.limit !== undefined) {
+      return Promise.all(
+        randomVideos.map((rv) => this.findById(rv.id, userId))
+      );
+    }
+
+    return this.findById(randomVideos[0].id, userId);
   }
 
   /**

@@ -19,6 +19,7 @@ This directory contains the current backend-to-frontend handoff documentation se
 ### Core content flows
 
 - Videos: `endpoints/videos.md`
+- Random Video Filters: `endpoints/videos-random.md`
 - Related Videos: `endpoints/related-videos.md`
 - Creators: `endpoints/creators.md`
 - Studios: `endpoints/studios.md`

@@ -4,7 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import { logger } from "@/utils/logger";
-import { db } from "@/config/drizzle";
+import { authService } from "@/modules/auth/auth.service";
 import { videoStatsService } from "@/modules/video-stats/video-stats.service";
 
 interface ClientConnection {
@@ -86,20 +86,12 @@ class WebSocketService {
   }
 
   /**
-   * Extract user ID from session cookie
+   * Extract user ID from Better Auth session cookies
    */
   private async getUserFromRequest(request: any): Promise<number | null> {
     try {
-      const sessionId = request.cookies?.session_id;
-      if (!sessionId) return null;
-
-      const session = await db.query.sessionsTable.findFirst({
-        where: (sessions, { eq, and, gt }) =>
-          and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())),
-        columns: { userId: true },
-      });
-
-      return session?.userId ?? null;
+      const session = await authService.getSession(request.headers);
+      return session?.user.id ?? null;
     } catch {
       return null;
     }

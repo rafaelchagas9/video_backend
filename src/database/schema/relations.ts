@@ -1,7 +1,7 @@
 import { relations } from "drizzle-orm";
 
 // Import all tables
-import { usersTable, sessionsTable } from "./users.schema";
+import { accountsTable, sessionsTable, usersTable } from "./users.schema";
 import { watchedDirectoriesTable, scanLogsTable } from "./directories.schema";
 import {
   videosTable,
@@ -49,6 +49,7 @@ import {
 // Users relations
 export const usersRelations = relations(usersTable, ({ many }) => ({
   sessions: many(sessionsTable),
+  accounts: many(accountsTable),
   playlists: many(playlistsTable),
   favorites: many(favoritesTable),
   bookmarks: many(bookmarksTable),
@@ -60,6 +61,13 @@ export const usersRelations = relations(usersTable, ({ many }) => ({
 export const sessionsRelations = relations(sessionsTable, ({ one }) => ({
   user: one(usersTable, {
     fields: [sessionsTable.userId],
+    references: [usersTable.id],
+  }),
+}));
+
+export const accountsRelations = relations(accountsTable, ({ one }) => ({
+  user: one(usersTable, {
+    fields: [accountsTable.userId],
     references: [usersTable.id],
   }),
 }));

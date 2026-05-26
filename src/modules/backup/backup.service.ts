@@ -158,6 +158,10 @@ export class BackupService {
       db
         .select({
           id: usersTable.id,
+          name: usersTable.name,
+          email: usersTable.email,
+          emailVerified: usersTable.emailVerified,
+          image: usersTable.image,
           username: usersTable.username,
           createdAt: usersTable.createdAt,
           updatedAt: usersTable.updatedAt,

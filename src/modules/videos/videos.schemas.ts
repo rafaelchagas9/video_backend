@@ -21,7 +21,9 @@ const parseCommaSeparatedIds = (val: unknown) => {
       .filter((id) => !isNaN(id));
   }
   if (Array.isArray(val)) {
-    return val;
+    return val
+      .map((id) => (typeof id === "number" ? id : parseInt(String(id).trim())))
+      .filter((id) => !isNaN(id));
   }
   return undefined;
 };
@@ -217,6 +219,50 @@ export const listVideosQuerySchema = z
     },
   );
 
+export const randomVideoQuerySchema = z
+  .object({
+    directory_id: z.coerce.number().int().positive().optional(),
+    include_hidden: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
+    isAvailable: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    hasTags: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    hasRating: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    creatorIds: z
+      .preprocess(
+        parseCommaSeparatedIds,
+        z.array(z.number().int().positive()).optional(),
+      )
+      .optional(),
+    tagIds: z
+      .preprocess(
+        parseCommaSeparatedIds,
+        z.array(z.number().int().positive()).optional(),
+      )
+      .optional(),
+    studioIds: z
+      .preprocess(
+        parseCommaSeparatedIds,
+        z.array(z.number().int().positive()).optional(),
+      )
+      .optional(),
+    matchMode: z.enum(["any", "all"]).default("any"),
+    minPlayCount: z.coerce.number().int().min(0).optional(),
+    maxPlayCount: z.coerce.number().int().min(0).optional(),
+    limit: z.coerce.number().int().positive().max(32).optional(),
+  })
+  .refine(
+    (data) =>
+      !(
+        data.minPlayCount !== undefined &&
+        data.maxPlayCount !== undefined &&
+        data.minPlayCount > data.maxPlayCount
+      ),
+    {
+      message: "Minimum value cannot be greater than maximum value",
+    },
+  );
+
 export const creatorIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
   creator_id: z.coerce.number().int().positive(),
@@ -357,6 +403,12 @@ const errorSchema = z.object({
 export const videoResponseSchema = z.object({
   success: z.literal(true),
   data: videoSchema,
+  message: z.string().optional(),
+});
+
+export const randomVideoResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.union([videoSchema, z.array(videoSchema)]),
   message: z.string().optional(),
 });
 

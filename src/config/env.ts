@@ -118,6 +118,17 @@ const envSchema = z.object({
     .string()
     .default("./logs/performance-profile.jsonl"),
 
+  // Telemetry
+  POSTHOG_API_KEY: z.string().default(""),
+  POSTHOG_HOST: z.string().default("https://us.i.posthog.com"),
+  POSTHOG_LOG_LEVEL: z
+    .enum(["debug", "info", "warn", "error", "fatal"])
+    .default("warn"),
+  POSTHOG_CAPTURE_REQUEST_METRICS: z
+    .string()
+    .default("true")
+    .transform((value) => value.toLowerCase() === "true"),
+
   // Face Recognition
   FACE_SERVICE_URL: z.string().default("http://localhost:8100"),
   FACE_SIMILARITY_THRESHOLD: z
