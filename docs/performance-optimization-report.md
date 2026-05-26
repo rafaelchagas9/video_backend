@@ -230,7 +230,7 @@ For each video * each creator/tag/studio to add, issues individual INSERT. 100 v
 
 - [x] **Implemented**
 
-**Location:** `src/modules/websocket/websocket.ts:108-131`
+**Location:** Legacy `src/modules/websocket/websocket.ts` implementation, since removed.
 
 Each watch update triggers **35+ DB queries** (see settings issue #7). No throttle or buffer on the WebSocket message handler.
 
@@ -242,7 +242,7 @@ Each watch update triggers **35+ DB queries** (see settings issue #7). No thrott
 
 - [x] **Implemented**
 
-**Location:** `src/modules/websocket/websocket.ts:108-131`
+**Location:** Legacy `src/modules/websocket/websocket.ts` implementation, since removed.
 
 Each watch update triggers **35+ DB queries** (see settings issue #7). No throttle or buffer on the WebSocket message handler.
 

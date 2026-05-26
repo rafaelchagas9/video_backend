@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import compress from "@fastify/compress";
+import websocket from "@fastify/websocket";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -246,6 +247,10 @@ export async function buildServer() {
         { name: "scheduler", description: "Scan scheduling" },
         { name: "storyboards", description: "Slider preview thumbnails" },
         { name: "events", description: "Server-sent event streams" },
+        {
+          name: "multiplayer-remote",
+          description: "Multiplayer display and mobile remote control",
+        },
         { name: "stats", description: "System and library statistics" },
         { name: "system", description: "System health and status" },
       ],
@@ -267,6 +272,8 @@ export async function buildServer() {
       files: 1, // Only one file per request
     },
   });
+
+  await fastify.register(websocket);
 
   // Global error handler (must be registered BEFORE routes)
   fastify.setErrorHandler((error, request, reply) => {
@@ -408,6 +415,9 @@ export async function buildServer() {
       const { faceRecognitionRoutes } =
         await import("./modules/face-recognition/face-recognition.routes");
       const { editsRoutes } = await import("./modules/edits/edits.routes");
+      const { multiplayerRemoteRoutes } = await import(
+        "./modules/multiplayer-remote/multiplayer-remote.routes"
+      );
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -434,6 +444,9 @@ export async function buildServer() {
       await instance.register(taggingRulesRoutes, { prefix: "/tagging-rules" });
       await instance.register(faceRecognitionRoutes, { prefix: "/" }); // Face recognition routes handle /creators/:id/face-embeddings, /videos/:id/faces, /faces/* paths
       await instance.register(editsRoutes, { prefix: "/" }); // Edits routes handle /videos/:id/edits, /edits/jobs/:id, etc.
+      await instance.register(multiplayerRemoteRoutes, {
+        prefix: "/multiplayer-remote",
+      });
     },
     { prefix: API_PREFIX },
   );

@@ -45,6 +45,10 @@ import {
   taggingRuleActionsTable,
   taggingRuleLogTable,
 } from "./tagging.schema";
+import {
+  multiplayerRemoteSessionsTable,
+  multiplayerRemoteJoinRequestsTable,
+} from "./multiplayer-remote.schema";
 
 // Users relations
 export const usersRelations = relations(usersTable, ({ many }) => ({
@@ -55,6 +59,8 @@ export const usersRelations = relations(usersTable, ({ many }) => ({
   bookmarks: many(bookmarksTable),
   videoStats: many(videoStatsTable),
   triageProgress: many(triageProgressTable),
+  multiplayerRemoteSessions: many(multiplayerRemoteSessionsTable),
+  multiplayerRemoteJoinRequests: many(multiplayerRemoteJoinRequestsTable),
 }));
 
 // Sessions relations
@@ -470,6 +476,35 @@ export const taggingRuleLogRelations = relations(
     video: one(videosTable, {
       fields: [taggingRuleLogTable.videoId],
       references: [videosTable.id],
+    }),
+  }),
+);
+
+export const multiplayerRemoteSessionsRelations = relations(
+  multiplayerRemoteSessionsTable,
+  ({ one, many }) => ({
+    owner: one(usersTable, {
+      fields: [multiplayerRemoteSessionsTable.ownerUserId],
+      references: [usersTable.id],
+    }),
+    joinRequests: many(multiplayerRemoteJoinRequestsTable),
+  }),
+);
+
+export const multiplayerRemoteJoinRequestsRelations = relations(
+  multiplayerRemoteJoinRequestsTable,
+  ({ one }) => ({
+    session: one(multiplayerRemoteSessionsTable, {
+      fields: [multiplayerRemoteJoinRequestsTable.sessionId],
+      references: [multiplayerRemoteSessionsTable.id],
+    }),
+    requestingUser: one(usersTable, {
+      fields: [multiplayerRemoteJoinRequestsTable.requestingUserId],
+      references: [usersTable.id],
+    }),
+    requestingSession: one(sessionsTable, {
+      fields: [multiplayerRemoteJoinRequestsTable.requestingSessionId],
+      references: [sessionsTable.id],
     }),
   }),
 );

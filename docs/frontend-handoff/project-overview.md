@@ -367,6 +367,6 @@ Recommended order to reduce integration risk:
 4. Async processing flows (conversion, edits, storyboards, face recognition)
 5. Secondary modules (playlists, stats, backup, tagging rules)
 
-## 8) Notes on currently unused realtime channel
+## 8) Notes on realtime channels
 
-There is a WebSocket service module in code (`src/modules/websocket/websocket.ts`), but no active registration in `src/server.ts`. Current realtime integration should target SSE only.
+General frontend realtime integration should target SSE. Multiplayer remote control uses its dedicated authenticated websocket endpoint at `/api/multiplayer-remote/ws`.
