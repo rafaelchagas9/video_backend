@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import compress from "@fastify/compress";
+import websocket from "@fastify/websocket";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -16,6 +17,14 @@ import { env } from "./config/env";
 import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
+import { logger } from "./utils/logger";
+import {
+  captureTelemetryEvent,
+  captureTelemetryException,
+  getTelemetryDistinctId,
+  shouldTrackRequestMetrics,
+  shutdownTelemetry,
+} from "./utils/telemetry";
 
 type ValidationIssue = {
   instancePath?: string;
@@ -69,22 +78,7 @@ function formatValidationIssue(
 
 export async function buildServer() {
   const fastify = Fastify({
-    logger:
-      env.NODE_ENV === "development"
-        ? {
-            level: "debug",
-            transport: {
-              target: "pino-pretty",
-              options: {
-                colorize: true,
-                translateTime: "HH:MM:ss Z",
-                ignore: "pid,hostname",
-              },
-            },
-          }
-        : {
-            level: "info",
-          },
+    loggerInstance: logger,
     disableRequestLogging: false,
     requestIdHeader: "x-request-id",
   });
@@ -94,6 +88,37 @@ export async function buildServer() {
   fastify.setSerializerCompiler(serializerCompiler);
 
   // Database is initialized via drizzle.ts on import; no separate pool needed
+
+  fastify.addHook("onRequest", async (request) => {
+    request.telemetryStartTime = process.hrtime.bigint();
+  });
+
+  fastify.addHook("onResponse", async (request, reply) => {
+    if (!shouldTrackRequestMetrics(request) || !request.telemetryStartTime) {
+      return;
+    }
+
+    const durationMs =
+      Number(process.hrtime.bigint() - request.telemetryStartTime) / 1_000_000;
+
+    captureTelemetryEvent(
+      "api request completed",
+      {
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url,
+        url: request.url,
+        statusCode: reply.statusCode,
+        durationMs,
+        authenticated: Boolean(request.user),
+      },
+      getTelemetryDistinctId(request.user?.id),
+    );
+  });
+
+  fastify.addHook("onClose", async () => {
+    await shutdownTelemetry();
+  });
 
   // Register plugins
   await fastify.register(cookie, {
@@ -192,7 +217,7 @@ export async function buildServer() {
       info: {
         title: "Video Streaming Backend API",
         description:
-          "API for managing and streaming video files. **Authentication**: Use the `POST /auth/login` endpoint to authenticate. The browser will automatically manage the secure session cookie.",
+          "API for managing and streaming video files. **Authentication**: Use the Better Auth-backed `/auth/register`, `/auth/login`, and `/auth/me` endpoints. The browser will automatically manage the secure session cookies.",
         version: "0.1.0",
       },
       servers: [
@@ -222,6 +247,10 @@ export async function buildServer() {
         { name: "scheduler", description: "Scan scheduling" },
         { name: "storyboards", description: "Slider preview thumbnails" },
         { name: "events", description: "Server-sent event streams" },
+        {
+          name: "multiplayer-remote",
+          description: "Multiplayer display and mobile remote control",
+        },
         { name: "stats", description: "System and library statistics" },
         { name: "system", description: "System health and status" },
       ],
@@ -243,6 +272,8 @@ export async function buildServer() {
       files: 1, // Only one file per request
     },
   });
+
+  await fastify.register(websocket);
 
   // Global error handler (must be registered BEFORE routes)
   fastify.setErrorHandler((error, request, reply) => {
@@ -303,6 +334,17 @@ export async function buildServer() {
     }
 
     // Log unexpected errors
+    captureTelemetryException(
+      error,
+      {
+        requestId: request.id,
+        method: request.method,
+        url: request.url,
+        statusCode: 500,
+      },
+      getTelemetryDistinctId(request.user?.id),
+    );
+
     fastify.log.error(error);
 
     // Don't expose internal errors in production
@@ -373,6 +415,9 @@ export async function buildServer() {
       const { faceRecognitionRoutes } =
         await import("./modules/face-recognition/face-recognition.routes");
       const { editsRoutes } = await import("./modules/edits/edits.routes");
+      const { multiplayerRemoteRoutes } = await import(
+        "./modules/multiplayer-remote/multiplayer-remote.routes"
+      );
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -399,6 +444,9 @@ export async function buildServer() {
       await instance.register(taggingRulesRoutes, { prefix: "/tagging-rules" });
       await instance.register(faceRecognitionRoutes, { prefix: "/" }); // Face recognition routes handle /creators/:id/face-embeddings, /videos/:id/faces, /faces/* paths
       await instance.register(editsRoutes, { prefix: "/" }); // Edits routes handle /videos/:id/edits, /edits/jobs/:id, etc.
+      await instance.register(multiplayerRemoteRoutes, {
+        prefix: "/multiplayer-remote",
+      });
     },
     { prefix: API_PREFIX },
   );

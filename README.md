@@ -1,6 +1,6 @@
 # Video Streaming Backend
 
-A TypeScript/Bun backend application for managing and streaming local video files. Built with Fastify and PostgreSQL, this single-user system provides video indexing, metadata management, and HTTP streaming with support for hierarchical organization, creators, tags, ratings, playlists, bookmarks, and face recognition.
+A TypeScript/Bun backend application for managing and streaming local video files. Built with Fastify and PostgreSQL, it provides video indexing, metadata management, and HTTP streaming with support for hierarchical organization, creators, tags, ratings, playlists, bookmarks, and face recognition.
 
 ## Features
 
@@ -41,8 +41,8 @@ A TypeScript/Bun backend application for managing and streaming local video file
 
 ### Authentication & Security
 
-- Session-based authentication with bcrypt password hashing
-- Single-user system with registration lock after first user
+- Better Auth with Drizzle-backed session management
+- Email/password authentication with legacy username login compatibility
 - HTTP-only secure cookies with configurable expiration
 - Rate limiting and security headers
 
@@ -51,7 +51,7 @@ A TypeScript/Bun backend application for managing and streaming local video file
 - **Runtime**: [Bun](https://bun.sh) - Fast JavaScript runtime
 - **Framework**: [Fastify](https://fastify.dev) - High-performance web framework
 - **Database**: PostgreSQL with [Drizzle ORM](https://orm.drizzle.team)
-- **Authentication**: bcrypt + session-based cookies
+- **Authentication**: Better Auth + session-based cookies
 - **Validation**: [Zod](https://zod.dev) - TypeScript-first schema validation
 - **Logging**: [Pino](https://getpino.io) - Fast JSON logger
 - **Video Processing**: FFmpeg/FFprobe
@@ -132,12 +132,12 @@ The production startup includes:
 
 ### First-Time Setup
 
-1. **Register the first user** (only works once):
+1. **Register a user**:
 
    ```bash
    curl -X POST http://localhost:3000/api/auth/register \
      -H "Content-Type: application/json" \
-     -d '{"username": "admin", "password": "your-secure-password"}'
+     -d '{"email": "admin@example.com", "name": "Admin", "password": "your-secure-password"}'
    ```
 
 2. **Login to get session cookie**:
@@ -145,7 +145,7 @@ The production startup includes:
    ```bash
    curl -X POST http://localhost:3000/api/auth/login \
      -H "Content-Type: application/json" \
-     -d '{"username": "admin", "password": "your-secure-password"}' \
+     -d '{"email": "admin@example.com", "password": "your-secure-password"}' \
      -c cookies.txt
    ```
 
@@ -272,7 +272,7 @@ Format detection is based on file extensions. Add more in `src/utils/file-utils.
 
 - Single-user design with registration auto-disable
 - HTTP-only secure cookies, no JWT exposure
-- bcrypt password hashing (12 rounds)
+- Better Auth credential hashing and session management
 - Zod schemas on all endpoints
 - Path traversal prevention
 - Parameterized queries (Drizzle ORM)

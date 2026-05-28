@@ -13,7 +13,7 @@ interface SseClient {
   id: string;
   response: ServerResponse;
   userId: number;
-  sessionId: string;
+  sessionToken: string;
   connectedAt: Date;
   keepaliveInterval: ReturnType<typeof setInterval>;
   sessionValidationInterval: ReturnType<typeof setInterval>;
@@ -28,10 +28,10 @@ class EventsService {
   addAuthenticatedClient(params: {
     response: ServerResponse;
     userId: number;
-    sessionId: string;
+    sessionToken: string;
   }): void {
     const clientId = randomUUID();
-    const { response, userId, sessionId } = params;
+    const { response, userId, sessionToken } = params;
 
     const keepaliveInterval = setInterval(() => {
       this.sendComment(clientId, "keepalive");
@@ -47,7 +47,7 @@ class EventsService {
       id: clientId,
       response,
       userId,
-      sessionId,
+      sessionToken,
       connectedAt: new Date(),
       keepaliveInterval,
       sessionValidationInterval,
@@ -96,8 +96,8 @@ class EventsService {
     const client = this.clients.get(clientId);
     if (!client) return;
 
-    const sessionUser = await authService.validateSession(client.sessionId);
-    if (sessionUser) return;
+    const isValid = await authService.validateSessionToken(client.sessionToken);
+    if (isValid) return;
 
     this.sendEventToClient(client, {
       type: "auth:expired",

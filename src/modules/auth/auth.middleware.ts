@@ -1,47 +1,39 @@
-import type { FastifyRequest, FastifyReply } from 'fastify';
-import { UnauthorizedError } from '@/utils/errors';
-import { authService } from './auth.service';
-import { COOKIE_NAME } from '@/config/constants';
-import type { User } from './auth.types';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import { authService } from "./auth.service";
+import type { AuthSessionData, AuthUser } from "./auth.types";
+import { UnauthorizedError } from "@/utils/errors";
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyRequest {
-    user?: User;
+    user?: AuthUser;
+    authSession?: AuthSessionData;
   }
 }
 
 export async function authenticateUser(
   request: FastifyRequest,
-  reply: FastifyReply
+  _reply: FastifyReply,
 ): Promise<void> {
-  const sessionId = request.cookies[COOKIE_NAME];
+  const session = await authService.getSession(request.headers);
 
-  if (!sessionId) {
-    throw new UnauthorizedError('No session found. Please log in.');
+  if (!session) {
+    throw new UnauthorizedError("No valid session found. Please log in.");
   }
 
-  const user = await authService.validateSession(sessionId);
-
-  if (!user) {
-    reply.clearCookie(COOKIE_NAME);
-    throw new UnauthorizedError('Invalid or expired session. Please log in again.');
-  }
-
-  request.user = user;
+  request.user = session.user;
+  request.authSession = session;
 }
 
 export async function optionalAuth(
   request: FastifyRequest,
-  reply: FastifyReply
+  _reply: FastifyReply,
 ): Promise<void> {
-  const sessionId = request.cookies[COOKIE_NAME];
+  const session = await authService.getSession(request.headers);
 
-  if (sessionId) {
-    const user = await authService.validateSession(sessionId);
-    if (user) {
-      request.user = user;
-    } else {
-      reply.clearCookie(COOKIE_NAME);
-    }
+  if (!session) {
+    return;
   }
+
+  request.user = session.user;
+  request.authSession = session;
 }

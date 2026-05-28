@@ -171,7 +171,26 @@ Returns candidates for conversion/downscaling.
 
 - Success: `200` -> `{ success: true, data: Video }`
 - Errors: `401`, `404`
-- Note: backend description says random available video.
+- Query:
+  - `directory_id` positive int
+  - `include_hidden` boolean, default `false`
+  - `isAvailable` boolean
+  - `hasTags` boolean
+  - `hasCreator` boolean
+  - `hasStudio` boolean
+  - `hasRating` boolean
+  - `creatorIds` comma-separated ids or array
+  - `tagIds` comma-separated ids or array
+  - `studioIds` comma-separated ids or array
+  - `matchMode` `any` or `all`, default `any`
+  - `minPlayCount` non-negative int
+  - `maxPlayCount` non-negative int
+- Frontend notes:
+  - Use `maxPlayCount=0` for unwatched discovery.
+  - Use `creatorIds`, `tagIds`, and `studioIds` to restrict random selection to allowed relationships.
+  - Use `hasCreator=false`, `hasTags=false`, or `hasStudio=false` for metadata/tagging workflows.
+  - `404` means no video matched the requested subset.
+  - Detailed handoff: `endpoints/videos-random.md`
 
 ### GET /api/videos/duplicates
 

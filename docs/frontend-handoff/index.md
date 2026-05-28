@@ -13,12 +13,14 @@ This directory contains the current backend-to-frontend handoff documentation se
 
 - Auth: `endpoints/auth.md`
 - Events / SSE: `endpoints/events-sse.md`
+- Multiplayer Remote: `multiplayer-remote.md`
 - Directories: `endpoints/directories.md`
 - Settings: `endpoints/settings.md`
 
 ### Core content flows
 
 - Videos: `endpoints/videos.md`
+- Random Video Filters: `endpoints/videos-random.md`
 - Related Videos: `endpoints/related-videos.md`
 - Creators: `endpoints/creators.md`
 - Studios: `endpoints/studios.md`
@@ -49,10 +51,11 @@ This directory contains the current backend-to-frontend handoff documentation se
 1. `project-overview.md`
 2. `endpoints/auth.md`
 3. `endpoints/events-sse.md`
-4. `endpoints/videos.md`
-5. `endpoints/creators.md`
-6. `endpoints/studios.md`
-7. Module docs relevant to the first frontend milestone
+4. `multiplayer-remote.md` if implementing the multiplayer remote flow
+5. `endpoints/videos.md`
+6. `endpoints/creators.md`
+7. `endpoints/studios.md`
+8. Module docs relevant to the first frontend milestone
 
 ## Coverage status
 
@@ -60,6 +63,7 @@ Documented in this handoff set:
 
 - Auth
 - Events / SSE
+- Multiplayer Remote
 - Directories
 - Settings
 - Videos

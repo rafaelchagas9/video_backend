@@ -1,178 +1,245 @@
-import bcrypt from "bcrypt";
-import { randomBytes } from "crypto";
+import { fromNodeHeaders } from "better-auth/node";
+import { isAPIError } from "better-auth/api";
+import type { IncomingHttpHeaders } from "http";
 import { db } from "@/config/drizzle";
-import { usersTable, sessionsTable } from "@/database/schema";
-import { eq, count, lte } from "drizzle-orm";
-import { env } from "@/config/env";
-import { ConflictError, UnauthorizedError } from "@/utils/errors";
+import { auth } from "@/lib/auth";
+import { AppError, UnauthorizedError } from "@/utils/errors";
 import type {
-  RegisterInput,
+  AuthSession,
+  AuthSessionData,
+  AuthUser,
   LoginInput,
-  User,
-  AuthenticatedUser,
+  RegisterInput,
 } from "./auth.types";
 
-const BCRYPT_ROUNDS = 12;
+type BetterAuthUser = {
+  id: string | number;
+  email: string;
+  emailVerified: boolean;
+  name: string;
+  image?: string | null;
+  username?: string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+};
+
+type BetterAuthSession = {
+  id: string | number;
+  token: string;
+  userId: string | number;
+  expiresAt: Date | string;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+};
+
+type BetterAuthSessionPayload = {
+  user: BetterAuthUser;
+  session: BetterAuthSession;
+};
+
+type BetterAuthAuthResponse = {
+  user?: BetterAuthUser;
+  token?: string | null;
+};
+
+function toHeaders(headers: IncomingHttpHeaders | Headers): Headers {
+  return headers instanceof Headers ? headers : fromNodeHeaders(headers);
+}
+
+function toIsoString(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function toNumericUserId(value: string | number): number {
+  const userId = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new UnauthorizedError("Invalid authenticated user identifier");
+  }
+
+  return userId;
+}
+
+function getFallbackName(email: string): string {
+  const fallback = email.split("@")[0]?.trim();
+  return fallback && fallback.length > 0 ? fallback : email;
+}
+
+function mapBetterAuthError(error: unknown): never {
+  if (isAPIError(error)) {
+    throw new AppError(Number(error.status), error.message);
+  }
+
+  throw error;
+}
 
 export class AuthService {
-  async register(input: RegisterInput): Promise<User> {
-    // Check if any user already exists (single-user system)
-    const userCountResult = await db
-      .select({ count: count() })
-      .from(usersTable);
-
-    if (userCountResult[0].count > 0) {
-      throw new ConflictError(
-        "A user already exists. Registration is disabled.",
-      );
+  private async resolveLoginEmail(input: LoginInput): Promise<string> {
+    if (input.email) {
+      return input.email;
     }
 
-    // Check if username is taken (redundant but safe)
-    const existingUser = await db.query.usersTable.findFirst({
-      where: (users, { eq }) => eq(users.username, input.username),
-      columns: { id: true },
+    const username = input.username?.trim();
+    if (!username) {
+      throw new UnauthorizedError("Email or username is required");
+    }
+
+    const user = await db.query.usersTable.findFirst({
+      where: (users, { eq }) => eq(users.username, username),
+      columns: {
+        email: true,
+      },
     });
 
-    if (existingUser) {
-      throw new ConflictError("Username already exists");
+    if (!user?.email) {
+      throw new UnauthorizedError("Invalid credentials");
     }
 
-    // Hash password
-    const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+    return user.email;
+  }
 
-    // Create user
-    const [result] = await db
-      .insert(usersTable)
-      .values({
-        username: input.username,
-        passwordHash,
-      })
-      .returning({
-        id: usersTable.id,
-        username: usersTable.username,
-        createdAt: usersTable.createdAt,
-        updatedAt: usersTable.updatedAt,
+  private normalizeUser(user: BetterAuthUser): AuthUser {
+    return {
+      id: toNumericUserId(user.id),
+      name: user.name,
+      email: user.email,
+      email_verified: user.emailVerified,
+      image: user.image ?? null,
+      username: user.username ?? null,
+      created_at: toIsoString(user.createdAt),
+      updated_at: toIsoString(user.updatedAt),
+    };
+  }
+
+  private normalizeSession(session: BetterAuthSession): AuthSession {
+    return {
+      id: String(session.id),
+      token: session.token,
+      user_id: toNumericUserId(session.userId),
+      expires_at: toIsoString(session.expiresAt),
+      created_at: toIsoString(session.createdAt),
+      updated_at: toIsoString(session.updatedAt),
+      ip_address: session.ipAddress ?? null,
+      user_agent: session.userAgent ?? null,
+    };
+  }
+
+  async register(
+    input: RegisterInput,
+    headers: IncomingHttpHeaders | Headers,
+  ): Promise<{ user: AuthUser; response: Response }> {
+    try {
+      const response = await auth.api.signUpEmail({
+        asResponse: true,
+        headers: toHeaders(headers),
+        body: {
+          email: input.email,
+          password: input.password,
+          name: input.name?.trim() || getFallbackName(input.email),
+        },
       });
 
-    if (!result) {
-      throw new Error("Failed to create user");
-    }
+      const payload = (await response.clone().json()) as BetterAuthAuthResponse;
 
-    return {
-      id: result.id,
-      username: result.username,
-      created_at: result.createdAt.toISOString(),
-      updated_at: result.updatedAt.toISOString(),
-    };
+      if (!payload.user) {
+        throw new Error("Better Auth did not return a registered user");
+      }
+
+      return {
+        user: this.normalizeUser(payload.user),
+        response,
+      };
+    } catch (error) {
+      mapBetterAuthError(error);
+    }
   }
 
-  async login(input: LoginInput): Promise<AuthenticatedUser> {
-    // Find user
-    const [user] = await db
-      .select({
-        id: usersTable.id,
-        username: usersTable.username,
-        passwordHash: usersTable.passwordHash,
-        createdAt: usersTable.createdAt,
-        updatedAt: usersTable.updatedAt,
-      })
-      .from(usersTable)
-      .where(eq(usersTable.username, input.username))
-      .limit(1);
-
-    if (!user) {
-      throw new UnauthorizedError("Invalid credentials");
-    }
-
-    // Verify password
-    const isValid = await bcrypt.compare(input.password, user.passwordHash);
-
-    if (!isValid) {
-      throw new UnauthorizedError("Invalid credentials");
-    }
-
-    // Create session
-    const sessionId = randomBytes(32).toString("hex");
-    const expiresAt = new Date(
-      Date.now() + env.SESSION_EXPIRY_HOURS * 60 * 60 * 1000,
-    );
-
-    await db.insert(sessionsTable).values({
-      id: sessionId,
-      userId: user.id,
-      expiresAt,
-    });
-
-    return {
-      id: user.id,
-      username: user.username,
-      created_at: user.createdAt.toISOString(),
-      updated_at: user.updatedAt.toISOString(),
-      sessionId,
-    };
-  }
-
-  async logout(sessionId: string): Promise<void> {
-    await db.delete(sessionsTable).where(eq(sessionsTable.id, sessionId));
-  }
-
-  async validateSession(sessionId: string): Promise<User | null> {
-    const session = await db.query.sessionsTable.findFirst({
-      where: (sessions, { eq, and, gt }) =>
-        and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())),
-      with: {
-        user: {
-          columns: {
-            id: true,
-            username: true,
-            createdAt: true,
-            updatedAt: true,
-          },
+  async login(
+    input: LoginInput,
+    headers: IncomingHttpHeaders | Headers,
+  ): Promise<{ user: AuthUser; response: Response }> {
+    try {
+      const email = await this.resolveLoginEmail(input);
+      const response = await auth.api.signInEmail({
+        asResponse: true,
+        headers: toHeaders(headers),
+        body: {
+          email,
+          password: input.password,
         },
-      },
-    });
+      });
 
-    if (!session) {
-      return null;
+      const payload = (await response.clone().json()) as BetterAuthAuthResponse;
+
+      if (!payload.user) {
+        throw new Error("Better Auth did not return an authenticated user");
+      }
+
+      return {
+        user: this.normalizeUser(payload.user),
+        response,
+      };
+    } catch (error) {
+      mapBetterAuthError(error);
     }
-
-    return {
-      id: session.user.id,
-      username: session.user.username,
-      created_at: session.user.createdAt.toISOString(),
-      updated_at: session.user.updatedAt.toISOString(),
-    };
   }
 
-  async cleanupExpiredSessions(): Promise<number> {
-    const result = await db
-      .delete(sessionsTable)
-      .where(lte(sessionsTable.expiresAt, new Date()));
-
-    return result.count ?? 0;
+  async logout(headers: IncomingHttpHeaders | Headers): Promise<Response> {
+    try {
+      return await auth.api.signOut({
+        asResponse: true,
+        headers: toHeaders(headers),
+      });
+    } catch (error) {
+      mapBetterAuthError(error);
+    }
   }
 
-  async getMe(userId: number): Promise<User> {
-    const user = await db.query.usersTable.findFirst({
-      where: (users, { eq }) => eq(users.id, userId),
+  async getSession(
+    headers: IncomingHttpHeaders | Headers,
+  ): Promise<AuthSessionData | null> {
+    try {
+      const session = await auth.api.getSession({
+        headers: toHeaders(headers),
+      });
+
+      if (!session) {
+        return null;
+      }
+
+      const payload = session as BetterAuthSessionPayload;
+
+      return {
+        user: this.normalizeUser(payload.user),
+        session: this.normalizeSession(payload.session),
+      };
+    } catch (error) {
+      mapBetterAuthError(error);
+    }
+  }
+
+  async validateSessionToken(token: string): Promise<boolean> {
+    const session = await db.query.sessionsTable.findFirst({
+      where: (sessions, { and, eq, gt }) =>
+        and(eq(sessions.token, token), gt(sessions.expiresAt, new Date())),
       columns: {
         id: true,
-        username: true,
-        createdAt: true,
-        updatedAt: true,
       },
     });
 
-    if (!user) {
-      throw new UnauthorizedError("User not found");
+    return Boolean(session);
+  }
+
+  async getMe(headers: IncomingHttpHeaders | Headers): Promise<AuthUser> {
+    const session = await this.getSession(headers);
+
+    if (!session) {
+      throw new UnauthorizedError("Invalid or expired session. Please log in again.");
     }
 
-    return {
-      id: user.id,
-      username: user.username,
-      created_at: user.createdAt.toISOString(),
-      updated_at: user.updatedAt.toISOString(),
-    };
+    return session.user;
   }
 }
 

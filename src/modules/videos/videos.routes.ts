@@ -18,6 +18,8 @@ import { createBookmarkSchema } from "@/modules/bookmarks/bookmarks.types";
 import {
   idParamSchema,
   listVideosQuerySchema,
+  randomVideoQuerySchema,
+  randomVideoResponseSchema,
   nextVideoQuerySchema,
   nextVideoResponseSchema,
   triageQueueQuerySchema,
@@ -353,16 +355,20 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["videos"],
         summary: "Get random video",
         description:
-          "Returns detailed information about a random available video.",
+          "Returns detailed information about a random video, optionally restricted by metadata completeness, relationship IDs, or play count.",
+        querystring: randomVideoQuerySchema,
         response: {
-          200: videoResponseSchema,
+          200: randomVideoResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const video = await videosService.getRandomVideo(request.user!.id);
+      const video = await videosService.getRandomVideo(
+        request.user!.id,
+        request.query,
+      );
       return reply.send({
         success: true,
         data: video,

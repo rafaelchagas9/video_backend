@@ -89,6 +89,17 @@ const envSchema = z.object({
   // Conversion
   CONVERSION_MAX_CONCURRENT: z.string().default("1").transform(Number),
 
+  // Telemetry
+  POSTHOG_API_KEY: z.string().default(""),
+  POSTHOG_HOST: z.string().default("https://us.i.posthog.com"),
+  POSTHOG_LOG_LEVEL: z
+    .enum(["debug", "info", "warn", "error", "fatal"])
+    .default("warn"),
+  POSTHOG_CAPTURE_REQUEST_METRICS: z
+    .string()
+    .default("true")
+    .transform((value) => value.toLowerCase() === "true"),
+
   // Face Recognition
   FACE_SERVICE_URL: z.string().default("http://localhost:8100"),
   FACE_SIMILARITY_THRESHOLD: z
@@ -152,6 +163,9 @@ async function main() {
   );
   console.log(`   Server: ${env.HOST}:${env.PORT}`);
   console.log(`   Session Secret: ${env.SESSION_SECRET.length} characters ✓`);
+  console.log(
+    `   PostHog: ${env.POSTHOG_API_KEY.length > 0 ? env.POSTHOG_HOST : "disabled"}`,
+  );
 
   if (env.SESSION_SECRET === "change-this-to-a-random-secret-in-production") {
     console.error(

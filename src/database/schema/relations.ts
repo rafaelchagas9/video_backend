@@ -1,7 +1,7 @@
 import { relations } from "drizzle-orm";
 
 // Import all tables
-import { usersTable, sessionsTable } from "./users.schema";
+import { accountsTable, sessionsTable, usersTable } from "./users.schema";
 import { watchedDirectoriesTable, scanLogsTable } from "./directories.schema";
 import {
   videosTable,
@@ -45,21 +45,37 @@ import {
   taggingRuleActionsTable,
   taggingRuleLogTable,
 } from "./tagging.schema";
+import {
+  multiplayerRemoteSessionsTable,
+  multiplayerRemoteJoinRequestsTable,
+  multiplayerRemoteTrustedDevicesTable,
+} from "./multiplayer-remote.schema";
 
 // Users relations
 export const usersRelations = relations(usersTable, ({ many }) => ({
   sessions: many(sessionsTable),
+  accounts: many(accountsTable),
   playlists: many(playlistsTable),
   favorites: many(favoritesTable),
   bookmarks: many(bookmarksTable),
   videoStats: many(videoStatsTable),
   triageProgress: many(triageProgressTable),
+  multiplayerRemoteSessions: many(multiplayerRemoteSessionsTable),
+  multiplayerRemoteJoinRequests: many(multiplayerRemoteJoinRequestsTable),
+  multiplayerRemoteTrustedDevices: many(multiplayerRemoteTrustedDevicesTable),
 }));
 
 // Sessions relations
 export const sessionsRelations = relations(sessionsTable, ({ one }) => ({
   user: one(usersTable, {
     fields: [sessionsTable.userId],
+    references: [usersTable.id],
+  }),
+}));
+
+export const accountsRelations = relations(accountsTable, ({ one }) => ({
+  user: one(usersTable, {
+    fields: [accountsTable.userId],
     references: [usersTable.id],
   }),
 }));
@@ -462,6 +478,45 @@ export const taggingRuleLogRelations = relations(
     video: one(videosTable, {
       fields: [taggingRuleLogTable.videoId],
       references: [videosTable.id],
+    }),
+  }),
+);
+
+export const multiplayerRemoteSessionsRelations = relations(
+  multiplayerRemoteSessionsTable,
+  ({ one, many }) => ({
+    owner: one(usersTable, {
+      fields: [multiplayerRemoteSessionsTable.ownerUserId],
+      references: [usersTable.id],
+    }),
+    joinRequests: many(multiplayerRemoteJoinRequestsTable),
+  }),
+);
+
+export const multiplayerRemoteTrustedDevicesRelations = relations(
+  multiplayerRemoteTrustedDevicesTable,
+  ({ one }) => ({
+    owner: one(usersTable, {
+      fields: [multiplayerRemoteTrustedDevicesTable.ownerUserId],
+      references: [usersTable.id],
+    }),
+  }),
+);
+
+export const multiplayerRemoteJoinRequestsRelations = relations(
+  multiplayerRemoteJoinRequestsTable,
+  ({ one }) => ({
+    session: one(multiplayerRemoteSessionsTable, {
+      fields: [multiplayerRemoteJoinRequestsTable.sessionId],
+      references: [multiplayerRemoteSessionsTable.id],
+    }),
+    requestingUser: one(usersTable, {
+      fields: [multiplayerRemoteJoinRequestsTable.requestingUserId],
+      references: [usersTable.id],
+    }),
+    requestingSession: one(sessionsTable, {
+      fields: [multiplayerRemoteJoinRequestsTable.requestingSessionId],
+      references: [sessionsTable.id],
     }),
   }),
 );

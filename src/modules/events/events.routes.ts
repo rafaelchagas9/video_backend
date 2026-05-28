@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { COOKIE_NAME } from "@/config/constants";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { eventsService } from "./events.service";
 
@@ -16,10 +15,10 @@ export async function eventsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const sessionId = request.cookies[COOKIE_NAME];
       const userId = request.user?.id;
+      const sessionToken = request.authSession?.session.token;
 
-      if (!sessionId || !userId) {
+      if (!sessionToken || !userId) {
         return reply
           .status(401)
           .type("application/json")
@@ -50,7 +49,7 @@ export async function eventsRoutes(fastify: FastifyInstance): Promise<void> {
       eventsService.addAuthenticatedClient({
         response: reply.raw,
         userId,
-        sessionId,
+        sessionToken,
       });
     },
   );

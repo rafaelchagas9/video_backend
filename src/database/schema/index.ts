@@ -41,5 +41,8 @@ export * from "./app-settings.schema";
 // Face Recognition
 export * from "./face-recognition.schema";
 
+// Multiplayer Remote Control
+export * from "./multiplayer-remote.schema";
+
 // Relations (for Drizzle relational queries)
 export * from "./relations";

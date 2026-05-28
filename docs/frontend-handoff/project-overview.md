@@ -7,7 +7,7 @@ This document gives a first-pass map of the current backend so frontend work can
 - Base API prefix: `/api`
 - Swagger/OpenAPI UI: `/docs`
 - Health check: `/health`
-- Authentication model: cookie-based session (`session_id`), single-user system
+- Authentication model: Better Auth cookie-based session (`session_id`)
 - Realtime model: **Server-Sent Events (SSE)** via `/api/events/stream`
 - Main protocol style: JSON envelope with `success`, plus `data` and optionally `message` (some endpoints use custom top-level keys)
 
@@ -22,12 +22,9 @@ This document gives a first-pass map of the current backend so frontend work can
 
 ### Important auth notes for frontend
 
-- Sessions are cookie-based (`HttpOnly` cookie `session_id`), not bearer-token based.
+- Sessions are Better Auth-managed and cookie-based (`HttpOnly` cookie `session_id`), not bearer-token based.
 - Frontend must send credentials in requests (`credentials: "include"`).
-- Cookie settings:
-  - `sameSite: "lax"`
-  - `secure: true` in production
-  - expiration controlled by `SESSION_EXPIRY_HOURS`
+- Cookie settings are managed by Better Auth; frontend should treat them as opaque and always send `credentials: "include"`.
 - Most endpoints require auth (`authenticateUser` middleware).
 - If session expires, API returns `401` and SSE may emit `auth:expired` before closing stream.
 
@@ -370,6 +367,6 @@ Recommended order to reduce integration risk:
 4. Async processing flows (conversion, edits, storyboards, face recognition)
 5. Secondary modules (playlists, stats, backup, tagging rules)
 
-## 8) Notes on currently unused realtime channel
+## 8) Notes on realtime channels
 
-There is a WebSocket service module in code (`src/modules/websocket/websocket.ts`), but no active registration in `src/server.ts`. Current realtime integration should target SSE only.
+General frontend realtime integration should target SSE. Multiplayer remote control uses its dedicated authenticated websocket endpoint at `/api/multiplayer-remote/ws`.

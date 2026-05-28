@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "fs/promises";
 import { dirname } from "path";
 import { env } from "@/config/env";
 import { logger } from "@/utils/logger";
+import { captureTelemetryEvent } from "@/utils/telemetry";
 
 type PerfContext = {
   scenario: "storyboard" | "face" | "editing";
@@ -42,6 +43,7 @@ export async function recordPerfStage(
   };
 
   logger.debug(entry, "Performance stage");
+  captureTelemetryEvent("performance stage recorded", entry);
 
   try {
     await ensureDirectoryReady();

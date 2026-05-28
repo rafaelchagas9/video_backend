@@ -6,7 +6,7 @@ Scope: `/api/events/stream`
 
 ### GET /api/events/stream
 
-- Auth: Required (`session_id` cookie)
+- Auth: Required (Better Auth `session_id` cookie)
 - Content-Type: `text/event-stream`
 - Transport notes:
   - Keepalive comments every ~20s (`: keepalive`)

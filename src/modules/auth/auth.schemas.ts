@@ -1,26 +1,35 @@
 import { z } from "zod";
 
-// Request schemas
 export const registerBodySchema = z.object({
-  username: z
-    .string()
-    .min(3, "Username must be at least 3 characters")
-    .max(50, "Username must be at most 50 characters"),
+  email: z.email("A valid email is required"),
   password: z
     .string()
     .min(8, "Password must be at least 8 characters")
     .max(100, "Password must be at most 100 characters"),
+  name: z
+    .string()
+    .trim()
+    .min(1, "Name cannot be empty")
+    .max(100, "Name must be at most 100 characters")
+    .optional(),
 });
 
 export const loginBodySchema = z.object({
-  username: z.string().min(1, "Username is required"),
+  email: z.email("A valid email is required").optional(),
+  username: z.string().trim().min(1, "Username is required").optional(),
   password: z.string().min(1, "Password is required"),
+}).refine((data) => Boolean(data.email || data.username), {
+  message: "Either email or username is required",
+  path: ["email"],
 });
 
-// Response schemas
 const userSchema = z.object({
   id: z.number(),
-  username: z.string(),
+  name: z.string(),
+  email: z.string().email(),
+  email_verified: z.boolean(),
+  image: z.string().nullable(),
+  username: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -51,6 +60,5 @@ export const errorResponseSchema = z.object({
   error: errorSchema,
 });
 
-// Type exports
 export type RegisterBody = z.infer<typeof registerBodySchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;

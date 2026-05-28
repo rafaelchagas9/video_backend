@@ -1,22 +1,36 @@
-import type { FastifyInstance } from "fastify";
+import { fromNodeHeaders } from "better-auth/node";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authService } from "./auth.service";
-import {
-  registerBodySchema,
-  loginBodySchema,
-  authSuccessResponseSchema,
-  meResponseSchema,
-  logoutResponseSchema,
-  errorResponseSchema,
-} from "./auth.schemas";
 import { authenticateUser } from "./auth.middleware";
-import { COOKIE_NAME } from "@/config/constants";
-import { env } from "@/config/env";
+import {
+  authSuccessResponseSchema,
+  errorResponseSchema,
+  loginBodySchema,
+  logoutResponseSchema,
+  meResponseSchema,
+  registerBodySchema,
+} from "./auth.schemas";
+import { auth } from "@/lib/auth";
+
+function forwardSetCookieHeaders(reply: FastifyReply, response: Response): void {
+  const getSetCookie = response.headers.getSetCookie?.bind(response.headers);
+  const cookies = getSetCookie ? getSetCookie() : [];
+
+  if (cookies.length > 0) {
+    reply.header("set-cookie", cookies);
+    return;
+  }
+
+  const header = response.headers.get("set-cookie");
+  if (header) {
+    reply.header("set-cookie", header);
+  }
+}
 
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
-  // Register new user
   app.post(
     "/register",
     {
@@ -24,7 +38,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["auth"],
         summary: "Register a new user",
         description:
-          "Create a new user account. Only one user can be registered (single-user system).",
+          "Create a new Better Auth account using email and password.",
         body: registerBodySchema,
         response: {
           201: authSuccessResponseSchema,
@@ -34,7 +48,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const user = await authService.register(request.body);
+      const { user, response } = await authService.register(
+        request.body,
+        request.headers,
+      );
+
+      forwardSetCookieHeaders(reply, response);
 
       return reply.status(201).send({
         success: true,
@@ -44,7 +63,6 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
-  // Login
   app.post(
     "/login",
     {
@@ -52,7 +70,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["auth"],
         summary: "Login to an existing account",
         description:
-          "Authenticate with username and password. Returns a session cookie.",
+          "Authenticate with email and password. Legacy username login is also accepted for migrated accounts. Returns Better Auth session cookies.",
         body: loginBodySchema,
         response: {
           200: authSuccessResponseSchema,
@@ -62,37 +80,27 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await authService.login(request.body);
+      const { user, response } = await authService.login(
+        request.body,
+        request.headers,
+      );
 
-      // Set session cookie
-      reply.setCookie(COOKIE_NAME, result.sessionId, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: env.SESSION_EXPIRY_HOURS * 60 * 60,
-        path: "/",
-      });
+      forwardSetCookieHeaders(reply, response);
 
       return reply.send({
         success: true,
-        data: {
-          id: result.id,
-          username: result.username,
-          created_at: result.created_at,
-          updated_at: result.updated_at,
-        },
+        data: user,
         message: "Logged in successfully",
       });
     },
   );
 
-  // Logout
   app.post("/logout", {
     schema: {
       tags: ["auth"],
       summary: "Logout from current session",
       description:
-        "Invalidate the current session and clear the session cookie.",
+        "Invalidate the current Better Auth session and clear auth cookies.",
       response: {
         200: logoutResponseSchema,
         401: errorResponseSchema,
@@ -100,13 +108,8 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     },
     preHandler: authenticateUser,
     handler: async (request, reply) => {
-      const sessionId = request.cookies[COOKIE_NAME];
-
-      if (sessionId) {
-        await authService.logout(sessionId);
-      }
-
-      reply.clearCookie(COOKIE_NAME);
+      const response = await authService.logout(request.headers);
+      forwardSetCookieHeaders(reply, response);
 
       return reply.send({
         success: true,
@@ -115,12 +118,11 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     },
   });
 
-  // Get current user
   app.get("/me", {
     schema: {
       tags: ["auth"],
       summary: "Get current user info",
-      description: "Returns the currently authenticated user's information.",
+      description: "Returns the currently authenticated Better Auth user.",
       response: {
         200: meResponseSchema,
         401: errorResponseSchema,
@@ -128,22 +130,45 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     },
     preHandler: authenticateUser,
     handler: async (request, reply) => {
-      if (!request.user) {
-        return reply.status(401).send({
-          success: false,
-          error: {
-            message: "Not authenticated",
-            statusCode: 401,
-          },
-        });
-      }
-
-      const user = await authService.getMe(request.user.id);
+      const user = await authService.getMe(request.headers);
 
       return reply.send({
         success: true,
         data: user,
       });
+    },
+  });
+
+  app.route({
+    method: ["GET", "POST"],
+    url: "/*",
+    schema: {
+      hide: true,
+    },
+    async handler(request, reply) {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const headers = fromNodeHeaders(request.headers);
+      const response = await auth.handler(
+        new Request(url.toString(), {
+          method: request.method,
+          headers,
+          ...(request.body === undefined
+            ? {}
+            : { body: JSON.stringify(request.body) }),
+        }),
+      );
+
+      reply.status(response.status);
+      response.headers.forEach((value, key) => {
+        if (key.toLowerCase() === "set-cookie") {
+          return;
+        }
+
+        reply.header(key, value);
+      });
+      forwardSetCookieHeaders(reply, response);
+
+      return reply.send(response.body ? await response.text() : null);
     },
   });
 }

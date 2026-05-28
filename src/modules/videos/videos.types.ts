@@ -126,6 +126,23 @@ export interface ListVideosOptions {
   include?: VideoListInclude[];
 }
 
+export interface RandomVideoOptions {
+  directory_id?: number;
+  include_hidden?: boolean;
+  isAvailable?: boolean;
+  hasTags?: boolean;
+  hasCreator?: boolean;
+  hasStudio?: boolean;
+  hasRating?: boolean;
+  creatorIds?: number[];
+  tagIds?: number[];
+  studioIds?: number[];
+  matchMode?: "any" | "all";
+  minPlayCount?: number;
+  maxPlayCount?: number;
+  limit?: number;
+}
+
 export interface BulkUpdateCreatorsInput {
   videoIds: number[];
   creatorIds: number[];

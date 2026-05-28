@@ -1,9 +1,31 @@
 import { buildServer } from "./server";
 import { env } from "./config/env";
 import { logger } from "./utils/logger";
+import {
+  captureTelemetryException,
+  shutdownTelemetry,
+} from "./utils/telemetry";
+
+function registerProcessTelemetryHandlers(): void {
+  process.on("unhandledRejection", (error) => {
+    captureTelemetryException(error, { source: "process.unhandledRejection" });
+    logger.error({ error }, "Unhandled promise rejection");
+  });
+
+  process.on("uncaughtException", (error) => {
+    captureTelemetryException(error, { source: "process.uncaughtException" });
+    logger.fatal({ error }, "Uncaught exception");
+
+    void shutdownTelemetry().finally(() => {
+      process.exit(1);
+    });
+  });
+}
 
 async function main() {
   try {
+    registerProcessTelemetryHandlers();
+
     const server = await buildServer();
 
     await server.listen({
@@ -23,7 +45,9 @@ async function main() {
     );
     logger.info(`URL: ${env.BASE_URL}`);
   } catch (error) {
+    captureTelemetryException(error, { source: "startup" });
     logger.error(error);
+    await shutdownTelemetry();
     process.exit(1);
   }
 }
