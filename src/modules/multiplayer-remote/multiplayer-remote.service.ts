@@ -1,11 +1,13 @@
-import { randomBytes, randomUUID } from "crypto";
-import { and, eq, gt, isNull, lte, ne } from "drizzle-orm";
+import { createHash, randomBytes, randomUUID } from "crypto";
+import { and, desc, eq, gt, isNull, lte, ne, or } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   multiplayerRemoteJoinRequestsTable,
   multiplayerRemoteSessionsTable,
+  multiplayerRemoteTrustedDevicesTable,
   type MultiplayerRemoteJoinRequestRecord,
   type MultiplayerRemoteSessionRecord,
+  type MultiplayerRemoteTrustedDeviceRecord,
 } from "@/database/schema";
 import {
   BadRequestError,
@@ -25,6 +27,7 @@ import type {
   CloseSessionBody,
   PairBody,
   SessionSnapshot,
+  TrustedDeviceBody,
 } from "./multiplayer-remote.schemas";
 
 const PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
@@ -38,6 +41,7 @@ export interface MultiplayerRemoteJoinRequestDto {
   requestingSessionId: string | null;
   status: MultiplayerRemoteJoinRequestStatus;
   requestedCode: string;
+  canTrustDevice: boolean;
   remoteDeviceName: string | null;
   remoteDeviceType: MultiplayerRemoteDeviceType | null;
   remoteUserAgent: string | null;
@@ -67,6 +71,19 @@ export interface MultiplayerRemoteSessionDto {
   createdAt: string;
   updatedAt: string;
   pendingJoinRequest?: MultiplayerRemoteJoinRequestDto | null;
+}
+
+export interface MultiplayerRemoteTrustedDeviceDto {
+  id: number;
+  ownerUserId: number;
+  deviceName: string | null;
+  deviceType: MultiplayerRemoteDeviceType | null;
+  userAgent: string | null;
+  trustedAt: string;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 class MultiplayerRemoteService {
@@ -177,6 +194,9 @@ class MultiplayerRemoteService {
           requestingUserId: params.userId,
           requestingSessionId: params.authSessionId,
           requestedCode: input.pairingCode,
+          remoteDeviceKeyHash: input.remoteDeviceKey
+            ? this.hashDeviceKey(input.remoteDeviceKey)
+            : null,
           remoteDeviceName: input.remoteDeviceName ?? null,
           remoteDeviceType: input.remoteDeviceType ?? "unknown",
           remoteUserAgent: params.userAgent,
@@ -224,6 +244,35 @@ class MultiplayerRemoteService {
         .set({ status: "approved", resolvedAt: now, updatedAt: now })
         .where(eq(multiplayerRemoteJoinRequestsTable.id, requestId));
 
+      if (joinRequest.remoteDeviceKeyHash) {
+        await tx
+          .insert(multiplayerRemoteTrustedDevicesTable)
+          .values({
+            ownerUserId: userId,
+            deviceKeyHash: joinRequest.remoteDeviceKeyHash,
+            deviceName: joinRequest.remoteDeviceName,
+            deviceType: joinRequest.remoteDeviceType,
+            userAgent: joinRequest.remoteUserAgent,
+            trustedAt: now,
+            lastSeenAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [
+              multiplayerRemoteTrustedDevicesTable.ownerUserId,
+              multiplayerRemoteTrustedDevicesTable.deviceKeyHash,
+            ],
+            set: {
+              deviceName: joinRequest.remoteDeviceName,
+              deviceType: joinRequest.remoteDeviceType,
+              userAgent: joinRequest.remoteUserAgent,
+              trustedAt: now,
+              lastSeenAt: now,
+              revokedAt: null,
+              updatedAt: now,
+            },
+          });
+      }
+
       const [updated] = await tx
         .update(multiplayerRemoteSessionsTable)
         .set({
@@ -245,6 +294,128 @@ class MultiplayerRemoteService {
 
     logger.info({ sessionId, requestId }, "Multiplayer join request approved");
     return this.mapSession(updatedSession, null);
+  }
+
+  async discoverTrustedSessions(
+    userId: number,
+    input: TrustedDeviceBody,
+    params: {
+      userAgent: string | null;
+    },
+  ): Promise<{
+    trustedDevice: MultiplayerRemoteTrustedDeviceDto;
+    sessions: MultiplayerRemoteSessionDto[];
+  }> {
+    const trustedDevice = await this.getTrustedDevice(userId, input.remoteDeviceKey);
+    const touchedTrustedDevice = await this.touchTrustedDevice(
+      trustedDevice,
+      input,
+      params.userAgent,
+    );
+
+    const sessions = await db
+      .select()
+      .from(multiplayerRemoteSessionsTable)
+      .where(
+        and(
+          eq(multiplayerRemoteSessionsTable.ownerUserId, userId),
+          isNull(multiplayerRemoteSessionsTable.closedAt),
+          isNull(multiplayerRemoteSessionsTable.remoteClientId),
+          or(
+            eq(multiplayerRemoteSessionsTable.status, "waiting_for_remote"),
+            eq(multiplayerRemoteSessionsTable.status, "pending_approval"),
+          ),
+        ),
+      )
+      .orderBy(desc(multiplayerRemoteSessionsTable.displayLastSeenAt))
+      .limit(20);
+
+    return {
+      trustedDevice: this.mapTrustedDevice(touchedTrustedDevice),
+      sessions: sessions
+        .filter((candidate) => Boolean(candidate.displayConnectedAt))
+        .map((candidate) => this.mapSession(candidate, null)),
+    };
+  }
+
+  async connectTrustedDevice(
+    sessionId: number,
+    userId: number,
+    input: TrustedDeviceBody,
+    params: {
+      userAgent: string | null;
+    },
+  ): Promise<{
+    session: MultiplayerRemoteSessionDto;
+    trustedDevice: MultiplayerRemoteTrustedDeviceDto;
+  }> {
+    const session = await this.getOwnedSession(sessionId, userId);
+    const trustedDevice = await this.getTrustedDevice(userId, input.remoteDeviceKey);
+    const now = new Date();
+
+    if (session.status === "closed" || session.closedAt) {
+      throw new ConflictError("Session is already closed");
+    }
+
+    if (!session.displayConnectedAt) {
+      throw new ConflictError("Display is not connected");
+    }
+
+    if (session.status === "active" || session.remoteClientId) {
+      throw new ConflictError("Session already has an active remote");
+    }
+
+    const [updatedSession, updatedTrustedDevice] = await db.transaction(async (tx) => {
+      await tx
+        .update(multiplayerRemoteJoinRequestsTable)
+        .set({ status: "cancelled", resolvedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(multiplayerRemoteJoinRequestsTable.sessionId, session.id),
+            eq(multiplayerRemoteJoinRequestsTable.status, "pending"),
+          ),
+        );
+
+      const [device] = await tx
+        .update(multiplayerRemoteTrustedDevicesTable)
+        .set({
+          deviceName: input.remoteDeviceName ?? trustedDevice.deviceName,
+          deviceType: input.remoteDeviceType ?? trustedDevice.deviceType,
+          userAgent: params.userAgent ?? trustedDevice.userAgent,
+          lastSeenAt: now,
+          updatedAt: now,
+        })
+        .where(eq(multiplayerRemoteTrustedDevicesTable.id, trustedDevice.id))
+        .returning();
+
+      const [updated] = await tx
+        .update(multiplayerRemoteSessionsTable)
+        .set({
+          status: "active",
+          pairingCode: null,
+          pairingCodeExpiresAt: null,
+          approvedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(multiplayerRemoteSessionsTable.id, session.id))
+        .returning();
+
+      return [updated, device];
+    });
+
+    if (!updatedSession || !updatedTrustedDevice) {
+      throw new Error("Failed to connect trusted remote device");
+    }
+
+    logger.info(
+      { sessionId, trustedDeviceId: trustedDevice.id },
+      "Trusted multiplayer remote device connected",
+    );
+
+    return {
+      session: this.mapSession(updatedSession, null),
+      trustedDevice: this.mapTrustedDevice(updatedTrustedDevice),
+    };
   }
 
   async rejectJoinRequest(
@@ -684,6 +855,7 @@ class MultiplayerRemoteService {
       requestingSessionId: joinRequest.requestingSessionId,
       status: joinRequest.status as MultiplayerRemoteJoinRequestStatus,
       requestedCode: joinRequest.requestedCode,
+      canTrustDevice: Boolean(joinRequest.remoteDeviceKeyHash),
       remoteDeviceName: joinRequest.remoteDeviceName,
       remoteDeviceType: joinRequest.remoteDeviceType as
         | MultiplayerRemoteDeviceType
@@ -698,6 +870,74 @@ class MultiplayerRemoteService {
 
   private dateToIso(value: Date | null): string | null {
     return value ? value.toISOString() : null;
+  }
+
+  private async getTrustedDevice(
+    userId: number,
+    remoteDeviceKey: string,
+  ): Promise<MultiplayerRemoteTrustedDeviceRecord> {
+    const [trustedDevice] = await db
+      .select()
+      .from(multiplayerRemoteTrustedDevicesTable)
+      .where(
+        and(
+          eq(multiplayerRemoteTrustedDevicesTable.ownerUserId, userId),
+          eq(
+            multiplayerRemoteTrustedDevicesTable.deviceKeyHash,
+            this.hashDeviceKey(remoteDeviceKey),
+          ),
+          isNull(multiplayerRemoteTrustedDevicesTable.revokedAt),
+        ),
+      )
+      .limit(1);
+
+    if (!trustedDevice) {
+      throw new ForbiddenError("Remote device is not trusted");
+    }
+
+    return trustedDevice;
+  }
+
+  private async touchTrustedDevice(
+    trustedDevice: MultiplayerRemoteTrustedDeviceRecord,
+    input: TrustedDeviceBody,
+    userAgent: string | null,
+  ): Promise<MultiplayerRemoteTrustedDeviceRecord> {
+    const now = new Date();
+    const [updated] = await db
+      .update(multiplayerRemoteTrustedDevicesTable)
+      .set({
+        deviceName: input.remoteDeviceName ?? trustedDevice.deviceName,
+        deviceType: input.remoteDeviceType ?? trustedDevice.deviceType,
+        userAgent: userAgent ?? trustedDevice.userAgent,
+        lastSeenAt: now,
+        updatedAt: now,
+      })
+      .where(eq(multiplayerRemoteTrustedDevicesTable.id, trustedDevice.id))
+      .returning();
+
+    return updated ?? trustedDevice;
+  }
+
+  private mapTrustedDevice(
+    trustedDevice: MultiplayerRemoteTrustedDeviceRecord,
+  ): MultiplayerRemoteTrustedDeviceDto {
+    return {
+      id: trustedDevice.id,
+      ownerUserId: trustedDevice.ownerUserId,
+      deviceName: trustedDevice.deviceName,
+      deviceType: trustedDevice.deviceType as MultiplayerRemoteDeviceType | null,
+      userAgent: trustedDevice.userAgent,
+      trustedAt: trustedDevice.trustedAt.toISOString(),
+      lastSeenAt: this.dateToIso(trustedDevice.lastSeenAt),
+      revokedAt: this.dateToIso(trustedDevice.revokedAt),
+      createdAt: trustedDevice.createdAt.toISOString(),
+      updatedAt: trustedDevice.updatedAt.toISOString(),
+    };
+  }
+
+  private hashDeviceKey(remoteDeviceKey: string): string {
+    return createHash("sha256").update(remoteDeviceKey).digest("hex");
   }
 }
 

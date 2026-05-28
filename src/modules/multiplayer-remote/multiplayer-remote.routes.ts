@@ -14,6 +14,9 @@ import {
   pendingJoinRequestResponseSchema,
   sessionIdParamSchema,
   sessionResponseSchema,
+  trustedConnectResponseSchema,
+  trustedDeviceBodySchema,
+  trustedDiscoveryResponseSchema,
 } from "./multiplayer-remote.schemas";
 
 export async function multiplayerRemoteRoutes(
@@ -157,6 +160,95 @@ export async function multiplayerRemoteRoutes(
         result.sessionId,
         result.joinRequest,
       );
+
+      return reply.send({
+        success: true,
+        data: result,
+      });
+    },
+  );
+
+  app.post(
+    "/trusted-devices/discover",
+    {
+      config: {
+        rateLimit: {
+          max: 30,
+          timeWindow: "1 minute",
+        },
+      },
+      schema: {
+        tags: ["multiplayer-remote"],
+        summary: "Discover display sessions for a trusted remote device",
+        description:
+          "Returns live display sessions that a previously approved remote device can connect to without a pairing code.",
+        body: trustedDeviceBodySchema,
+        response: {
+          200: trustedDiscoveryResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await multiplayerRemoteService.discoverTrustedSessions(
+        request.user!.id,
+        request.body,
+        {
+          userAgent:
+            typeof request.headers["user-agent"] === "string"
+              ? request.headers["user-agent"]
+              : null,
+        },
+      );
+
+      return reply.send({
+        success: true,
+        data: result,
+      });
+    },
+  );
+
+  app.post(
+    "/sessions/:id/trusted-connect",
+    {
+      config: {
+        rateLimit: {
+          max: 30,
+          timeWindow: "1 minute",
+        },
+      },
+      schema: {
+        tags: ["multiplayer-remote"],
+        summary: "Connect a trusted remote device",
+        description:
+          "Activates a live display session for a previously approved remote device without pairing code approval.",
+        params: sessionIdParamSchema,
+        body: trustedDeviceBodySchema,
+        response: {
+          200: trustedConnectResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await multiplayerRemoteService.connectTrustedDevice(
+        request.params.id,
+        request.user!.id,
+        request.body,
+        {
+          userAgent:
+            typeof request.headers["user-agent"] === "string"
+              ? request.headers["user-agent"]
+              : null,
+        },
+      );
+
+      multiplayerRemoteWebSocketService.notifyJoinApproved(result.session);
 
       return reply.send({
         success: true,

@@ -10,6 +10,7 @@ import {
   commandFailedEventSchema,
   commandRequestEventSchema,
   clientHelloEventSchema,
+  playbackStateEventSchema,
   sessionStateEventSchema,
   websocketEventEnvelopeSchema,
 } from "./multiplayer-remote.schemas";
@@ -278,6 +279,11 @@ class MultiplayerRemoteWebSocketService {
       return;
     }
 
+    if (envelope.event === "playback.state") {
+      await this.handlePlaybackState(socket, message, connection);
+      return;
+    }
+
     if (envelope.event === "command.request") {
       await this.handleCommandRequest(socket, message, connection);
       return;
@@ -328,6 +334,42 @@ class MultiplayerRemoteWebSocketService {
     logger.debug(
       { sessionId: connection.sessionId, remoteConnected: Boolean(remote) },
       "Persisted multiplayer session state",
+    );
+  }
+
+  private async handlePlaybackState(
+    socket: WebSocket,
+    message: Buffer | string,
+    connection: BoundConnection,
+  ): Promise<void> {
+    if (connection.role !== "display") {
+      this.sendCommandRejected(socket, connection.sessionId, {
+        message: "Only the display can publish playback state",
+      });
+      return;
+    }
+
+    await multiplayerRemoteService.getBoundSession(connection);
+
+    const event = playbackStateEventSchema.parse(this.parseJsonObject(message));
+    const remote = this.remoteConnections.get(connection.sessionId);
+    if (!remote) {
+      return;
+    }
+
+    this.send(remote, {
+      ...event,
+      sessionId: connection.sessionId,
+      timestamp: new Date().toISOString(),
+    });
+
+    logger.debug(
+      {
+        sessionId: connection.sessionId,
+        slotId: event.payload.slotId,
+        currentTimestampSeconds: event.payload.currentTimestampSeconds,
+      },
+      "Forwarded multiplayer playback state to remote",
     );
   }
 

@@ -48,6 +48,7 @@ import {
 import {
   multiplayerRemoteSessionsTable,
   multiplayerRemoteJoinRequestsTable,
+  multiplayerRemoteTrustedDevicesTable,
 } from "./multiplayer-remote.schema";
 
 // Users relations
@@ -61,6 +62,7 @@ export const usersRelations = relations(usersTable, ({ many }) => ({
   triageProgress: many(triageProgressTable),
   multiplayerRemoteSessions: many(multiplayerRemoteSessionsTable),
   multiplayerRemoteJoinRequests: many(multiplayerRemoteJoinRequestsTable),
+  multiplayerRemoteTrustedDevices: many(multiplayerRemoteTrustedDevicesTable),
 }));
 
 // Sessions relations
@@ -488,6 +490,16 @@ export const multiplayerRemoteSessionsRelations = relations(
       references: [usersTable.id],
     }),
     joinRequests: many(multiplayerRemoteJoinRequestsTable),
+  }),
+);
+
+export const multiplayerRemoteTrustedDevicesRelations = relations(
+  multiplayerRemoteTrustedDevicesTable,
+  ({ one }) => ({
+    owner: one(usersTable, {
+      fields: [multiplayerRemoteTrustedDevicesTable.ownerUserId],
+      references: [usersTable.id],
+    }),
   }),
 );
 

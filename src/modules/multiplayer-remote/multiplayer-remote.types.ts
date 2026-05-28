@@ -36,6 +36,7 @@ export const multiplayerRemoteCommandTypeValues = [
   "playback.pause_all",
   "playback.play_slot",
   "playback.pause_slot",
+  "playback.set_timestamp",
   "audio.mute_all",
   "audio.unmute_all",
   "audio.mute_slot",
@@ -93,6 +94,8 @@ export interface MultiplayerRemoteSlotSnapshot {
   muted: boolean;
   playing: boolean;
   size: number | null;
+  currentTimestampSeconds?: number | null;
+  durationSeconds?: number | null;
 }
 
 export interface MultiplayerRemoteSessionSnapshot {

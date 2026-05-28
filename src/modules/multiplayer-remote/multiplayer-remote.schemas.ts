@@ -28,6 +28,13 @@ export const pairBodySchema = z.object({
     .trim()
     .toUpperCase()
     .regex(/^[A-Z0-9]{6}$/),
+  remoteDeviceKey: z.string().trim().min(32).max(256).optional(),
+  remoteDeviceName: z.string().trim().min(1).max(120).optional(),
+  remoteDeviceType: z.enum(multiplayerRemoteDeviceTypeValues).optional(),
+});
+
+export const trustedDeviceBodySchema = z.object({
+  remoteDeviceKey: z.string().trim().min(32).max(256),
   remoteDeviceName: z.string().trim().min(1).max(120).optional(),
   remoteDeviceType: z.enum(multiplayerRemoteDeviceTypeValues).optional(),
 });
@@ -54,6 +61,8 @@ const slotSnapshotSchema = z.object({
   muted: z.boolean(),
   playing: z.boolean(),
   size: z.number().finite().positive().nullable(),
+  currentTimestampSeconds: z.number().finite().min(0).nullable().optional(),
+  durationSeconds: z.number().finite().min(0).nullable().optional(),
 });
 
 export const sessionSnapshotSchema = z.object({
@@ -69,6 +78,18 @@ export const sessionSnapshotSchema = z.object({
 
 const slotIdPayloadSchema = z.object({
   slotId: z.string().trim().min(1).max(120),
+});
+
+const timestampPayloadSchema = slotIdPayloadSchema.extend({
+  timestampSeconds: z.number().finite().min(0),
+});
+
+const playbackStatePayloadSchema = slotIdPayloadSchema.extend({
+  videoId: z.number().int().positive().nullable().optional(),
+  currentTimestampSeconds: z.number().finite().min(0),
+  durationSeconds: z.number().finite().min(0).nullable().optional(),
+  playing: z.boolean().optional(),
+  updatedAt: z.iso.datetime().optional(),
 });
 
 const slotSizePayloadSchema = slotIdPayloadSchema.extend({
@@ -103,6 +124,7 @@ const commandPayloadSchemas = {
   "playback.pause_all": z.object({}),
   "playback.play_slot": slotIdPayloadSchema,
   "playback.pause_slot": slotIdPayloadSchema,
+  "playback.set_timestamp": timestampPayloadSchema,
   "audio.mute_all": z.object({}),
   "audio.unmute_all": z.object({}),
   "audio.mute_slot": slotIdPayloadSchema,
@@ -158,6 +180,10 @@ export const commandRequestPayloadSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("playback.pause_slot"),
     args: commandPayloadSchemas["playback.pause_slot"],
+  }),
+  z.object({
+    type: z.literal("playback.set_timestamp"),
+    args: commandPayloadSchemas["playback.set_timestamp"],
   }),
   z.object({
     type: z.literal("audio.mute_all"),
@@ -220,6 +246,11 @@ export const sessionStateEventSchema = websocketEventEnvelopeSchema.extend({
   payload: sessionSnapshotSchema,
 });
 
+export const playbackStateEventSchema = websocketEventEnvelopeSchema.extend({
+  event: z.literal("playback.state"),
+  payload: playbackStatePayloadSchema,
+});
+
 export const commandRequestEventSchema = websocketEventEnvelopeSchema.extend({
   event: z.literal("command.request"),
   payload: commandRequestPayloadSchema,
@@ -259,6 +290,7 @@ export const joinRequestSummarySchema = z.object({
   requestingSessionId: z.string().nullable(),
   status: joinRequestStatusSchema,
   requestedCode: z.string(),
+  canTrustDevice: z.boolean(),
   remoteDeviceName: z.string().nullable(),
   remoteDeviceType: z.enum(multiplayerRemoteDeviceTypeValues).nullable(),
   remoteUserAgent: z.string().nullable(),
@@ -311,6 +343,48 @@ export const pairResponseSchema = z.object({
   }),
 });
 
+export const trustedDeviceSchema = z.object({
+  id: z.number(),
+  ownerUserId: z.number(),
+  deviceName: z.string().nullable(),
+  deviceType: z.enum(multiplayerRemoteDeviceTypeValues).nullable(),
+  userAgent: z.string().nullable(),
+  trustedAt: z.string(),
+  lastSeenAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const trustedConnectResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    session: multiplayerRemoteSessionSchema,
+    trustedDevice: trustedDeviceSchema,
+  }),
+});
+
+export const trustedSessionSummarySchema = multiplayerRemoteSessionSchema.pick({
+  id: true,
+  ownerUserId: true,
+  displayClientId: true,
+  status: true,
+  displayConnectedAt: true,
+  displayLastSeenAt: true,
+  lastState: true,
+  protocolVersion: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const trustedDiscoveryResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    trustedDevice: trustedDeviceSchema,
+    sessions: z.array(trustedSessionSummarySchema),
+  }),
+});
+
 export const pendingJoinRequestResponseSchema = z.object({
   success: z.literal(true),
   data: joinRequestSummarySchema.nullable(),
@@ -327,7 +401,9 @@ export const errorResponseSchema = z.object({
 });
 
 export type PairBody = z.infer<typeof pairBodySchema>;
+export type TrustedDeviceBody = z.infer<typeof trustedDeviceBodySchema>;
 export type CloseSessionBody = z.infer<typeof closeSessionBodySchema>;
 export type ClientHelloPayload = z.infer<typeof clientHelloPayloadSchema>;
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
+export type PlaybackStatePayload = z.infer<typeof playbackStatePayloadSchema>;
 export type CommandRequestPayload = z.infer<typeof commandRequestPayloadSchema>;

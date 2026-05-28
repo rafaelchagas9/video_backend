@@ -28,6 +28,39 @@ export const multiplayerRemoteJoinRequestStatusValues = [
   "cancelled",
 ] as const;
 
+export const multiplayerRemoteTrustedDevicesTable = pgTable(
+  "multiplayer_remote_trusted_devices",
+  {
+    id: serial("id").primaryKey(),
+    ownerUserId: integer("owner_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    deviceKeyHash: text("device_key_hash").notNull(),
+    deviceName: text("device_name"),
+    deviceType: text("device_type"),
+    userAgent: text("user_agent"),
+    trustedAt: timestamp("trusted_at").defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => ({
+    ownerUserIdx: index("idx_multiplayer_remote_trusted_devices_owner_user").on(
+      table.ownerUserId,
+    ),
+    deviceKeyHashIdx: index(
+      "idx_multiplayer_remote_trusted_devices_device_key_hash",
+    ).on(table.deviceKeyHash),
+    activeOwnerDeviceUnique: uniqueIndex(
+      "multiplayer_remote_trusted_devices_owner_device_unique",
+    ).on(table.ownerUserId, table.deviceKeyHash),
+  }),
+);
+
 export const multiplayerRemoteSessionsTable = pgTable(
   "multiplayer_remote_sessions",
   {
@@ -104,6 +137,7 @@ export const multiplayerRemoteJoinRequestsTable = pgTable(
     ),
     status: text("status").default("pending").notNull(),
     requestedCode: text("requested_code").notNull(),
+    remoteDeviceKeyHash: text("remote_device_key_hash"),
     remoteDeviceName: text("remote_device_name"),
     remoteDeviceType: text("remote_device_type"),
     remoteUserAgent: text("remote_user_agent"),
@@ -125,6 +159,9 @@ export const multiplayerRemoteJoinRequestsTable = pgTable(
     requestingSessionIdx: index(
       "idx_multiplayer_remote_join_requests_requesting_session",
     ).on(table.requestingSessionId),
+    remoteDeviceKeyHashIdx: index(
+      "idx_multiplayer_remote_join_requests_remote_device_key_hash",
+    ).on(table.remoteDeviceKeyHash),
     statusIdx: index("idx_multiplayer_remote_join_requests_status").on(
       table.status,
     ),
@@ -152,3 +189,7 @@ export type MultiplayerRemoteJoinRequestRecord =
   typeof multiplayerRemoteJoinRequestsTable.$inferSelect;
 export type NewMultiplayerRemoteJoinRequestRecord =
   typeof multiplayerRemoteJoinRequestsTable.$inferInsert;
+export type MultiplayerRemoteTrustedDeviceRecord =
+  typeof multiplayerRemoteTrustedDevicesTable.$inferSelect;
+export type NewMultiplayerRemoteTrustedDeviceRecord =
+  typeof multiplayerRemoteTrustedDevicesTable.$inferInsert;
