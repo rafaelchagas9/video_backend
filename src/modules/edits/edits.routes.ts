@@ -15,12 +15,12 @@ import {
 } from "./edits.schemas";
 import { z } from "zod";
 
-export async function editsRoutes(fastify: FastifyInstance) {
+export async function videoEditsRoutes(fastify: FastifyInstance) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   // 2. Fetch Video Metadata For Editor
   app.get(
-    "/videos/:id/editing-metadata",
+    "/:id/editing-metadata",
     {
       preHandler: authenticateUser,
       schema: {
@@ -86,7 +86,7 @@ export async function editsRoutes(fastify: FastifyInstance) {
 
   // 3. Create Render Job
   app.post(
-    "/videos/:id/edits",
+    "/:id/edits",
     {
       preHandler: authenticateUser,
       schema: {
@@ -121,10 +121,14 @@ export async function editsRoutes(fastify: FastifyInstance) {
       };
     },
   );
+}
+
+export async function editsRoutes(fastify: FastifyInstance) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   // 4. Check Render Job Status
   app.get(
-    "/edits/jobs/:id",
+    "/jobs/:id",
     {
       preHandler: authenticateUser,
       schema: {
@@ -177,7 +181,7 @@ export async function editsRoutes(fastify: FastifyInstance) {
 
   // 5. Cancel Render Job
   app.post(
-    "/edits/jobs/:id/cancel",
+    "/jobs/:id/cancel",
     {
       preHandler: authenticateUser,
       schema: {

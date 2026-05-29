@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { conversionService } from "./conversion.service";
@@ -6,6 +6,7 @@ import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { existsSync, createReadStream, statSync } from "fs";
 import { randomUUID } from "crypto";
 import { NotFoundError } from "@/utils/errors";
+import { markRouteDeprecated } from "@/utils/api-deprecation";
 import {
   createConversionJobSchema,
   conversionJobResponseSchema,
@@ -13,16 +14,64 @@ import {
   listPresetsResponseSchema,
   videoIdParamSchema,
   jobIdParamSchema,
-  conversionJobSchema,
   bulkConversionSchema,
+  bulkConversionResponseSchema,
   listActiveConversionsResponseSchema,
   clearQueueResponseSchema,
   conversionHistoryQuerySchema,
   conversionHistoryResponseSchema,
   conversionHistoryOverviewResponseSchema,
+  conversionQueueStatusResponseSchema,
+  updateConversionJobSchema,
 } from "./conversion.schemas";
 
-export async function conversionRoutes(fastify: FastifyInstance) {
+async function createVideoConversionJob(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const { id } = request.params as { id: number };
+  const { preset, deleteOriginal } = request.body as {
+    preset: string;
+    deleteOriginal?: boolean;
+  };
+
+  const job = await conversionService.createJob({
+    video_id: id,
+    preset,
+    deleteOriginal,
+  });
+
+  return reply.status(201).send({ success: true, data: job });
+}
+
+async function createBulkConversionJobs(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const { videoIds, preset, deleteOriginal } = request.body as {
+    videoIds: number[];
+    preset: string;
+    deleteOriginal?: boolean;
+  };
+  const batchId = randomUUID();
+
+  const jobs = await conversionService.bulkCreateJobs({
+    videoIds,
+    preset,
+    deleteOriginal,
+    batchId,
+  });
+
+  return reply.status(201).send({
+    success: true,
+    data: {
+      batchId,
+      jobs,
+    },
+  });
+}
+
+export async function videoConversionRoutes(fastify: FastifyInstance) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   // All routes require authentication
@@ -33,13 +82,32 @@ export async function conversionRoutes(fastify: FastifyInstance) {
    * POST /videos/:id/convert
    */
   app.post(
-    "/videos/:id/convert",
+    "/:id/conversions",
     {
       schema: {
         tags: ["conversion"],
         summary: "Start video conversion",
         description:
-          "Create a new conversion job for a video with the specified preset",
+          "Create a new conversion job resource for a video with the specified preset.",
+        params: videoIdParamSchema,
+        body: createConversionJobSchema,
+        response: {
+          201: conversionJobResponseSchema,
+        },
+      },
+    },
+    createVideoConversionJob,
+  );
+
+  app.post(
+    "/:id/convert",
+    {
+      schema: {
+        tags: ["conversion"],
+        deprecated: true,
+        summary: "Start video conversion (deprecated)",
+        description:
+          "Deprecated alias for POST /api/videos/:id/conversions.",
         params: videoIdParamSchema,
         body: createConversionJobSchema,
         response: {
@@ -48,93 +116,54 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { id } = request.params as { id: number };
-      const { preset, deleteOriginal } = request.body as {
-        preset: string;
-        deleteOriginal?: boolean;
-      };
-
-      const job = await conversionService.createJob({
-        video_id: id,
-        preset,
-        deleteOriginal,
+      markRouteDeprecated(reply, {
+        replacement: "/api/videos/:id/conversions",
       });
-
-      return reply.status(201).send({ success: true, data: job });
+      return createVideoConversionJob(request, reply);
     },
   );
 
-  /**
-   * Bulk start video conversions
-   * POST /videos/convert/bulk
-   */
   app.post(
-    "/videos/convert/bulk",
+    "/convert/bulk",
     {
       schema: {
         tags: ["conversion"],
-        summary: "Bulk start video conversions",
-        description: "Start conversion jobs for multiple videos",
+        deprecated: true,
+        summary: "Bulk start video conversions (deprecated)",
+        description:
+          "Deprecated alias for POST /api/conversions. Start conversion jobs for multiple videos.",
         body: bulkConversionSchema,
         response: {
-          201: z.object({
-            success: z.literal(true),
-            data: z.object({
-              batchId: z.string(),
-              jobs: z.array(conversionJobSchema),
-            }),
-          }),
+          201: bulkConversionResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const { videoIds, preset, deleteOriginal } = request.body as {
-        videoIds: number[];
-        preset: string;
-        deleteOriginal?: boolean;
-      };
-      const batchId = randomUUID();
-
-      const jobs = await conversionService.bulkCreateJobs({
-        videoIds,
-        preset,
-        deleteOriginal,
-        batchId,
-      });
-
-      return reply.status(201).send({
-        success: true,
-        data: {
-          batchId,
-          jobs,
-        },
-      });
+      markRouteDeprecated(reply, { replacement: "/api/conversions" });
+      return createBulkConversionJobs(request, reply);
     },
   );
 
-  /**
-   * Get videos currently in conversion queue
-   * GET /videos/convert/queue
-   */
   app.get(
-    "/videos/convert/queue",
+    "/convert/queue",
     {
       schema: {
         tags: ["conversion"],
-        summary: "Get conversion queue",
-        description: "Get all videos currently in the conversion queue",
+        deprecated: true,
+        summary: "Get conversion queue (deprecated)",
+        description:
+          "Deprecated alias for GET /api/conversions/queue. Get all videos currently in the conversion queue.",
         response: {
           200: z.object({
             success: z.literal(true),
-            data: z.array(z.unknown()), // Using unknown for Video shape + job info, or strictly define schema?
-            // Ideally we define schema, but Video schema is large.
+            data: z.array(z.unknown()),
           }),
         },
       },
     },
     async (request, reply) => {
-      // @ts-ignore - user is attached by hook
-      const userId = request.user.id;
+      markRouteDeprecated(reply, { replacement: "/api/conversions/queue" });
+      const userId = request.user!.id;
       const queue = await conversionService.getQueue(userId);
       return reply.send({ success: true, data: queue });
     },
@@ -145,7 +174,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
    * GET /videos/:id/conversions
    */
   app.get(
-    "/videos/:id/conversions",
+    "/:id/conversions",
     {
       schema: {
         tags: ["conversion"],
@@ -163,13 +192,59 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, data: jobs });
     },
   );
+}
+
+export async function conversionRoutes(fastify: FastifyInstance) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+
+  // All routes require authentication
+  app.addHook("preHandler", authenticateUser);
+
+  app.post(
+    "/",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Create bulk conversion jobs",
+        description:
+          "Create conversion job resources for multiple videos in one request.",
+        body: bulkConversionSchema,
+        response: {
+          201: bulkConversionResponseSchema,
+        },
+      },
+    },
+    createBulkConversionJobs,
+  );
+
+  app.get(
+    "/queue",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Get conversion queue",
+        description: "Get all videos currently in the conversion queue.",
+        response: {
+          200: z.object({
+            success: z.literal(true),
+            data: z.array(z.unknown()),
+          }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const userId = request.user!.id;
+      const queue = await conversionService.getQueue(userId);
+      return reply.send({ success: true, data: queue });
+    },
+  );
 
   /**
    * List completed conversion history
    * GET /conversions/history
    */
   app.get(
-    "/conversions/history",
+    "/history",
     {
       schema: {
         tags: ["conversion"],
@@ -200,23 +275,15 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, data: history });
     },
   );
-
-  /**
-   * Get conversion history overview
-   * GET /conversions/history/overview
-   */
   app.get(
-    "/conversions/history/overview",
+    "/history/overview",
     {
       schema: {
         tags: ["conversion"],
         summary: "Get conversion history overview",
         description:
-          "Returns aggregate disk impact metrics (saved/increased bytes) across completed conversions.",
-        querystring: conversionHistoryQuerySchema.pick({
-          videoId: true,
-          preset: true,
-        }),
+          "Returns aggregate metrics for completed conversion history.",
+        querystring: conversionHistoryQuerySchema,
         response: {
           200: conversionHistoryOverviewResponseSchema,
         },
@@ -238,11 +305,11 @@ export async function conversionRoutes(fastify: FastifyInstance) {
   );
 
   /**
-   * Get conversion job by ID
-   * GET /conversions/:id
+   * Get conversion history overview
+   * GET /conversions/history/overview
    */
   app.get(
-    "/conversions/:id",
+    "/:id",
     {
       schema: {
         tags: ["conversion"],
@@ -265,14 +332,16 @@ export async function conversionRoutes(fastify: FastifyInstance) {
    * Cancel a pending conversion job
    * POST /conversions/:id/cancel
    */
-  app.post(
-    "/conversions/:id/cancel",
+  app.patch(
+    "/:id",
     {
       schema: {
         tags: ["conversion"],
-        summary: "Cancel conversion job",
-        description: "Cancel a pending conversion job",
+        summary: "Update conversion job state",
+        description:
+          "Update a conversion job. Currently only cancellation is supported by setting status=cancelled.",
         params: jobIdParamSchema,
+        body: updateConversionJobSchema,
         response: {
           200: conversionJobResponseSchema,
         },
@@ -285,12 +354,38 @@ export async function conversionRoutes(fastify: FastifyInstance) {
     },
   );
 
+  app.post(
+    "/:id/cancel",
+    {
+      schema: {
+        tags: ["conversion"],
+        deprecated: true,
+        summary: "Cancel conversion job (deprecated)",
+        description:
+          "Deprecated alias for PATCH /api/conversions/:id with body { status: 'cancelled' }.",
+        params: jobIdParamSchema,
+        response: {
+          200: conversionJobResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      markRouteDeprecated(reply, {
+        replacement: "/api/conversions/:id",
+        details: "Send { status: 'cancelled' } in the request body.",
+      });
+      const { id } = request.params as { id: number };
+      const job = await conversionService.cancel(id);
+      return reply.send({ success: true, data: job });
+    },
+  );
+
   /**
    * Delete a conversion job
    * DELETE /conversions/:id
    */
   app.delete(
-    "/conversions/:id",
+    "/:id",
     {
       schema: {
         tags: ["conversion"],
@@ -318,7 +413,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
    * GET /conversions/:id/download
    */
   app.get(
-    "/conversions/:id/download",
+    "/:id/download",
     {
       schema: {
         tags: ["conversion"],
@@ -357,58 +452,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
    * GET /presets
    */
   app.get(
-    "/presets",
-    {
-      schema: {
-        tags: ["conversion"],
-        summary: "List available presets",
-        description: "Get all available conversion presets",
-        response: {
-          200: listPresetsResponseSchema,
-        },
-      },
-    },
-    async (_request, reply) => {
-      const presets = conversionService.getPresets();
-      return reply.send({ success: true, data: presets });
-    },
-  );
-
-  /**
-   * Get queue status
-   * GET /conversion/status
-   */
-  app.get(
-    "/conversion/status",
-    {
-      schema: {
-        tags: ["conversion"],
-        summary: "Get queue status",
-        description: "Get the current status of the conversion queue",
-        response: {
-          200: z.object({
-            success: z.literal(true),
-            data: z.object({
-              queueLength: z.number(),
-              activeJobs: z.number(),
-              isProcessing: z.boolean(),
-            }),
-          }),
-        },
-      },
-    },
-    async (_request, reply) => {
-      const status = await conversionService.getQueueStatus();
-      return reply.send({ success: true, data: status });
-    },
-  );
-
-  /**
-   * Get active conversions with progress
-   * GET /conversions/active
-   */
-  app.get(
-    "/conversions/active",
+    "/active",
     {
       schema: {
         tags: ["conversion"],
@@ -431,7 +475,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
    * POST /conversions/queue/clear
    */
   app.post(
-    "/conversions/queue/clear",
+    "/queue/clear",
     {
       schema: {
         tags: ["conversion"],
@@ -452,6 +496,133 @@ export async function conversionRoutes(fastify: FastifyInstance) {
           message: "Queue cleared successfully",
         },
       });
+    },
+  );
+}
+
+export async function conversionStatusRoutes(fastify: FastifyInstance) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/queue/status",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Get queue status",
+        description: "Get the current status of the conversion queue",
+        response: {
+          200: conversionQueueStatusResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      const status = await conversionService.getQueueStatus();
+      return reply.send({ success: true, data: status });
+    },
+  );
+
+  app.get(
+    "/status",
+    {
+      schema: {
+        tags: ["conversion"],
+        deprecated: true,
+        summary: "Get queue status (deprecated)",
+        description:
+          "Deprecated alias for GET /api/conversions/queue/status.",
+        response: {
+          200: conversionQueueStatusResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, {
+        replacement: "/api/conversions/queue/status",
+      });
+      const status = await conversionService.getQueueStatus();
+      return reply.send({ success: true, data: status });
+    },
+  );
+}
+
+export async function deprecatedConversionLegacyStatusRoutes(
+  fastify: FastifyInstance,
+) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/status",
+    {
+      schema: {
+        tags: ["conversion"],
+        deprecated: true,
+        summary: "Get queue status (deprecated legacy path)",
+        description:
+          "Deprecated legacy alias for GET /api/conversions/queue/status.",
+        response: {
+          200: conversionQueueStatusResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, {
+        replacement: "/api/conversions/queue/status",
+      });
+      const status = await conversionService.getQueueStatus();
+      return reply.send({ success: true, data: status });
+    },
+  );
+}
+
+export async function conversionPresetsRoutes(fastify: FastifyInstance) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "List available presets",
+        description: "Get all available conversion presets.",
+        response: {
+          200: listPresetsResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      const presets = conversionService.getPresets();
+      return reply.send({ success: true, data: presets });
+    },
+  );
+}
+
+export async function deprecatedConversionPresetsRoutes(
+  fastify: FastifyInstance,
+) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/",
+    {
+      schema: {
+        tags: ["conversion"],
+        deprecated: true,
+        summary: "List available presets (deprecated alias)",
+        description:
+          "Deprecated alias for GET /api/conversions/presets.",
+        response: {
+          200: listPresetsResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, { replacement: "/api/conversions/presets" });
+      const presets = conversionService.getPresets();
+      return reply.send({ success: true, data: presets });
     },
   );
 }

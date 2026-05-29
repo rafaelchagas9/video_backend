@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { API_PREFIX } from "@/config/constants";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { NotFoundError } from "@/utils/errors";
 import { storyboardsService } from "./storyboards.service";
@@ -16,13 +17,25 @@ export async function storyboardsRoutes(
   fastify: FastifyInstance,
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
+  const mapStoryboard = (
+    storyboard: Awaited<ReturnType<typeof storyboardsService.findById>>,
+  ) => {
+    const extension = storyboard.sprite_path.split(".").pop()?.toLowerCase();
+    const spriteExtension = extension === "webp" ? "webp" : "jpg";
+
+    return {
+      ...storyboard,
+      sprite_url: `${API_PREFIX}/videos/${storyboard.video_id}/storyboard.${spriteExtension}`,
+      vtt_url: `${API_PREFIX}/videos/${storyboard.video_id}/thumbnails.vtt`,
+    };
+  };
 
   // ========== PUBLIC ROUTES (no auth required) ==========
   // These are used by video players and need to be accessible without auth
 
   // Serve VTT file for video (Vidstack expects this)
   fastify.get(
-    "/videos/:id/thumbnails.vtt",
+    "/:id/thumbnails.vtt",
     {
       schema: {
         tags: ["storyboards"],
@@ -79,7 +92,7 @@ export async function storyboardsRoutes(
 
   // Serve sprite image for video
   fastify.get(
-    "/videos/:id/storyboard.jpg",
+    "/:id/storyboard.jpg",
     {
       schema: spriteSchema,
     },
@@ -87,7 +100,7 @@ export async function storyboardsRoutes(
   );
 
   fastify.get(
-    "/videos/:id/storyboard.webp",
+    "/:id/storyboard.webp",
     {
       schema: spriteSchema,
     },
@@ -98,7 +111,7 @@ export async function storyboardsRoutes(
 
   // Generate storyboard for video
   app.post(
-    "/videos/:id/storyboard",
+    "/:id/storyboard",
     {
       preHandler: authenticateUser,
       schema: {
@@ -125,7 +138,7 @@ export async function storyboardsRoutes(
 
       return reply.status(201).send({
         success: true,
-        data: storyboard,
+        data: mapStoryboard(storyboard),
         message: "Storyboard generated successfully",
       });
     },
@@ -133,7 +146,7 @@ export async function storyboardsRoutes(
 
   // Delete storyboard for video
   app.delete(
-    "/videos/:id/storyboard",
+    "/:id/storyboard",
     {
       preHandler: authenticateUser,
       schema: {
@@ -161,7 +174,7 @@ export async function storyboardsRoutes(
 
   // Get storyboard info for video
   app.get(
-    "/videos/:id/storyboard",
+    "/:id/storyboard",
     {
       preHandler: authenticateUser,
       schema: {
@@ -190,7 +203,7 @@ export async function storyboardsRoutes(
 
       return reply.send({
         success: true,
-        data: storyboard,
+        data: mapStoryboard(storyboard),
       });
     },
   );

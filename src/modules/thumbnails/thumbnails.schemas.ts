@@ -18,6 +18,7 @@ const thumbnailSchema = z.object({
   width: z.number(),
   height: z.number(),
   generated_at: z.string(),
+  asset_url: z.string().optional(),
 });
 
 const errorSchema = z.object({

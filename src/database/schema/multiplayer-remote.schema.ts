@@ -61,6 +61,40 @@ export const multiplayerRemoteTrustedDevicesTable = pgTable(
   }),
 );
 
+export const multiplayerRemoteDisplayDevicesTable = pgTable(
+  "multiplayer_remote_display_devices",
+  {
+    id: serial("id").primaryKey(),
+    ownerUserId: integer("owner_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    publicId: text("public_id").notNull(),
+    authTokenHash: text("auth_token_hash").notNull(),
+    deviceName: text("device_name").notNull(),
+    deviceType: text("device_type"),
+    trustedAt: timestamp("trusted_at").defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at"),
+    lastHeartbeatAt: timestamp("last_heartbeat_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => ({
+    ownerUserIdx: index("idx_multiplayer_remote_display_devices_owner_user").on(
+      table.ownerUserId,
+    ),
+    publicIdIdx: uniqueIndex("multiplayer_remote_display_devices_public_id_unique").on(
+      table.publicId,
+    ),
+    authTokenHashIdx: uniqueIndex(
+      "multiplayer_remote_display_devices_auth_token_hash_unique",
+    ).on(table.authTokenHash),
+  }),
+);
+
 export const multiplayerRemoteSessionsTable = pgTable(
   "multiplayer_remote_sessions",
   {
@@ -68,6 +102,10 @@ export const multiplayerRemoteSessionsTable = pgTable(
     ownerUserId: integer("owner_user_id")
       .notNull()
       .references(() => usersTable.id, { onDelete: "cascade" }),
+    displayDeviceId: integer("display_device_id").references(
+      () => multiplayerRemoteDisplayDevicesTable.id,
+      { onDelete: "set null" },
+    ),
     displayClientId: text("display_client_id"),
     remoteClientId: text("remote_client_id"),
     pairingCode: text("pairing_code"),
@@ -91,6 +129,9 @@ export const multiplayerRemoteSessionsTable = pgTable(
   (table) => ({
     ownerUserIdx: index("idx_multiplayer_remote_sessions_owner_user").on(
       table.ownerUserId,
+    ),
+    displayDeviceIdx: index("idx_multiplayer_remote_sessions_display_device").on(
+      table.displayDeviceId,
     ),
     statusIdx: index("idx_multiplayer_remote_sessions_status").on(table.status),
     displayClientIdx: index(
@@ -193,3 +234,7 @@ export type MultiplayerRemoteTrustedDeviceRecord =
   typeof multiplayerRemoteTrustedDevicesTable.$inferSelect;
 export type NewMultiplayerRemoteTrustedDeviceRecord =
   typeof multiplayerRemoteTrustedDevicesTable.$inferInsert;
+export type MultiplayerRemoteDisplayDeviceRecord =
+  typeof multiplayerRemoteDisplayDevicesTable.$inferSelect;
+export type NewMultiplayerRemoteDisplayDeviceRecord =
+  typeof multiplayerRemoteDisplayDevicesTable.$inferInsert;

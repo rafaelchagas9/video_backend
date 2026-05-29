@@ -226,6 +226,7 @@ type SessionSnapshot = {
     title: string | null;
     thumbnailUrl: string | null; // must be a valid URL when present
     muted: boolean;
+    volume: number; // normalized 0..1
     playing: boolean;
     size: number | null;
   }>;
@@ -252,6 +253,7 @@ Display sends:
         "title": "Example Video",
         "thumbnailUrl": "http://localhost:3000/api/videos/42/thumbnail",
         "muted": false,
+        "volume": 0.8,
         "playing": true,
         "size": null
       }
@@ -493,6 +495,8 @@ type Command =
   | { type: "audio.unmute_all"; args: {} }
   | { type: "audio.mute_slot"; args: { slotId: string } }
   | { type: "audio.unmute_slot"; args: { slotId: string } }
+  | { type: "audio.set_all_volume"; args: { volume: number } }
+  | { type: "audio.set_slot_volume"; args: { slotId: string; volume: number } }
   | { type: "layout.set_mode"; args: { mode: string } }
   | { type: "layout.set_slot_size"; args: { slotId: string; size: number } }
   | { type: "layout.reset_slot_size"; args: { slotId?: string } }
@@ -506,6 +510,7 @@ Validation notes:
 - `videoIds` must contain at least one positive integer.
 - `slotId`, `targetSlotId`, and layout `mode` are non-empty strings.
 - `size` must be positive.
+- `volume` must be a finite number between `0` and `1`.
 - `filters` may contain arbitrary JSON-compatible values.
 
 ## HTTP Session Object
@@ -597,4 +602,3 @@ Common frontend cases:
 - Update UI from `session.state`, not from optimistic command assumptions.
 - On websocket disconnect, reconnect with the same `clientId` if the session is still active.
 - On `session.closed`, stop reconnecting and return to pairing/start state.
-

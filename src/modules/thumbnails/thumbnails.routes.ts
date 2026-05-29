@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { createReadStream } from "fs";
+import { API_PREFIX } from "@/config/constants";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { thumbnailsService } from "./thumbnails.service";
 import {
@@ -12,7 +13,7 @@ import {
   errorResponseSchema,
 } from "./thumbnails.schemas";
 
-export async function thumbnailsRoutes(
+export async function videoThumbnailsRoutes(
   fastify: FastifyInstance,
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -20,9 +21,14 @@ export async function thumbnailsRoutes(
   // All routes require authentication
   app.addHook("preHandler", authenticateUser);
 
+  const mapThumbnail = (thumbnail: Awaited<ReturnType<typeof thumbnailsService.findById>>) => ({
+    ...thumbnail,
+    asset_url: `${API_PREFIX}/thumbnails/${thumbnail.id}/image`,
+  });
+
   // Generate thumbnail for video
   app.post(
-    "/videos/:id/thumbnails",
+    "/:id/thumbnails",
     {
       schema: {
         tags: ["thumbnails"],
@@ -47,7 +53,7 @@ export async function thumbnailsRoutes(
 
       return reply.status(201).send({
         success: true,
-        data: thumbnail,
+        data: mapThumbnail(thumbnail),
         message: "Thumbnail generated successfully",
       });
     },
@@ -55,7 +61,7 @@ export async function thumbnailsRoutes(
 
   // Get thumbnails for video
   app.get(
-    "/videos/:id/thumbnails",
+    "/:id/thumbnails",
     {
       schema: {
         tags: ["thumbnails"],
@@ -76,24 +82,64 @@ export async function thumbnailsRoutes(
 
       return reply.send({
         success: true,
-        data: thumbnails,
+        data: thumbnails.map(mapThumbnail),
+      });
+    },
+  );
+}
+
+export async function thumbnailsRoutes(
+  fastify: FastifyInstance,
+): Promise<void> {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+
+  // All routes require authentication
+  app.addHook("preHandler", authenticateUser);
+
+  const mapThumbnail = (thumbnail: Awaited<ReturnType<typeof thumbnailsService.findById>>) => ({
+    ...thumbnail,
+    asset_url: `${API_PREFIX}/thumbnails/${thumbnail.id}/image`,
+  });
+
+  app.get(
+    "/:id",
+    {
+      schema: {
+        tags: ["thumbnails"],
+        summary: "Get thumbnail metadata",
+        description:
+          "Returns thumbnail metadata and the canonical asset URL for the binary image.",
+        params: idParamSchema,
+        response: {
+          200: thumbnailResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const thumbnail = await thumbnailsService.findById(request.params.id);
+
+      return reply.send({
+        success: true,
+        data: mapThumbnail(thumbnail),
       });
     },
   );
 
   // Serve thumbnail image (uses fastify directly for binary response)
-  fastify.get(
-    "/thumbnails/:id/image",
+  app.get(
+    "/:id/image",
     {
       schema: {
         tags: ["thumbnails"],
         summary: "Get thumbnail image",
         description: "Serves the thumbnail image file.",
+        params: idParamSchema,
       },
     },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const thumbnail = await thumbnailsService.findById(Number(id));
+      const thumbnail = await thumbnailsService.findById(request.params.id);
 
       // Determine mime type from file extension
       const ext = thumbnail.file_path.split('.').pop()?.toLowerCase();
@@ -107,7 +153,7 @@ export async function thumbnailsRoutes(
 
   // Delete thumbnail
   app.delete(
-    "/thumbnails/:id",
+    "/:id",
     {
       schema: {
         tags: ["thumbnails"],

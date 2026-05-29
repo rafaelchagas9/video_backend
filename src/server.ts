@@ -387,7 +387,7 @@ export async function buildServer() {
       const { tagsRoutes } = await import("./modules/tags/tags.routes");
       const { ratingsRoutes } =
         await import("./modules/ratings/ratings.routes");
-      const { thumbnailsRoutes } =
+      const { thumbnailsRoutes, videoThumbnailsRoutes } =
         await import("./modules/thumbnails/thumbnails.routes");
       const { playlistsRoutes } =
         await import("./modules/playlists/playlists.routes");
@@ -399,22 +399,35 @@ export async function buildServer() {
       const { bookmarksRoutes } =
         await import("./modules/bookmarks/bookmarks.routes");
       const { backupRoutes } = await import("./modules/backup/backup.routes");
-      const { conversionRoutes } =
+      const {
+        deprecatedConversionLegacyStatusRoutes,
+        deprecatedConversionPresetsRoutes,
+        conversionPresetsRoutes,
+        conversionRoutes,
+        conversionStatusRoutes,
+        videoConversionRoutes,
+      } =
         await import("./modules/conversion/conversion.routes");
-      const { triageRoutes } = await import("./modules/triage/triage.routes");
+      const { triageRoutes, usersTriageLegacyRoutes } = await import(
+        "./modules/triage/triage.routes"
+      );
       const { videoStatsRoutes } =
         await import("./modules/video-stats/video-stats.routes");
       const { settingsRoutes } =
         await import("./modules/settings/settings.routes");
       const { storyboardsRoutes } =
         await import("./modules/storyboards/storyboards.routes");
-      const { statsRoutes } = await import("./modules/stats/stats.routes");
+      const { statsLegacySnapshotRoutes, statsRoutes } = await import(
+        "./modules/stats/stats.routes"
+      );
       const { eventsRoutes } = await import("./modules/events/events.routes");
       const { taggingRulesRoutes } =
         await import("./modules/tagging-rules/tagging-rules.routes");
       const { faceRecognitionRoutes } =
         await import("./modules/face-recognition/face-recognition.routes");
-      const { editsRoutes } = await import("./modules/edits/edits.routes");
+      const { editsRoutes, videoEditsRoutes } = await import(
+        "./modules/edits/edits.routes"
+      );
       const { multiplayerRemoteRoutes } = await import(
         "./modules/multiplayer-remote/multiplayer-remote.routes"
       );
@@ -426,7 +439,8 @@ export async function buildServer() {
       await instance.register(studiosRoutes, { prefix: "/studios" });
       await instance.register(tagsRoutes, { prefix: "/tags" });
       await instance.register(ratingsRoutes, { prefix: "/ratings" });
-      await instance.register(thumbnailsRoutes, { prefix: "/" }); // Register at root so it can handle /videos/... and /thumbnails/... prefixes itself or via internally defined paths
+      await instance.register(videoThumbnailsRoutes, { prefix: "/videos" });
+      await instance.register(thumbnailsRoutes, { prefix: "/thumbnails" });
       await instance.register(playlistsRoutes, { prefix: "/playlists" });
       await instance.register(videoCollectionsRoutes, {
         prefix: "/video-collections",
@@ -434,16 +448,32 @@ export async function buildServer() {
       await instance.register(favoritesRoutes, { prefix: "/favorites" });
       await instance.register(bookmarksRoutes, { prefix: "/bookmarks" });
       await instance.register(backupRoutes, { prefix: "/backup" });
-      await instance.register(conversionRoutes, { prefix: "/" }); // Conversion routes handle /videos/:id/convert and /conversions/:id paths
-      await instance.register(triageRoutes, { prefix: "/users" }); // Triage progress routes under /users
+      await instance.register(videoConversionRoutes, { prefix: "/videos" });
+      await instance.register(conversionRoutes, { prefix: "/conversions" });
+      await instance.register(conversionStatusRoutes, {
+        prefix: "/conversions",
+      });
+      await instance.register(deprecatedConversionLegacyStatusRoutes, {
+        prefix: "/conversion",
+      });
+      await instance.register(conversionPresetsRoutes, {
+        prefix: "/conversions/presets",
+      });
+      await instance.register(deprecatedConversionPresetsRoutes, {
+        prefix: "/presets",
+      });
+      await instance.register(triageRoutes, { prefix: "/triage" });
+      await instance.register(usersTriageLegacyRoutes, { prefix: "/users" });
       await instance.register(videoStatsRoutes, { prefix: "/videos" });
       await instance.register(settingsRoutes, { prefix: "/settings" });
-      await instance.register(storyboardsRoutes, { prefix: "/" }); // Storyboards routes handle /videos/:id/storyboard.* paths
+      await instance.register(storyboardsRoutes, { prefix: "/videos" });
       await instance.register(statsRoutes, { prefix: "/stats" });
+      await instance.register(statsLegacySnapshotRoutes, { prefix: "/stats" });
       await instance.register(eventsRoutes, { prefix: "/events" });
       await instance.register(taggingRulesRoutes, { prefix: "/tagging-rules" });
       await instance.register(faceRecognitionRoutes, { prefix: "/" }); // Face recognition routes handle /creators/:id/face-embeddings, /videos/:id/faces, /faces/* paths
-      await instance.register(editsRoutes, { prefix: "/" }); // Edits routes handle /videos/:id/edits, /edits/jobs/:id, etc.
+      await instance.register(videoEditsRoutes, { prefix: "/videos" });
+      await instance.register(editsRoutes, { prefix: "/edits" });
       await instance.register(multiplayerRemoteRoutes, {
         prefix: "/multiplayer-remote",
       });

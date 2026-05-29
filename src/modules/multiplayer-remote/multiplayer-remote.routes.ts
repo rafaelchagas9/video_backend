@@ -12,6 +12,8 @@ import {
   pairBodySchema,
   pairResponseSchema,
   pendingJoinRequestResponseSchema,
+  registerDisplayDeviceBodySchema,
+  registerDisplayDeviceResponseSchema,
   sessionIdParamSchema,
   sessionResponseSchema,
   trustedConnectResponseSchema,
@@ -27,6 +29,37 @@ export async function multiplayerRemoteRoutes(
   app.addHook("preHandler", authenticateUser);
 
   multiplayerRemoteWebSocketService.register(fastify);
+
+  app.post(
+    "/display-devices",
+    {
+      schema: {
+        tags: ["multiplayer-remote"],
+        summary: "Register a persistent pairable display device",
+        description:
+          "Creates long-lived display-device credentials so the display can advertise availability without depending on the browser auth session lifetime.",
+        body: registerDisplayDeviceBodySchema,
+        response: {
+          201: registerDisplayDeviceResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await multiplayerRemoteService.registerDisplayDevice(
+        request.user!.id,
+        request.body,
+        typeof request.headers["user-agent"] === "string"
+          ? request.headers["user-agent"]
+          : null,
+      );
+
+      return reply.status(201).send({
+        success: true,
+        data: result,
+      });
+    },
+  );
 
   app.post(
     "/sessions",

@@ -41,6 +41,8 @@ export const multiplayerRemoteCommandTypeValues = [
   "audio.unmute_all",
   "audio.mute_slot",
   "audio.unmute_slot",
+  "audio.set_all_volume",
+  "audio.set_slot_volume",
   "layout.set_mode",
   "layout.set_slot_size",
   "layout.reset_slot_size",
@@ -92,6 +94,7 @@ export interface MultiplayerRemoteSlotSnapshot {
   title: string | null;
   thumbnailUrl: string | null;
   muted: boolean;
+  volume: number;
   playing: boolean;
   size: number | null;
   currentTimestampSeconds?: number | null;

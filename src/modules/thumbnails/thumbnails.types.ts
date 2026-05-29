@@ -9,6 +9,7 @@ export interface Thumbnail {
   width: number;
   height: number;
   generated_at: string;
+  asset_url?: string;
 }
 
 export const generateThumbnailSchema = z

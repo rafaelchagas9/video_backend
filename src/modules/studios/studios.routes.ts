@@ -3,6 +3,11 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import {
+  listVideosQuerySchema,
+  videoListResponseSchema as canonicalVideoListResponseSchema,
+} from "@/modules/videos/videos.schemas";
+import { videosSearchService } from "@/modules/videos/videos.search.service";
 import { studiosService } from "./studios.service";
 import { studiosSocialService } from "./studios.social.service";
 import { studiosRelationshipsService } from "./studios.relationships.service";
@@ -20,7 +25,6 @@ import {
   studioResponseSchema,
   studioListResponseSchema,
   creatorListResponseSchema,
-  videoListResponseSchema,
   socialLinkResponseSchema,
   socialLinkListResponseSchema,
   messageResponseSchema,
@@ -664,24 +668,28 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["studios"],
-        summary: "Get videos for studio",
-        description: "Returns all videos associated with this studio.",
+        summary: "List videos for studio",
+        description:
+          "Returns the canonical paginated video list filtered to videos associated with this studio.",
         params: idParamSchema,
+        querystring: listVideosQuerySchema,
         response: {
-          200: videoListResponseSchema,
+          200: canonicalVideoListResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const videos = await studiosRelationshipsService.getVideos(
-        request.params.id,
-      );
+      await studiosService.findById(request.params.id);
+      const result = await videosSearchService.list(request.user!.id, {
+        ...request.query,
+        studioIds: [request.params.id],
+      });
 
       return reply.send({
         success: true,
-        data: videos,
+        ...result,
       });
     },
   );

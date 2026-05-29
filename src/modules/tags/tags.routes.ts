@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import {
+  listVideosQuerySchema,
+  videoListResponseSchema,
+} from "@/modules/videos/videos.schemas";
+import { videosSearchService } from "@/modules/videos/videos.search.service";
 import { tagsService } from "./tags.service";
 import {
   idParamSchema,
@@ -11,7 +16,6 @@ import {
   tagRecordResponseSchema,
   tagListResponseSchema,
   tagSimpleListResponseSchema,
-  tagVideosResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
 } from "./tags.schemas";
@@ -188,22 +192,28 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["tags"],
-        summary: "Get videos with tag",
-        description: "Returns all videos that have this tag.",
+        summary: "List videos with tag",
+        description:
+          "Returns the canonical paginated video list filtered to videos that have this tag or one of its descendants.",
         params: idParamSchema,
+        querystring: listVideosQuerySchema,
         response: {
-          200: tagVideosResponseSchema,
+          200: videoListResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const videos = await tagsService.getVideos(request.params.id);
+      await tagsService.findById(request.params.id);
+      const result = await videosSearchService.list(request.user!.id, {
+        ...request.query,
+        tagIds: [request.params.id],
+      });
 
       return reply.send({
         success: true,
-        data: videos,
+        ...result,
       });
     },
   );

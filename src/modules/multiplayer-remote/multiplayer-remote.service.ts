@@ -3,8 +3,10 @@ import { and, desc, eq, gt, isNull, lte, ne, or } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   multiplayerRemoteJoinRequestsTable,
+  multiplayerRemoteDisplayDevicesTable,
   multiplayerRemoteSessionsTable,
   multiplayerRemoteTrustedDevicesTable,
+  type MultiplayerRemoteDisplayDeviceRecord,
   type MultiplayerRemoteJoinRequestRecord,
   type MultiplayerRemoteSessionRecord,
   type MultiplayerRemoteTrustedDeviceRecord,
@@ -25,6 +27,7 @@ import {
 } from "./multiplayer-remote.types";
 import type {
   CloseSessionBody,
+  RegisterDisplayDeviceBody,
   PairBody,
   SessionSnapshot,
   TrustedDeviceBody,
@@ -84,6 +87,25 @@ export interface MultiplayerRemoteTrustedDeviceDto {
   revokedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MultiplayerRemoteDisplayDeviceDto {
+  id: number;
+  ownerUserId: number;
+  publicId: string;
+  deviceName: string;
+  deviceType: MultiplayerRemoteDeviceType | null;
+  trustedAt: string;
+  lastSeenAt: string | null;
+  lastHeartbeatAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiplayerRemoteTrustedSessionDiscoveryDto
+  extends MultiplayerRemoteSessionDto {
+  displayDevice: MultiplayerRemoteDisplayDeviceDto | null;
 }
 
 class MultiplayerRemoteService {
@@ -304,7 +326,7 @@ class MultiplayerRemoteService {
     },
   ): Promise<{
     trustedDevice: MultiplayerRemoteTrustedDeviceDto;
-    sessions: MultiplayerRemoteSessionDto[];
+    sessions: MultiplayerRemoteTrustedSessionDiscoveryDto[];
   }> {
     const trustedDevice = await this.getTrustedDevice(userId, input.remoteDeviceKey);
     const touchedTrustedDevice = await this.touchTrustedDevice(
@@ -330,11 +352,62 @@ class MultiplayerRemoteService {
       .orderBy(desc(multiplayerRemoteSessionsTable.displayLastSeenAt))
       .limit(20);
 
+    const displayDeviceIds = Array.from(
+      new Set(
+        sessions
+          .map((session) => session.displayDeviceId)
+          .filter((value): value is number => value !== null),
+      ),
+    );
+    const displayDevicesById = await this.getDisplayDevicesByIds(displayDeviceIds);
+
     return {
       trustedDevice: this.mapTrustedDevice(touchedTrustedDevice),
       sessions: sessions
         .filter((candidate) => Boolean(candidate.displayConnectedAt))
-        .map((candidate) => this.mapSession(candidate, null)),
+        .map((candidate) => ({
+          ...this.mapSession(candidate, null),
+          displayDevice:
+            candidate.displayDeviceId !== null
+              ? (displayDevicesById.get(candidate.displayDeviceId) ?? null)
+              : null,
+        })),
+    };
+  }
+
+  async registerDisplayDevice(
+    userId: number,
+    input: RegisterDisplayDeviceBody,
+    userAgent: string | null,
+  ): Promise<{
+    displayDevice: MultiplayerRemoteDisplayDeviceDto;
+    deviceSecret: string;
+  }> {
+    const now = new Date();
+    const devicePublicId = randomUUID();
+    const deviceSecret = randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+
+    const [displayDevice] = await db
+      .insert(multiplayerRemoteDisplayDevicesTable)
+      .values({
+        ownerUserId: userId,
+        publicId: devicePublicId,
+        authTokenHash: this.hashDeviceKey(deviceSecret),
+        deviceName: input.deviceName,
+        deviceType: input.deviceType ?? "unknown",
+        trustedAt: now,
+        lastSeenAt: userAgent ? now : null,
+        lastHeartbeatAt: null,
+      })
+      .returning();
+
+    if (!displayDevice) {
+      throw new Error("Failed to register multiplayer display device");
+    }
+
+    return {
+      displayDevice: this.mapDisplayDevice(displayDevice),
+      deviceSecret,
     };
   }
 
@@ -586,12 +659,99 @@ class MultiplayerRemoteService {
     return this.mapSession(updated ?? session, null);
   }
 
+  async bindDisplayDeviceClient(params: {
+    deviceId: string;
+    deviceSecret: string;
+    clientId?: string;
+    deviceName?: string;
+    deviceType?: MultiplayerRemoteDeviceType;
+    userAgent: string | null;
+  }): Promise<MultiplayerRemoteSessionDto> {
+    const displayDevice = await this.authenticateDisplayDevice(
+      params.deviceId,
+      params.deviceSecret,
+    );
+    const now = new Date();
+    const clientId = params.clientId ?? randomUUID();
+
+    const [updatedSession] = await db.transaction(async (tx) => {
+      const [device] = await tx
+        .update(multiplayerRemoteDisplayDevicesTable)
+        .set({
+          deviceName: params.deviceName ?? displayDevice.deviceName,
+          deviceType: params.deviceType ?? displayDevice.deviceType,
+          lastSeenAt: now,
+          lastHeartbeatAt: now,
+          updatedAt: now,
+        })
+        .where(eq(multiplayerRemoteDisplayDevicesTable.id, displayDevice.id))
+        .returning();
+
+      if (!device) {
+        throw new Error("Failed to update multiplayer display device");
+      }
+
+      const reusableSession = await tx.query.multiplayerRemoteSessionsTable.findFirst({
+        where: (sessions, { and, eq, isNull, or }) =>
+          and(
+            eq(sessions.ownerUserId, displayDevice.ownerUserId),
+            eq(sessions.displayDeviceId, displayDevice.id),
+            isNull(sessions.closedAt),
+            or(
+              eq(sessions.status, "waiting_for_remote"),
+              eq(sessions.status, "pending_approval"),
+              eq(sessions.status, "active"),
+            ),
+          ),
+        orderBy: (sessions, { desc }) => [desc(sessions.updatedAt)],
+      });
+
+      if (reusableSession) {
+        const [updated] = await tx
+          .update(multiplayerRemoteSessionsTable)
+          .set({
+            displayClientId: clientId,
+            displayConnectedAt: reusableSession.displayConnectedAt ?? now,
+            displayLastSeenAt: now,
+            updatedAt: now,
+          })
+          .where(eq(multiplayerRemoteSessionsTable.id, reusableSession.id))
+          .returning();
+
+        return [updated];
+      }
+
+      const [created] = await tx
+        .insert(multiplayerRemoteSessionsTable)
+        .values({
+          ownerUserId: displayDevice.ownerUserId,
+          displayDeviceId: displayDevice.id,
+          displayClientId: clientId,
+          displayConnectedAt: now,
+          displayLastSeenAt: now,
+          protocolVersion: multiplayerRemoteProtocolVersion,
+        })
+        .returning();
+
+      return [created];
+    });
+
+    if (!updatedSession) {
+      throw new Error("Failed to bind multiplayer display device");
+    }
+
+    return this.mapSession(
+      updatedSession,
+      await this.getPendingJoinRequest(updatedSession.id),
+    );
+  }
+
   async disconnectClient(params: {
     sessionId: number;
     userId: number;
     role: MultiplayerRemoteClientRole;
     clientId: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const [session] = await db
       .select()
       .from(multiplayerRemoteSessionsTable)
@@ -599,13 +759,25 @@ class MultiplayerRemoteService {
       .limit(1);
 
     if (!session || session.ownerUserId !== params.userId || session.closedAt) {
-      return;
+      return false;
     }
 
     const now = new Date();
     if (params.role === "display" && session.displayClientId === params.clientId) {
+      if (session.displayDeviceId !== null) {
+        // Persistent display: keep the session alive so it can be reclaimed on reconnect.
+        await db
+          .update(multiplayerRemoteSessionsTable)
+          .set({
+            displayClientId: null,
+            displayLastSeenAt: now,
+            updatedAt: now,
+          })
+          .where(eq(multiplayerRemoteSessionsTable.id, params.sessionId));
+        return false;
+      }
       await this.closeSessionInternal(params.sessionId, "display_disconnected");
-      return;
+      return true;
     }
 
     if (params.role === "remote" && session.remoteClientId === params.clientId) {
@@ -618,6 +790,45 @@ class MultiplayerRemoteService {
         })
         .where(eq(multiplayerRemoteSessionsTable.id, params.sessionId));
     }
+    return false;
+  }
+
+  async heartbeatConnection(params: {
+    sessionId: number;
+    role: MultiplayerRemoteClientRole;
+  }): Promise<void> {
+    const now = new Date();
+    const updateFields =
+      params.role === "display"
+        ? {
+            displayLastSeenAt: now,
+            updatedAt: now,
+          }
+        : {
+            remoteLastSeenAt: now,
+            updatedAt: now,
+          };
+
+    const [session] = await db
+      .update(multiplayerRemoteSessionsTable)
+      .set(updateFields)
+      .where(eq(multiplayerRemoteSessionsTable.id, params.sessionId))
+      .returning({
+        displayDeviceId: multiplayerRemoteSessionsTable.displayDeviceId,
+      });
+
+    if (params.role !== "display" || !session?.displayDeviceId) {
+      return;
+    }
+
+    await db
+      .update(multiplayerRemoteDisplayDevicesTable)
+      .set({
+        lastSeenAt: now,
+        lastHeartbeatAt: now,
+        updatedAt: now,
+      })
+      .where(eq(multiplayerRemoteDisplayDevicesTable.id, session.displayDeviceId));
   }
 
   async closeSessionInternal(sessionId: number, reason: string): Promise<void> {
@@ -898,6 +1109,52 @@ class MultiplayerRemoteService {
     return trustedDevice;
   }
 
+  private async authenticateDisplayDevice(
+    deviceId: string,
+    deviceSecret: string,
+  ): Promise<MultiplayerRemoteDisplayDeviceRecord> {
+    const [displayDevice] = await db
+      .select()
+      .from(multiplayerRemoteDisplayDevicesTable)
+      .where(
+        and(
+          eq(multiplayerRemoteDisplayDevicesTable.publicId, deviceId),
+          eq(
+            multiplayerRemoteDisplayDevicesTable.authTokenHash,
+            this.hashDeviceKey(deviceSecret),
+          ),
+          isNull(multiplayerRemoteDisplayDevicesTable.revokedAt),
+        ),
+      )
+      .limit(1);
+
+    if (!displayDevice) {
+      throw new ForbiddenError("Display device is not authorized");
+    }
+
+    return displayDevice;
+  }
+
+  private async getDisplayDevicesByIds(
+    displayDeviceIds: number[],
+  ): Promise<Map<number, MultiplayerRemoteDisplayDeviceDto>> {
+    if (displayDeviceIds.length === 0) {
+      return new Map();
+    }
+
+    const displayDevices = await db.query.multiplayerRemoteDisplayDevicesTable.findMany({
+      where: (displayDevices, { inArray, isNull }) =>
+        and(inArray(displayDevices.id, displayDeviceIds), isNull(displayDevices.revokedAt)),
+    });
+
+    return new Map(
+      displayDevices.map((displayDevice) => [
+        displayDevice.id,
+        this.mapDisplayDevice(displayDevice),
+      ]),
+    );
+  }
+
   private async touchTrustedDevice(
     trustedDevice: MultiplayerRemoteTrustedDeviceRecord,
     input: TrustedDeviceBody,
@@ -933,6 +1190,24 @@ class MultiplayerRemoteService {
       revokedAt: this.dateToIso(trustedDevice.revokedAt),
       createdAt: trustedDevice.createdAt.toISOString(),
       updatedAt: trustedDevice.updatedAt.toISOString(),
+    };
+  }
+
+  private mapDisplayDevice(
+    displayDevice: MultiplayerRemoteDisplayDeviceRecord,
+  ): MultiplayerRemoteDisplayDeviceDto {
+    return {
+      id: displayDevice.id,
+      ownerUserId: displayDevice.ownerUserId,
+      publicId: displayDevice.publicId,
+      deviceName: displayDevice.deviceName,
+      deviceType: displayDevice.deviceType as MultiplayerRemoteDeviceType | null,
+      trustedAt: displayDevice.trustedAt.toISOString(),
+      lastSeenAt: this.dateToIso(displayDevice.lastSeenAt),
+      lastHeartbeatAt: this.dateToIso(displayDevice.lastHeartbeatAt),
+      revokedAt: this.dateToIso(displayDevice.revokedAt),
+      createdAt: displayDevice.createdAt.toISOString(),
+      updatedAt: displayDevice.updatedAt.toISOString(),
     };
   }
 

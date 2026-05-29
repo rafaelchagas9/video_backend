@@ -46,6 +46,7 @@ import {
   taggingRuleLogTable,
 } from "./tagging.schema";
 import {
+  multiplayerRemoteDisplayDevicesTable,
   multiplayerRemoteSessionsTable,
   multiplayerRemoteJoinRequestsTable,
   multiplayerRemoteTrustedDevicesTable,
@@ -63,6 +64,7 @@ export const usersRelations = relations(usersTable, ({ many }) => ({
   multiplayerRemoteSessions: many(multiplayerRemoteSessionsTable),
   multiplayerRemoteJoinRequests: many(multiplayerRemoteJoinRequestsTable),
   multiplayerRemoteTrustedDevices: many(multiplayerRemoteTrustedDevicesTable),
+  multiplayerRemoteDisplayDevices: many(multiplayerRemoteDisplayDevicesTable),
 }));
 
 // Sessions relations

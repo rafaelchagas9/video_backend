@@ -41,6 +41,8 @@ export const storyboardSchema = z.object({
   interval_seconds: z.number(),
   sprite_size_bytes: z.number().nullable(),
   generated_at: z.string(),
+  sprite_url: z.string().optional(),
+  vtt_url: z.string().optional(),
 });
 
 export const storyboardResponseSchema = z.object({

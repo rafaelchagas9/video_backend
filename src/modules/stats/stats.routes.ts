@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import { markRouteDeprecated } from "@/utils/api-deprecation";
 import { storageStatsService } from "./stats.storage.service";
 import { libraryStatsService } from "./stats.library.service";
 import { contentStatsService } from "./stats.content.service";
@@ -23,17 +24,28 @@ import {
   allSnapshotsResponseSchema,
 } from "./stats.schemas";
 
+type HistoryQuery = { days: number; limit: number };
+
+async function createAllSnapshots() {
+  const [storage, library, content, usage] = await Promise.all([
+    storageStatsService.createStorageSnapshot(),
+    libraryStatsService.createLibrarySnapshot(),
+    contentStatsService.createContentSnapshot(),
+    usageStatsService.createUsageSnapshot(),
+  ]);
+
+  return {
+    storage,
+    library,
+    content,
+    usage,
+  };
+}
+
 export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-
-  // All routes require authentication
   app.addHook("preHandler", authenticateUser);
 
-  // ============================================================
-  // STORAGE STATS
-  // ============================================================
-
-  // Get current storage stats (real-time)
   app.get(
     "/storage",
     {
@@ -50,15 +62,10 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await storageStatsService.getCurrentStorageStats();
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Get storage history
   app.get(
     "/storage/history",
     {
@@ -75,24 +82,19 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { days, limit } = request.query;
+      const { days, limit } = request.query as HistoryQuery;
       const data = await storageStatsService.getStorageHistory(days, limit);
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Create storage snapshot manually
   app.post(
-    "/storage/snapshot",
+    "/storage-snapshots",
     {
       schema: {
         tags: ["stats"],
         summary: "Create storage snapshot",
-        description: "Manually triggers a storage statistics snapshot.",
+        description: "Create a storage snapshot resource.",
         response: {
           201: storageSnapshotResponseSchema,
           401: errorResponseSchema,
@@ -101,20 +103,12 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await storageStatsService.createStorageSnapshot();
-
-      return reply.status(201).send({
-        success: true,
-        data,
-        message: "Storage snapshot created",
-      });
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Storage snapshot created" });
     },
   );
 
-  // ============================================================
-  // LIBRARY STATS
-  // ============================================================
-
-  // Get current library stats
   app.get(
     "/library",
     {
@@ -131,15 +125,10 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await libraryStatsService.getCurrentLibraryStats();
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Get library history
   app.get(
     "/library/history",
     {
@@ -155,24 +144,19 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { days, limit } = request.query;
+      const { days, limit } = request.query as HistoryQuery;
       const data = await libraryStatsService.getLibraryHistory(days, limit);
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Create library snapshot manually
   app.post(
-    "/library/snapshot",
+    "/library-snapshots",
     {
       schema: {
         tags: ["stats"],
         summary: "Create library snapshot",
-        description: "Manually triggers a library statistics snapshot.",
+        description: "Create a library snapshot resource.",
         response: {
           201: librarySnapshotResponseSchema,
           401: errorResponseSchema,
@@ -181,20 +165,12 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await libraryStatsService.createLibrarySnapshot();
-
-      return reply.status(201).send({
-        success: true,
-        data,
-        message: "Library snapshot created",
-      });
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Library snapshot created" });
     },
   );
 
-  // ============================================================
-  // CONTENT STATS
-  // ============================================================
-
-  // Get current content stats
   app.get(
     "/content",
     {
@@ -202,7 +178,7 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["stats"],
         summary: "Get current content organization statistics",
         description:
-          "Returns statistics about content organization including videos without tags, creators, ratings, etc.",
+          "Returns statistics about content organization including videos without tags, creators, ratings, and storyboards.",
         response: {
           200: contentCurrentResponseSchema,
           401: errorResponseSchema,
@@ -211,15 +187,10 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await contentStatsService.getCurrentContentStats();
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Get content history
   app.get(
     "/content/history",
     {
@@ -235,24 +206,19 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { days, limit } = request.query;
+      const { days, limit } = request.query as HistoryQuery;
       const data = await contentStatsService.getContentHistory(days, limit);
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Create content snapshot manually
   app.post(
-    "/content/snapshot",
+    "/content-snapshots",
     {
       schema: {
         tags: ["stats"],
         summary: "Create content snapshot",
-        description: "Manually triggers a content statistics snapshot.",
+        description: "Create a content statistics snapshot resource.",
         response: {
           201: contentSnapshotResponseSchema,
           401: errorResponseSchema,
@@ -261,20 +227,12 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await contentStatsService.createContentSnapshot();
-
-      return reply.status(201).send({
-        success: true,
-        data,
-        message: "Content snapshot created",
-      });
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Content snapshot created" });
     },
   );
 
-  // ============================================================
-  // USAGE STATS
-  // ============================================================
-
-  // Get current usage stats
   app.get(
     "/usage",
     {
@@ -282,7 +240,7 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["stats"],
         summary: "Get current usage/watch statistics",
         description:
-          "Returns watch/usage statistics including total watch time, top watched videos, and activity by hour.",
+          "Returns watch and usage statistics including total watch time, top watched videos, and activity by hour.",
         response: {
           200: usageCurrentResponseSchema,
           401: errorResponseSchema,
@@ -291,22 +249,17 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await usageStatsService.getCurrentUsageStats();
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Get usage history
   app.get(
     "/usage/history",
     {
       schema: {
         tags: ["stats"],
         summary: "Get usage statistics history",
-        description: "Returns historical usage/watch snapshots.",
+        description: "Returns historical usage and watch snapshots.",
         querystring: historyQuerySchema,
         response: {
           200: usageHistoryResponseSchema,
@@ -315,24 +268,19 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const { days, limit } = request.query;
+      const { days, limit } = request.query as HistoryQuery;
       const data = await usageStatsService.getUsageHistory(days, limit);
-
-      return reply.send({
-        success: true,
-        data,
-      });
+      return reply.send({ success: true, data });
     },
   );
 
-  // Create usage snapshot manually
   app.post(
-    "/usage/snapshot",
+    "/usage-snapshots",
     {
       schema: {
         tags: ["stats"],
         summary: "Create usage snapshot",
-        description: "Manually triggers a usage statistics snapshot.",
+        description: "Create a usage statistics snapshot resource.",
         response: {
           201: usageSnapshotResponseSchema,
           401: errorResponseSchema,
@@ -341,28 +289,20 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (_request, reply) => {
       const data = await usageStatsService.createUsageSnapshot();
-
-      return reply.status(201).send({
-        success: true,
-        data,
-        message: "Usage snapshot created",
-      });
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Usage snapshot created" });
     },
   );
 
-  // ============================================================
-  // COMBINED OPERATIONS
-  // ============================================================
-
-  // Create all snapshots at once
   app.post(
-    "/snapshot",
+    "/snapshots",
     {
       schema: {
         tags: ["stats"],
         summary: "Create all snapshots",
         description:
-          "Manually triggers snapshots for all statistics types (storage, library, content, usage).",
+          "Create snapshot resources for all statistics types in one request.",
         response: {
           201: allSnapshotsResponseSchema,
           401: errorResponseSchema,
@@ -370,23 +310,132 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const [storage, library, content, usage] = await Promise.all([
-        storageStatsService.createStorageSnapshot(),
-        libraryStatsService.createLibrarySnapshot(),
-        contentStatsService.createContentSnapshot(),
-        usageStatsService.createUsageSnapshot(),
-      ]);
+      const data = await createAllSnapshots();
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "All snapshots created" });
+    },
+  );
+}
 
-      return reply.status(201).send({
-        success: true,
-        data: {
-          storage,
-          library,
-          content,
-          usage,
+export async function statsLegacySnapshotRoutes(
+  fastify: FastifyInstance,
+): Promise<void> {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
+  app.addHook("preHandler", authenticateUser);
+
+  app.post(
+    "/storage/snapshot",
+    {
+      schema: {
+        tags: ["stats"],
+        deprecated: true,
+        summary: "Create storage snapshot (deprecated)",
+        description: "Deprecated alias for POST /api/stats/storage-snapshots.",
+        response: {
+          201: storageSnapshotResponseSchema,
+          401: errorResponseSchema,
         },
-        message: "All snapshots created",
-      });
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, { replacement: "/api/stats/storage-snapshots" });
+      const data = await storageStatsService.createStorageSnapshot();
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Storage snapshot created" });
+    },
+  );
+
+  app.post(
+    "/library/snapshot",
+    {
+      schema: {
+        tags: ["stats"],
+        deprecated: true,
+        summary: "Create library snapshot (deprecated)",
+        description: "Deprecated alias for POST /api/stats/library-snapshots.",
+        response: {
+          201: librarySnapshotResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, { replacement: "/api/stats/library-snapshots" });
+      const data = await libraryStatsService.createLibrarySnapshot();
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Library snapshot created" });
+    },
+  );
+
+  app.post(
+    "/content/snapshot",
+    {
+      schema: {
+        tags: ["stats"],
+        deprecated: true,
+        summary: "Create content snapshot (deprecated)",
+        description: "Deprecated alias for POST /api/stats/content-snapshots.",
+        response: {
+          201: contentSnapshotResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, { replacement: "/api/stats/content-snapshots" });
+      const data = await contentStatsService.createContentSnapshot();
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Content snapshot created" });
+    },
+  );
+
+  app.post(
+    "/usage/snapshot",
+    {
+      schema: {
+        tags: ["stats"],
+        deprecated: true,
+        summary: "Create usage snapshot (deprecated)",
+        description: "Deprecated alias for POST /api/stats/usage-snapshots.",
+        response: {
+          201: usageSnapshotResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, { replacement: "/api/stats/usage-snapshots" });
+      const data = await usageStatsService.createUsageSnapshot();
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "Usage snapshot created" });
+    },
+  );
+
+  app.post(
+    "/snapshot",
+    {
+      schema: {
+        tags: ["stats"],
+        deprecated: true,
+        summary: "Create all snapshots (deprecated)",
+        description: "Deprecated alias for POST /api/stats/snapshots.",
+        response: {
+          201: allSnapshotsResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      markRouteDeprecated(reply, { replacement: "/api/stats/snapshots" });
+      const data = await createAllSnapshots();
+      return reply
+        .status(201)
+        .send({ success: true, data, message: "All snapshots created" });
     },
   );
 }

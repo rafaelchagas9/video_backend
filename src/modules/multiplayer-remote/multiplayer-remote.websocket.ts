@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import { randomUUID } from "crypto";
-import { authenticateUser } from "@/modules/auth/auth.middleware";
-import { AppError } from "@/utils/errors";
+import { optionalAuth } from "@/modules/auth/auth.middleware";
+import { UnauthorizedError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { multiplayerRemoteService } from "./multiplayer-remote.service";
 import {
@@ -33,7 +33,7 @@ interface BoundConnection {
   heartbeatInterval: ReturnType<typeof setInterval>;
 }
 
-const HEARTBEAT_INTERVAL_MS = 25_000;
+const HEARTBEAT_INTERVAL_MS = 10_000;
 const WEBSOCKET_OPEN_STATE = 1;
 
 class MultiplayerRemoteWebSocketService {
@@ -134,7 +134,7 @@ class MultiplayerRemoteWebSocketService {
       "/ws",
       {
         websocket: true,
-        preHandler: authenticateUser,
+        preHandler: optionalAuth,
         schema: {
           tags: ["multiplayer-remote"],
           summary: "Open multiplayer remote websocket",
@@ -144,7 +144,14 @@ class MultiplayerRemoteWebSocketService {
       },
       (socket, request) => {
         socket.once("message", (data: Buffer | string) => {
-          this.handleHello(socket, request.user!.id, data).catch((error) => {
+          this.handleHello(
+            socket,
+            request.user?.id ?? null,
+            typeof request.headers["user-agent"] === "string"
+              ? request.headers["user-agent"]
+              : null,
+            data,
+          ).catch((error) => {
             this.sendErrorAndClose(socket, error);
           });
         });
@@ -158,7 +165,8 @@ class MultiplayerRemoteWebSocketService {
 
   private async handleHello(
     socket: WebSocket,
-    userId: number,
+    authenticatedUserId: number | null,
+    userAgent: string | null,
     data: Buffer | string,
   ): Promise<void> {
     const raw = this.parseJsonObject(data);
@@ -167,15 +175,33 @@ class MultiplayerRemoteWebSocketService {
     const parsed = clientHelloEventSchema.parse(raw);
     const { sessionId, role, clientInfo } = parsed.payload;
     const clientId = clientInfo?.clientId ?? randomUUID();
+    const displayDeviceAuth = parsed.payload.displayDeviceAuth;
 
-    this.assertSingleConnection(sessionId, role);
+    const isDisplayDeviceReconnect = role === "display" && Boolean(displayDeviceAuth);
 
-    const session = await multiplayerRemoteService.bindClient({
-      sessionId,
-      userId,
-      role,
-      clientId,
-    });
+    const session = isDisplayDeviceReconnect
+      ? await multiplayerRemoteService.bindDisplayDeviceClient({
+          deviceId: displayDeviceAuth!.deviceId,
+          deviceSecret: displayDeviceAuth!.deviceSecret,
+          clientId,
+          deviceName: clientInfo?.deviceName,
+          deviceType: clientInfo?.deviceType,
+          userAgent,
+        })
+      : await this.bindAuthenticatedClient({
+          authenticatedUserId,
+          sessionId,
+          role,
+          clientId,
+        });
+
+    if (isDisplayDeviceReconnect) {
+      // The same persistent display reconnecting (e.g. after a page refresh) reclaims
+      // its own display slot; evict any stale socket the backend has not torn down yet.
+      this.evictExistingConnection(session.id, role);
+    } else {
+      this.assertSingleConnection(session.id, role);
+    }
 
     const heartbeatInterval = setInterval(() => {
       this.send(socket, {
@@ -183,14 +209,23 @@ class MultiplayerRemoteWebSocketService {
         payload: { heartbeat: true },
         timestamp: new Date().toISOString(),
         protocolVersion: multiplayerRemoteProtocolVersion,
-        sessionId,
+        sessionId: session.id,
+      });
+      void multiplayerRemoteService.heartbeatConnection({
+        sessionId: session.id,
+        role,
+      }).catch((error) => {
+        logger.warn(
+          { error, sessionId: session.id, role },
+          "Failed to persist multiplayer heartbeat",
+        );
       });
     }, HEARTBEAT_INTERVAL_MS);
 
     const bound: BoundConnection = {
       socket,
-      sessionId,
-      userId,
+      sessionId: session.id,
+      userId: session.ownerUserId,
       role,
       clientId,
       heartbeatInterval,
@@ -198,9 +233,9 @@ class MultiplayerRemoteWebSocketService {
 
     this.connections.set(socket, bound);
     if (role === "display") {
-      this.displayConnections.set(sessionId, socket);
+      this.displayConnections.set(session.id, socket);
     } else {
-      this.remoteConnections.set(sessionId, socket);
+      this.remoteConnections.set(session.id, socket);
     }
 
     this.send(socket, {
@@ -212,7 +247,7 @@ class MultiplayerRemoteWebSocketService {
       },
       timestamp: new Date().toISOString(),
       protocolVersion: multiplayerRemoteProtocolVersion,
-      sessionId,
+      sessionId: session.id,
     });
 
     if (role === "remote" && session.lastState) {
@@ -221,13 +256,16 @@ class MultiplayerRemoteWebSocketService {
         payload: session.lastState,
         timestamp: new Date().toISOString(),
         protocolVersion: multiplayerRemoteProtocolVersion,
-        sessionId,
+        sessionId: session.id,
       });
     }
 
     socket.on("message", (message: Buffer | string) => {
       this.handleMessage(socket, message).catch((error) => {
-        logger.warn({ error, sessionId, role }, "Multiplayer websocket message rejected");
+        logger.warn(
+          { error, sessionId: session.id, role },
+          "Multiplayer websocket message rejected",
+        );
         this.send(socket, {
           event: "command.rejected",
           payload: {
@@ -235,22 +273,50 @@ class MultiplayerRemoteWebSocketService {
           },
           timestamp: new Date().toISOString(),
           protocolVersion: multiplayerRemoteProtocolVersion,
-          sessionId,
+          sessionId: session.id,
         });
       });
     });
 
     socket.on("close", () => {
       this.cleanup(socket).catch((error) => {
-        logger.warn({ error, sessionId, role }, "Failed to clean up websocket");
+        logger.warn(
+          { error, sessionId: session.id, role },
+          "Failed to clean up websocket",
+        );
       });
     });
 
     socket.on("error", (error: Error) => {
-      logger.warn({ error, sessionId, role }, "Multiplayer websocket error");
+      logger.warn({ error, sessionId: session.id, role }, "Multiplayer websocket error");
     });
 
-    logger.info({ sessionId, userId, role }, "Multiplayer websocket connected");
+    logger.info(
+      { sessionId: session.id, userId: session.ownerUserId, role },
+      "Multiplayer websocket connected",
+    );
+  }
+
+  private async bindAuthenticatedClient(params: {
+    authenticatedUserId: number | null;
+    sessionId?: number;
+    role: MultiplayerRemoteClientRole;
+    clientId: string;
+  }): Promise<MultiplayerRemoteSessionDto> {
+    if (!params.authenticatedUserId) {
+      throw new UnauthorizedError("Authentication is required for this websocket");
+    }
+
+    if (!params.sessionId) {
+      throw new Error("sessionId is required for authenticated websocket clients");
+    }
+
+    return multiplayerRemoteService.bindClient({
+      sessionId: params.sessionId,
+      userId: params.authenticatedUserId,
+      role: params.role,
+      clientId: params.clientId,
+    });
   }
 
   private async handleMessage(
@@ -477,6 +543,46 @@ class MultiplayerRemoteWebSocketService {
     }
   }
 
+  private evictExistingConnection(
+    sessionId: number,
+    role: MultiplayerRemoteClientRole,
+  ): void {
+    const existing =
+      role === "display"
+        ? this.displayConnections.get(sessionId)
+        : this.remoteConnections.get(sessionId);
+
+    if (!existing) {
+      return;
+    }
+
+    // Detach the stale socket from all bookkeeping first so its close handler
+    // becomes a no-op (it can no longer find a bound connection) and cannot
+    // close the session that the new connection is taking over.
+    const bound = this.connections.get(existing);
+    if (bound) {
+      clearInterval(bound.heartbeatInterval);
+      this.connections.delete(existing);
+    }
+
+    if (role === "display") {
+      this.displayConnections.delete(sessionId);
+    } else {
+      this.remoteConnections.delete(sessionId);
+    }
+
+    try {
+      existing.close(1000, "Replaced by a new connection");
+    } catch {
+      // best-effort
+    }
+
+    logger.info(
+      { sessionId, role },
+      "Evicted stale multiplayer connection for reconnecting client",
+    );
+  }
+
   private async cleanup(socket: WebSocket): Promise<void> {
     const connection = this.connections.get(socket);
     if (!connection) {
@@ -496,9 +602,9 @@ class MultiplayerRemoteWebSocketService {
       connection.sessionId,
     );
 
-    await multiplayerRemoteService.disconnectClient(connection);
+    const didClose = await multiplayerRemoteService.disconnectClient(connection);
 
-    if (connection.role === "display" && !wasClosed) {
+    if (connection.role === "display" && !wasClosed && didClose) {
       this.notifySessionClosed(connection.sessionId, "display_disconnected");
     }
 
@@ -595,9 +701,7 @@ class MultiplayerRemoteWebSocketService {
 
   private sendErrorAndClose(socket: WebSocket, error: unknown): void {
     const message =
-      error instanceof AppError || error instanceof Error
-        ? error.message
-        : "Failed to initialize websocket";
+      error instanceof Error ? error.message : "Failed to initialize websocket";
 
     try {
       this.send(socket, {

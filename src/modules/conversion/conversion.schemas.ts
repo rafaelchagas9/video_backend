@@ -120,6 +120,14 @@ export const bulkConversionSchema = z.object({
 
 export type BulkConversionRequest = z.infer<typeof bulkConversionSchema>;
 
+export const bulkConversionResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    batchId: z.string(),
+    jobs: z.array(conversionJobSchema),
+  }),
+});
+
 /**
  * Schema for active conversion item
  */
@@ -152,6 +160,21 @@ export const clearQueueResponseSchema = z.object({
     processingReset: z.number(),
     message: z.string(),
   }),
+});
+
+export const conversionQueueStatusSchema = z.object({
+  queueLength: z.number(),
+  activeJobs: z.number(),
+  isProcessing: z.boolean(),
+});
+
+export const conversionQueueStatusResponseSchema = z.object({
+  success: z.literal(true),
+  data: conversionQueueStatusSchema,
+});
+
+export const updateConversionJobSchema = z.object({
+  status: z.literal("cancelled"),
 });
 
 export const conversionHistoryQuerySchema = z.object({

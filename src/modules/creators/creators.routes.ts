@@ -3,6 +3,11 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import {
+  listVideosQuerySchema,
+  videoListResponseSchema,
+} from "@/modules/videos/videos.schemas";
+import { videosSearchService } from "@/modules/videos/videos.search.service";
 import { creatorsService } from "./creators.service";
 import { creatorsPlatformsService } from "./creators.platforms.service";
 import { creatorsSocialService } from "./creators.social.service";
@@ -19,7 +24,6 @@ import {
   updateSocialLinkSchema,
   creatorResponseSchema,
   creatorListResponseSchema,
-  creatorVideosResponseSchema,
   platformProfileResponseSchema,
   platformProfileListResponseSchema,
   socialLinkResponseSchema,
@@ -225,24 +229,28 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["creators"],
-        summary: "Get videos by creator",
-        description: "Returns all videos associated with a creator.",
+        summary: "List videos by creator",
+        description:
+          "Returns the canonical paginated video list filtered to videos associated with this creator.",
         params: idParamSchema,
+        querystring: listVideosQuerySchema,
         response: {
-          200: creatorVideosResponseSchema,
+          200: videoListResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const videos = await creatorsRelationshipsService.getVideos(
-        request.params.id,
-      );
+      await creatorsService.findById(request.params.id);
+      const result = await videosSearchService.list(request.user!.id, {
+        ...request.query,
+        creatorIds: [request.params.id],
+      });
 
       return reply.send({
         success: true,
-        data: videos,
+        ...result,
       });
     },
   );

@@ -41,6 +41,7 @@ const playlistSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   thumbnail_url: z.string().nullable().optional(),
+  video_count: z.number(),
 });
 
 const playlistVideoSchema = z.object({

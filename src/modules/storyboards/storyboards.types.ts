@@ -11,6 +11,8 @@ export interface Storyboard {
   interval_seconds: number;
   sprite_size_bytes: number | null;
   generated_at: string;
+  sprite_url?: string;
+  vtt_url?: string;
 }
 
 export const generateStoryboardSchema = z.object({

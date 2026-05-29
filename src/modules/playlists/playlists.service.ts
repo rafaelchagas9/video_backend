@@ -39,7 +39,17 @@ export class PlaylistsService {
       throw new NotFoundError(`Playlist not found with id: ${id}`);
     }
 
-    return this.mapToSnakeCase(playlists[0]);
+    const [countResult] = await db
+      .select({
+        count: sql<number>`cast(count(${playlistVideosTable.videoId}) as int)`,
+      })
+      .from(playlistVideosTable)
+      .where(eq(playlistVideosTable.playlistId, id));
+
+    return this.mapToSnakeCase({
+      ...playlists[0],
+      video_count: countResult?.count ?? 0,
+    });
   }
 
   async list(userId: number): Promise<Playlist[]> {
@@ -47,6 +57,11 @@ export class PlaylistsService {
     const query = sql`
       SELECT
         p.*,
+        CAST((
+          SELECT COUNT(*)
+          FROM playlist_videos pv
+          WHERE pv.playlist_id = p.id
+        ) AS INTEGER) as video_count,
         (
           SELECT t.id
           FROM playlist_videos pv
@@ -352,6 +367,7 @@ export class PlaylistsService {
         playlist.updatedAt instanceof Date
           ? playlist.updatedAt.toISOString()
           : playlist.updated_at,
+      video_count: playlist.video_count !== undefined ? Number(playlist.video_count) : 0,
     };
   }
 }
