@@ -57,6 +57,7 @@ export class CreatorsBulkService {
             name: existing.name,
             description: existing.description,
             profile_picture_path: existing.profilePicturePath,
+            main_picture_path: existing.mainPicturePath,
             face_thumbnail_path: existing.faceThumbnailPath,
             is_favorite: false,
             created_at: existing.createdAt.toISOString(),
@@ -386,8 +387,7 @@ export class CreatorsBulkService {
         // Handle aliases
         if (item.aliases && item.aliases.length > 0) {
           if (mode === "replace") {
-            const existing =
-              await creatorsAliasesService.getAliases(creatorId);
+            const existing = await creatorsAliasesService.getAliases(creatorId);
             for (const ea of existing) {
               if (!item.aliases.some((a) => a.name === ea.name)) {
                 await creatorsAliasesService.deleteAlias(ea.id);

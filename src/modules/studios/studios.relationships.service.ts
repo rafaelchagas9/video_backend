@@ -85,9 +85,13 @@ export class StudiosRelationshipsService {
       name: c.name,
       description: c.description,
       profile_picture_path: c.profile_picture_path,
+      main_picture_path: c.main_picture_path ?? null,
       face_thumbnail_path: c.face_thumbnail_path,
       profile_picture_url: c.profile_picture_path
         ? `/api/creators/${c.id}/picture`
+        : undefined,
+      main_picture_url: c.main_picture_path
+        ? `/api/creators/${c.id}/picture?variant=main`
         : undefined,
       face_thumbnail_url: c.face_thumbnail_path
         ? `/api/creators/${c.id}/picture?type=face`
@@ -196,7 +200,9 @@ export class StudiosRelationshipsService {
     }));
   }
 
-  async getStudiosForVideos(videoIds: number[]): Promise<Map<number, Studio[]>> {
+  async getStudiosForVideos(
+    videoIds: number[],
+  ): Promise<Map<number, Studio[]>> {
     const grouped = new Map<number, Studio[]>();
     if (videoIds.length === 0) {
       return grouped;

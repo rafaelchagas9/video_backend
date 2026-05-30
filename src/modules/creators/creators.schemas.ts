@@ -93,15 +93,29 @@ const completenessSchema = z.object({
   missing_fields: z.array(z.string()),
 });
 
+const creatorGalleryMediaSchema = z.object({
+  id: z.number(),
+  creator_id: z.number(),
+  label: z.string().nullable(),
+  description: z.string().nullable(),
+  file_path: z.string(),
+  url: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
 // Response schemas - Enhanced creator with counts and completeness
 const creatorSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().optional().nullable(),
+  main_picture_path: z.string().optional().nullable(),
   face_thumbnail_path: z.string().optional().nullable(),
   profile_picture_url: z.string().optional(),
+  main_picture_url: z.string().optional(),
   face_thumbnail_url: z.string().optional(),
+  gallery_media: z.array(creatorGalleryMediaSchema).optional(),
   is_favorite: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -110,6 +124,7 @@ const creatorSchema = z.object({
   social_link_count: z.number().optional(),
   linked_video_count: z.number().optional(),
   has_profile_picture: z.boolean().optional(),
+  has_main_picture: z.boolean().optional(),
   completeness: completenessSchema.optional(),
 });
 
@@ -277,10 +292,41 @@ export const bulkAliasesSchema = z.object({
 
 export const pictureFromUrlSchema = z.object({
   url: z.string().url(),
+  variant: z.enum(["portrait", "main"]).optional(),
 });
 
 export const pictureQuerySchema = z.object({
   type: z.enum(["face"]).optional(),
+  variant: z.enum(["portrait", "main"]).optional(),
+});
+
+export const pictureMutationQuerySchema = z.object({
+  variant: z.enum(["portrait", "main"]).optional(),
+});
+
+export const galleryMediaParamsSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  mediaId: z.coerce.number().int().positive(),
+});
+
+export const galleryMediaCreateSchema = z.object({
+  label: z.string().max(255).optional(),
+  description: z.string().max(2000).optional(),
+});
+
+export const galleryMediaFromUrlSchema = galleryMediaCreateSchema.extend({
+  url: z.string().url(),
+});
+
+export const galleryMediaListResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(creatorGalleryMediaSchema),
+});
+
+export const galleryMediaResponseSchema = z.object({
+  success: z.literal(true),
+  data: creatorGalleryMediaSchema,
+  message: z.string().optional(),
 });
 
 export const bulkOperationResponseSchema = z.object({

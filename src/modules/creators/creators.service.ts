@@ -1,6 +1,10 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
-import { creatorFavoritesTable, creatorsTable } from "@/database/schema";
+import {
+  creatorFavoritesTable,
+  creatorGalleryMediaTable,
+  creatorsTable,
+} from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { existsSync, unlinkSync } from "fs";
@@ -231,6 +235,7 @@ export class CreatorsService {
       return this.mapToSnakeCase({
         ...creator,
         has_profile_picture: hasPicture,
+        has_main_picture: creator.main_picture_path !== null,
         completeness: {
           is_complete: hasPicture && hasPlatformOrSocial && hasVideos,
           missing_fields: missingFields,
@@ -263,7 +268,9 @@ export class CreatorsService {
       throw new NotFoundError(`Creator not found with id: ${id}`);
     }
 
-    return this.mapToSnakeCase(result[0]);
+    const creator = this.mapToSnakeCase(result[0]);
+    creator.gallery_media = await this.getGalleryMedia(id);
+    return creator;
   }
 
   async create(input: CreateCreatorInput, userId?: number): Promise<Creator> {
@@ -364,6 +371,33 @@ export class CreatorsService {
       }
     }
 
+    if (creator.main_picture_path) {
+      try {
+        if (existsSync(creator.main_picture_path)) {
+          unlinkSync(creator.main_picture_path);
+        }
+      } catch (error) {
+        logger.warn(
+          { error, path: creator.main_picture_path },
+          "Failed to delete creator main picture file",
+        );
+      }
+    }
+
+    const galleryMedia = await this.getGalleryMedia(id);
+    for (const media of galleryMedia) {
+      try {
+        if (existsSync(media.file_path)) {
+          unlinkSync(media.file_path);
+        }
+      } catch (error) {
+        logger.warn(
+          { error, path: media.file_path, creatorId: id, mediaId: media.id },
+          "Failed to delete creator gallery media file",
+        );
+      }
+    }
+
     await db.delete(creatorsTable).where(eq(creatorsTable.id, id));
   }
 
@@ -411,6 +445,7 @@ export class CreatorsService {
       this.mapToSnakeCase({
         ...creator,
         has_profile_picture: creator.profile_picture_path !== null,
+        has_main_picture: creator.main_picture_path !== null,
         completeness: {
           is_complete:
             creator.profile_picture_path !== null &&
@@ -461,6 +496,7 @@ export class CreatorsService {
       this.mapToSnakeCase({
         ...creator,
         has_profile_picture: creator.profile_picture_path !== null,
+        has_main_picture: creator.main_picture_path !== null,
         completeness: {
           is_complete:
             creator.profile_picture_path !== null &&
@@ -489,7 +525,10 @@ export class CreatorsService {
     );
   }
 
-  private favoriteSelectSql(userId: number | undefined, creatorIdSql: ReturnType<typeof sql>) {
+  private favoriteSelectSql(
+    userId: number | undefined,
+    creatorIdSql: ReturnType<typeof sql>,
+  ) {
     if (!userId) {
       return sql`false`;
     }
@@ -500,6 +539,34 @@ export class CreatorsService {
       WHERE cf.user_id = ${userId}
         AND cf.creator_id = ${creatorIdSql}
     )`;
+  }
+
+  private async getGalleryMedia(creatorId: number) {
+    const media = await db
+      .select()
+      .from(creatorGalleryMediaTable)
+      .where(eq(creatorGalleryMediaTable.creatorId, creatorId))
+      .orderBy(
+        sql`${creatorGalleryMediaTable.createdAt} DESC`,
+        sql`${creatorGalleryMediaTable.id} DESC`,
+      );
+
+    return media.map((item) => ({
+      id: item.id,
+      creator_id: item.creatorId,
+      label: item.label,
+      description: item.description,
+      file_path: item.filePath,
+      url: `/api/creators/${creatorId}/gallery/${item.id}/image`,
+      created_at:
+        item.createdAt instanceof Date
+          ? item.createdAt.toISOString()
+          : item.createdAt,
+      updated_at:
+        item.updatedAt instanceof Date
+          ? item.updatedAt.toISOString()
+          : item.updatedAt,
+    }));
   }
 
   // Helper to map Drizzle results (camelCase) to API format (snake_case)
@@ -517,11 +584,16 @@ export class CreatorsService {
       description: creator.description,
       profile_picture_path:
         creator.profilePicturePath ?? creator.profile_picture_path,
+      main_picture_path: creator.mainPicturePath ?? creator.main_picture_path,
       face_thumbnail_path:
         creator.faceThumbnailPath ?? creator.face_thumbnail_path ?? null,
       profile_picture_url:
         (creator.profilePicturePath ?? creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
+          : undefined,
+      main_picture_url:
+        (creator.mainPicturePath ?? creator.main_picture_path)
+          ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:
         (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
@@ -542,6 +614,9 @@ export class CreatorsService {
       }),
       ...(creator.has_profile_picture !== undefined && {
         has_profile_picture: creator.has_profile_picture,
+      }),
+      ...(creator.has_main_picture !== undefined && {
+        has_main_picture: creator.has_main_picture,
       }),
       ...(creator.completeness !== undefined && {
         completeness: creator.completeness,

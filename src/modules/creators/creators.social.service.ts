@@ -1,6 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
+  creatorGalleryMediaTable,
   creatorSocialLinksTable,
   creatorsTable,
   creatorFaceEmbeddingsTable,
@@ -25,8 +26,11 @@ import type {
   UpdateSocialLinkInput,
   BulkSocialLinkItem,
   BulkOperationResult,
+  CreatorGalleryMedia,
 } from "./creators.types";
 import type { Creator } from "./creators.types";
+
+type CreatorPictureVariant = "portrait" | "main";
 
 export class CreatorsSocialService {
   // Social Links Methods
@@ -202,48 +206,39 @@ export class CreatorsSocialService {
     return { created, updated, errors };
   }
 
-  // Profile Picture Methods
+  // Creator image methods
   async uploadProfilePicture(
     id: number,
     fileBuffer: Buffer,
     _filename: string,
+    variant: CreatorPictureVariant = "portrait",
   ): Promise<Creator> {
     const creator = await this.findCreatorById(id);
-
-    // Ensure directory exists
-    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
-      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
-    }
-
-    // Delete old picture if exists
-    if (
-      creator.profile_picture_path &&
-      existsSync(creator.profile_picture_path)
-    ) {
-      unlinkSync(creator.profile_picture_path);
-    }
-
-    if (
-      creator.face_thumbnail_path &&
-      existsSync(creator.face_thumbnail_path)
-    ) {
-      unlinkSync(creator.face_thumbnail_path);
-    }
-
-    const format = env.PROFILE_PICTURE_FORMAT;
-    const quality = env.PROFILE_PICTURE_QUALITY;
-    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
-    const newFilename = `creator_${id}_${Date.now()}.${format}`;
-    const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
-
-    const processedBuffer = await processProfilePicture({
+    const filePath = await this.storeProcessedImage({
       input: fileBuffer,
-      format,
-      maxSize,
-      quality,
+      namePrefix: variant === "main" ? `creator_main_${id}` : `creator_${id}`,
+      maxSize:
+        variant === "main"
+          ? env.PROFILE_PICTURE_MAX_SIZE * 2
+          : env.PROFILE_PICTURE_MAX_SIZE,
     });
 
-    writeFileSync(filePath, processedBuffer);
+    if (variant === "main") {
+      this.deleteFileIfExists(creator.main_picture_path);
+
+      await db
+        .update(creatorsTable)
+        .set({
+          mainPicturePath: filePath,
+          updatedAt: new Date(),
+        })
+        .where(eq(creatorsTable.id, id));
+
+      return this.findCreatorById(id);
+    }
+
+    this.deleteFileIfExists(creator.profile_picture_path);
+    this.deleteFileIfExists(creator.face_thumbnail_path);
 
     const faceThumbnailPath = await this.generateFaceThumbnail(filePath, id);
 
@@ -251,13 +246,10 @@ export class CreatorsSocialService {
       await this.generateProfilePictureEmbedding(filePath, id);
     }
 
-    const profilePicturePath = filePath;
-
-    // Update database
     await db
       .update(creatorsTable)
       .set({
-        profilePicturePath,
+        profilePicturePath: filePath,
         faceThumbnailPath,
         updatedAt: new Date(),
       })
@@ -266,22 +258,28 @@ export class CreatorsSocialService {
     return this.findCreatorById(id);
   }
 
-  async deleteProfilePicture(id: number): Promise<Creator> {
+  async deleteProfilePicture(
+    id: number,
+    variant: CreatorPictureVariant = "portrait",
+  ): Promise<Creator> {
     const creator = await this.findCreatorById(id);
 
-    if (
-      creator.profile_picture_path &&
-      existsSync(creator.profile_picture_path)
-    ) {
-      unlinkSync(creator.profile_picture_path);
+    if (variant === "main") {
+      this.deleteFileIfExists(creator.main_picture_path);
+
+      await db
+        .update(creatorsTable)
+        .set({
+          mainPicturePath: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(creatorsTable.id, id));
+
+      return this.findCreatorById(id);
     }
 
-    if (
-      creator.face_thumbnail_path &&
-      existsSync(creator.face_thumbnail_path)
-    ) {
-      unlinkSync(creator.face_thumbnail_path);
-    }
+    this.deleteFileIfExists(creator.profile_picture_path);
+    this.deleteFileIfExists(creator.face_thumbnail_path);
 
     await db
       .update(creatorsTable)
@@ -295,87 +293,84 @@ export class CreatorsSocialService {
     return this.findCreatorById(id);
   }
 
-  async setPictureFromUrl(creatorId: number, url: string): Promise<Creator> {
-    const creator = await this.findCreatorById(creatorId);
-
-    // Download image from URL
-    const buffer = await imageDownloadRateLimiter.schedule(async () => {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(
-          `Failed to download image: ${response.status} ${response.statusText}`,
-        );
-      }
-
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.startsWith("image/")) {
-        throw new Error("URL does not point to a valid image");
-      }
-
-      return Buffer.from(await response.arrayBuffer());
-    });
-
-    // Validate minimum size
-    if (buffer.length < 100) {
-      throw new Error("Downloaded image is too small");
-    }
-
-    const format = env.PROFILE_PICTURE_FORMAT;
-    const quality = env.PROFILE_PICTURE_QUALITY;
-    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
-
-    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
-      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
-    }
-
-    if (
-      creator.profile_picture_path &&
-      existsSync(creator.profile_picture_path)
-    ) {
-      unlinkSync(creator.profile_picture_path);
-    }
-
-    if (
-      creator.face_thumbnail_path &&
-      existsSync(creator.face_thumbnail_path)
-    ) {
-      unlinkSync(creator.face_thumbnail_path);
-    }
-
-    const newFilename = `creator_${creatorId}_${Date.now()}.${format}`;
-    const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
-
-    const processedBuffer = await processProfilePicture({
-      input: buffer,
-      format,
-      maxSize,
-      quality,
-    });
-
-    writeFileSync(filePath, processedBuffer);
-
-    const faceThumbnailPath = await this.generateFaceThumbnail(
-      filePath,
+  async setPictureFromUrl(
+    creatorId: number,
+    url: string,
+    variant: CreatorPictureVariant = "portrait",
+  ): Promise<Creator> {
+    const buffer = await this.downloadImage(url);
+    return this.uploadProfilePicture(
       creatorId,
+      buffer,
+      "downloaded-image",
+      variant,
     );
+  }
 
-    if (faceThumbnailPath) {
-      await this.generateProfilePictureEmbedding(filePath, creatorId);
+  async listGalleryMedia(creatorId: number): Promise<CreatorGalleryMedia[]> {
+    await this.findCreatorById(creatorId);
+
+    const media = await db
+      .select()
+      .from(creatorGalleryMediaTable)
+      .where(eq(creatorGalleryMediaTable.creatorId, creatorId))
+      .orderBy(creatorGalleryMediaTable.createdAt, creatorGalleryMediaTable.id);
+
+    return media
+      .slice()
+      .reverse()
+      .map((item) => this.mapGalleryMediaToSnakeCase(item));
+  }
+
+  async addGalleryMedia(
+    creatorId: number,
+    fileBuffer: Buffer,
+    label?: string,
+    description?: string,
+  ): Promise<CreatorGalleryMedia> {
+    await this.findCreatorById(creatorId);
+
+    const filePath = await this.storeProcessedImage({
+      input: fileBuffer,
+      namePrefix: `creator_gallery_${creatorId}`,
+      maxSize: env.PROFILE_PICTURE_MAX_SIZE * 2,
+    });
+
+    const result = await db
+      .insert(creatorGalleryMediaTable)
+      .values({
+        creatorId,
+        label: this.normalizeOptionalText(label),
+        description: this.normalizeOptionalText(description),
+        filePath,
+      })
+      .returning();
+
+    if (!result[0]) {
+      throw new Error("Failed to create creator gallery media");
     }
 
-    const profilePicturePath = filePath;
+    return this.mapGalleryMediaToSnakeCase(result[0]);
+  }
 
-    // Update database
+  async addGalleryMediaFromUrl(
+    creatorId: number,
+    url: string,
+    label?: string,
+    description?: string,
+  ): Promise<CreatorGalleryMedia> {
+    const buffer = await this.downloadImage(url);
+    return this.addGalleryMedia(creatorId, buffer, label, description);
+  }
+
+  async deleteGalleryMedia(creatorId: number, mediaId: number): Promise<void> {
+    const media = await this.findGalleryMediaById(creatorId, mediaId);
+
+    this.deleteFileIfExists(media.file_path);
+
     await db
-      .update(creatorsTable)
-      .set({
-        profilePicturePath,
-        faceThumbnailPath,
-        updatedAt: new Date(),
-      })
-      .where(eq(creatorsTable.id, creatorId));
-
-    return this.findCreatorById(creatorId);
+      .delete(creatorGalleryMediaTable)
+      .where(eq(creatorGalleryMediaTable.id, mediaId));
   }
 
   private async findSocialLinkById(id: number): Promise<SocialLink> {
@@ -406,6 +401,30 @@ export class CreatorsSocialService {
     return this.mapCreatorToSnakeCase(result[0]);
   }
 
+  private async findGalleryMediaById(
+    creatorId: number,
+    mediaId: number,
+  ): Promise<CreatorGalleryMedia> {
+    const result = await db
+      .select()
+      .from(creatorGalleryMediaTable)
+      .where(
+        and(
+          eq(creatorGalleryMediaTable.id, mediaId),
+          eq(creatorGalleryMediaTable.creatorId, creatorId),
+        ),
+      )
+      .limit(1);
+
+    if (!result[0]) {
+      throw new NotFoundError(
+        `Creator gallery media not found with id: ${mediaId}`,
+      );
+    }
+
+    return this.mapGalleryMediaToSnakeCase(result[0]);
+  }
+
   private mapToSnakeCase(link: any): SocialLink {
     return {
       id: link.id,
@@ -425,10 +444,15 @@ export class CreatorsSocialService {
       name: creator.name,
       description: creator.description,
       profile_picture_path: creator.profilePicturePath,
+      main_picture_path: creator.mainPicturePath ?? null,
       face_thumbnail_path: creator.faceThumbnailPath,
       profile_picture_url:
         (creator.profilePicturePath ?? creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
+          : undefined,
+      main_picture_url:
+        (creator.mainPicturePath ?? creator.main_picture_path)
+          ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:
         (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
@@ -444,6 +468,87 @@ export class CreatorsSocialService {
           ? creator.updatedAt.toISOString()
           : creator.updatedAt,
     };
+  }
+
+  private mapGalleryMediaToSnakeCase(media: any): CreatorGalleryMedia {
+    return {
+      id: media.id,
+      creator_id: media.creatorId,
+      label: media.label ?? null,
+      description: media.description ?? null,
+      file_path: media.filePath,
+      url: `/api/creators/${media.creatorId}/gallery/${media.id}/image`,
+      created_at:
+        media.createdAt instanceof Date
+          ? media.createdAt.toISOString()
+          : media.createdAt,
+      updated_at:
+        media.updatedAt instanceof Date
+          ? media.updatedAt.toISOString()
+          : media.updatedAt,
+    };
+  }
+
+  private normalizeOptionalText(value: string | undefined) {
+    const normalized = value?.trim();
+    return normalized ? normalized : null;
+  }
+
+  private deleteFileIfExists(filePath: string | null | undefined) {
+    if (!filePath || !existsSync(filePath)) {
+      return;
+    }
+
+    unlinkSync(filePath);
+  }
+
+  private async downloadImage(url: string) {
+    const buffer = await imageDownloadRateLimiter.schedule(async () => {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(
+          `Failed to download image: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.startsWith("image/")) {
+        throw new Error("URL does not point to a valid image");
+      }
+
+      return Buffer.from(await response.arrayBuffer());
+    });
+
+    if (buffer.length < 100) {
+      throw new Error("Downloaded image is too small");
+    }
+
+    return buffer;
+  }
+
+  private async storeProcessedImage(params: {
+    input: Buffer;
+    namePrefix: string;
+    maxSize: number;
+  }) {
+    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
+      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
+    }
+
+    const filePath = join(
+      env.PROFILE_PICTURES_DIR,
+      `${params.namePrefix}_${Date.now()}.${env.PROFILE_PICTURE_FORMAT}`,
+    );
+
+    const processedBuffer = await processProfilePicture({
+      input: params.input,
+      format: env.PROFILE_PICTURE_FORMAT,
+      maxSize: params.maxSize,
+      quality: env.PROFILE_PICTURE_QUALITY,
+    });
+
+    writeFileSync(filePath, processedBuffer);
+    return filePath;
   }
 
   private async generateFaceThumbnail(

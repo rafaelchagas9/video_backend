@@ -35,7 +35,13 @@ import {
   errorResponseSchema,
   bulkPlatformsSchema,
   bulkSocialLinksSchema,
+  galleryMediaCreateSchema,
+  galleryMediaFromUrlSchema,
+  galleryMediaListResponseSchema,
+  galleryMediaParamsSchema,
+  galleryMediaResponseSchema,
   pictureFromUrlSchema,
+  pictureMutationQuerySchema,
   pictureQuerySchema,
   bulkOperationResponseSchema,
   bulkImportQuerySchema,
@@ -71,7 +77,10 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await creatorsService.list(request.query, request.user!.id);
+      const result = await creatorsService.list(
+        request.query,
+        request.user!.id,
+      );
 
       return reply.send({
         success: true,
@@ -126,7 +135,10 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const creator = await creatorsService.create(request.body, request.user!.id);
+      const creator = await creatorsService.create(
+        request.body,
+        request.user!.id,
+      );
 
       return reply.status(201).send({
         success: true,
@@ -235,7 +247,8 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["creators"],
         summary: "Favorite creator",
-        description: "Marks a creator as a favorite for the authenticated user.",
+        description:
+          "Marks a creator as a favorite for the authenticated user.",
         params: idParamSchema,
         response: {
           201: messageResponseSchema,
@@ -346,10 +359,11 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["creators"],
-        summary: "Upload profile picture",
+        summary: "Upload creator picture",
         description:
-          "Uploads a profile picture for the creator. Accepts JPEG, PNG, or WebP images.",
+          "Uploads a portrait or main picture for the creator. Accepts JPEG, PNG, or WebP images. Use ?variant=main for the larger showcase image.",
         params: idParamSchema,
+        querystring: pictureMutationQuerySchema,
       },
     },
     async (request, reply) => {
@@ -367,16 +381,23 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
 
       const buffer = await data.toBuffer();
       const { id } = request.params as { id: number };
+      const { variant } = request.query as {
+        variant?: "portrait" | "main";
+      };
       const creator = await creatorsSocialService.uploadProfilePicture(
         id,
         buffer,
         data.filename,
+        variant,
       );
 
       return reply.send({
         success: true,
         data: creator,
-        message: "Profile picture uploaded successfully",
+        message:
+          variant === "main"
+            ? "Main picture uploaded successfully"
+            : "Portrait uploaded successfully",
       });
     },
   );
@@ -387,9 +408,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["creators"],
-        summary: "Get profile picture",
+        summary: "Get creator picture",
         description:
-          "Serves the creator's profile picture or default avatar if none is set. Use ?type=face to request the face thumbnail.",
+          "Serves the creator's portrait, main picture, or face thumbnail. Use ?variant=main for the showcase image or ?type=face for the extracted face crop.",
         params: idParamSchema,
         querystring: pictureQuerySchema,
       },
@@ -400,7 +421,10 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         Number(id),
         request.user!.id,
       );
-      const { type } = request.query as { type?: "face" };
+      const { type, variant } = request.query as {
+        type?: "face";
+        variant?: "portrait" | "main";
+      };
 
       let filePath: string;
       let contentType: string;
@@ -410,10 +434,18 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
           creator.face_thumbnail_path ??
           creator.profile_picture_path ??
           join(process.cwd(), "public", "pfp.png");
+      } else if (variant === "main") {
+        filePath =
+          creator.main_picture_path ??
+          creator.profile_picture_path ??
+          creator.face_thumbnail_path ??
+          join(process.cwd(), "public", "pfp.png");
       } else if (creator.profile_picture_path) {
         filePath = creator.profile_picture_path;
       } else if (creator.face_thumbnail_path) {
         filePath = creator.face_thumbnail_path;
+      } else if (creator.main_picture_path) {
+        filePath = creator.main_picture_path;
       } else {
         filePath = join(process.cwd(), "public", "pfp.png");
       }
@@ -438,9 +470,11 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["creators"],
-        summary: "Delete profile picture",
-        description: "Deletes the creator's profile picture.",
+        summary: "Delete creator picture",
+        description:
+          "Deletes the creator's portrait or main picture. Use ?variant=main to remove the showcase image.",
         params: idParamSchema,
+        querystring: pictureMutationQuerySchema,
         response: {
           200: creatorResponseSchema,
           401: errorResponseSchema,
@@ -449,14 +483,21 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
+      const { variant } = request.query as {
+        variant?: "portrait" | "main";
+      };
       const creator = await creatorsSocialService.deleteProfilePicture(
         request.params.id,
+        variant,
       );
 
       return reply.send({
         success: true,
         data: creator,
-        message: "Profile picture deleted successfully",
+        message:
+          variant === "main"
+            ? "Main picture deleted successfully"
+            : "Portrait deleted successfully",
       });
     },
   );
@@ -684,9 +725,9 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     {
       schema: {
         tags: ["creators"],
-        summary: "Set profile picture from URL",
+        summary: "Set creator picture from URL",
         description:
-          "Downloads an image from the given URL and sets it as the creator's profile picture.",
+          "Downloads an image from the given URL and sets it as the creator's portrait or main picture.",
         params: idParamSchema,
         body: pictureFromUrlSchema,
         response: {
@@ -701,12 +742,205 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const creator = await creatorsSocialService.setPictureFromUrl(
         request.params.id,
         request.body.url,
+        request.body.variant,
       );
 
       return reply.send({
         success: true,
         data: creator,
-        message: "Profile picture set from URL successfully",
+        message:
+          request.body.variant === "main"
+            ? "Main picture set from URL successfully"
+            : "Portrait set from URL successfully",
+      });
+    },
+  );
+
+  app.get(
+    "/:id/gallery",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "List creator gallery media",
+        description:
+          "Returns the creator's additional gallery images, ordered newest first.",
+        params: idParamSchema,
+        response: {
+          200: galleryMediaListResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const media = await creatorsSocialService.listGalleryMedia(
+        request.params.id,
+      );
+
+      return reply.send({
+        success: true,
+        data: media,
+      });
+    },
+  );
+
+  app.post(
+    "/:id/gallery",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Upload creator gallery media",
+        description:
+          "Uploads an additional gallery image for the creator. Optional `label` and `description` may be sent as multipart fields.",
+        params: idParamSchema,
+      },
+    },
+    async (request, reply) => {
+      const data = await request.file();
+
+      if (!data) {
+        return reply.status(400).send({
+          success: false,
+          error: {
+            message: "No file provided",
+            statusCode: 400,
+          },
+        });
+      }
+
+      const fields = data.fields as Record<
+        string,
+        { value?: unknown } | Array<{ value?: unknown }>
+      >;
+      const labelField = Array.isArray(fields.label)
+        ? fields.label[0]
+        : fields.label;
+      const descriptionField = Array.isArray(fields.description)
+        ? fields.description[0]
+        : fields.description;
+
+      const parsedMeta = galleryMediaCreateSchema.parse({
+        label:
+          typeof labelField?.value === "string" ? labelField.value : undefined,
+        description:
+          typeof descriptionField?.value === "string"
+            ? descriptionField.value
+            : undefined,
+      });
+
+      const media = await creatorsSocialService.addGalleryMedia(
+        request.params.id,
+        await data.toBuffer(),
+        parsedMeta.label,
+        parsedMeta.description,
+      );
+
+      return reply.status(201).send({
+        success: true,
+        data: media,
+        message: "Gallery media uploaded successfully",
+      });
+    },
+  );
+
+  app.post(
+    "/:id/gallery-from-url",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Add creator gallery media from URL",
+        description:
+          "Downloads an image from the given URL and stores it in the creator gallery.",
+        params: idParamSchema,
+        body: galleryMediaFromUrlSchema,
+        response: {
+          201: galleryMediaResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const media = await creatorsSocialService.addGalleryMediaFromUrl(
+        request.params.id,
+        request.body.url,
+        request.body.label,
+        request.body.description,
+      );
+
+      return reply.status(201).send({
+        success: true,
+        data: media,
+        message: "Gallery media added successfully",
+      });
+    },
+  );
+
+  app.get(
+    "/:id/gallery/:mediaId/image",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Get creator gallery media image",
+        description: "Serves a stored creator gallery image.",
+        params: galleryMediaParamsSchema,
+      },
+    },
+    async (request, reply) => {
+      const media = await creatorsSocialService.listGalleryMedia(
+        request.params.id,
+      );
+      const item = media.find((entry) => entry.id === request.params.mediaId);
+
+      if (!item) {
+        return reply.status(404).send({
+          success: false,
+          error: {
+            message: `Creator gallery media not found with id: ${request.params.mediaId}`,
+            statusCode: 404,
+          },
+        });
+      }
+
+      const ext = item.file_path.split(".").pop()?.toLowerCase();
+      reply.header(
+        "Content-Type",
+        ext === "png"
+          ? "image/png"
+          : ext === "webp"
+            ? "image/webp"
+            : "image/jpeg",
+      );
+
+      return reply.send(readFileSync(item.file_path));
+    },
+  );
+
+  app.delete(
+    "/:id/gallery/:mediaId",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Delete creator gallery media",
+        description: "Deletes a stored gallery image for the creator.",
+        params: galleryMediaParamsSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await creatorsSocialService.deleteGalleryMedia(
+        request.params.id,
+        request.params.mediaId,
+      );
+
+      return reply.send({
+        success: true,
+        message: "Gallery media deleted successfully",
       });
     },
   );

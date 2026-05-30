@@ -18,6 +18,7 @@ export const creatorsTable = pgTable("creators", {
   name: text("name").notNull().unique(),
   description: text("description"),
   profilePicturePath: text("profile_picture_path"),
+  mainPicturePath: text("main_picture_path"),
   faceThumbnailPath: text("face_thumbnail_path"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -204,6 +205,24 @@ export const creatorAliasesTable = pgTable(
   }),
 );
 
+export const creatorGalleryMediaTable = pgTable(
+  "creator_gallery_media",
+  {
+    id: serial("id").primaryKey(),
+    creatorId: integer("creator_id")
+      .notNull()
+      .references(() => creatorsTable.id, { onDelete: "cascade" }),
+    label: text("label"),
+    description: text("description"),
+    filePath: text("file_path").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    creatorIdx: index("idx_creator_gallery_media_creator").on(table.creatorId),
+  }),
+);
+
 // Studio social media links
 export const studioSocialLinksTable = pgTable(
   "studio_social_links",
@@ -236,5 +255,8 @@ export type CreatorSocialLink = typeof creatorSocialLinksTable.$inferSelect;
 export type NewCreatorSocialLink = typeof creatorSocialLinksTable.$inferInsert;
 export type CreatorAlias = typeof creatorAliasesTable.$inferSelect;
 export type NewCreatorAlias = typeof creatorAliasesTable.$inferInsert;
+export type CreatorGalleryMedia = typeof creatorGalleryMediaTable.$inferSelect;
+export type NewCreatorGalleryMedia =
+  typeof creatorGalleryMediaTable.$inferInsert;
 export type StudioSocialLink = typeof studioSocialLinksTable.$inferSelect;
 export type NewStudioSocialLink = typeof studioSocialLinksTable.$inferInsert;

@@ -5,10 +5,24 @@ export interface Creator {
   name: string;
   description: string | null;
   profile_picture_path: string | null;
+  main_picture_path: string | null;
   face_thumbnail_path: string | null;
   profile_picture_url?: string; // Computed field
+  main_picture_url?: string; // Computed field
   face_thumbnail_url?: string; // Computed field
+  gallery_media?: CreatorGalleryMedia[];
   is_favorite: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatorGalleryMedia {
+  id: number;
+  creator_id: number;
+  label: string | null;
+  description: string | null;
+  file_path: string;
+  url: string;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +93,7 @@ export interface EnhancedCreator extends Creator {
   social_link_count: number;
   linked_video_count: number;
   has_profile_picture: boolean;
+  has_main_picture?: boolean;
   completeness: CompletenessInfo;
 }
 

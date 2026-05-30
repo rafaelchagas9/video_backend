@@ -128,7 +128,9 @@ export class CreatorsRelationshipsService {
     return creators.map(this.mapCreatorToSnakeCase);
   }
 
-  async getCreatorsForVideos(videoIds: number[]): Promise<Map<number, Creator[]>> {
+  async getCreatorsForVideos(
+    videoIds: number[],
+  ): Promise<Map<number, Creator[]>> {
     const grouped = new Map<number, Creator[]>();
     if (videoIds.length === 0) {
       return grouped;
@@ -292,10 +294,15 @@ export class CreatorsRelationshipsService {
       name: creator.name,
       description: creator.description,
       profile_picture_path: creator.profilePicturePath,
+      main_picture_path: creator.mainPicturePath ?? null,
       face_thumbnail_path: creator.faceThumbnailPath,
       profile_picture_url:
         (creator.profilePicturePath ?? creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
+          : undefined,
+      main_picture_url:
+        (creator.mainPicturePath ?? creator.main_picture_path)
+          ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:
         (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
