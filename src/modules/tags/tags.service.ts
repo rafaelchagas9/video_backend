@@ -90,44 +90,63 @@ export class TagsService {
   ): Promise<PaginatedTags> {
     const offset = (page - 1) * limit;
 
-    // Build WHERE conditions
-    const whereClauses = [isNull(tagsTable.parentId)];
-    if (search) {
-      whereClauses.push(
-        or(
-          ilike(tagsTable.name, `%${search}%`),
-          ilike(tagsTable.description, `%${search}%`),
-        )!,
-      );
-    }
-
-    const whereCondition =
-      whereClauses.length > 1
-        ? sql`${whereClauses[0]} AND ${whereClauses[1]}`
-        : whereClauses[0];
-
-    // Get total count of root tags
-    const countResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(tagsTable)
-      .where(whereCondition)
-      .then((rows) => rows[0]);
-
-    const total = Number(countResult?.count || 0);
-    const totalPages = Math.ceil(total / limit);
-
-    // Get root tags
     const sortField =
       sortColumn === "created_at" ? tagsTable.createdAt : tagsTable.name;
     const sortDir = sortOrder === "asc" ? sql`asc` : sql`desc`;
 
-    const rootTags = await db
-      .select()
-      .from(tagsTable)
-      .where(whereCondition)
-      .orderBy(sql`${sortField} ${sortDir}`)
-      .limit(limit)
-      .offset(offset);
+    let countResult;
+    let rootTags;
+
+    if (search) {
+      const searchPattern = `%${search}%`;
+      const matchingRootsSubquery = sql`
+        WITH RECURSIVE matching_roots AS (
+          SELECT id, parent_id
+          FROM tags
+          WHERE name ILIKE ${searchPattern} OR description ILIKE ${searchPattern}
+          
+          UNION ALL
+          
+          SELECT t.id, t.parent_id
+          FROM tags t
+          INNER JOIN matching_roots mr ON t.id = mr.parent_id
+        )
+        SELECT id FROM matching_roots WHERE parent_id IS NULL
+      `;
+
+      countResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(tagsTable)
+        .where(sql`id IN (${matchingRootsSubquery})`)
+        .then((rows) => rows[0]);
+
+      rootTags = await db
+        .select()
+        .from(tagsTable)
+        .where(sql`id IN (${matchingRootsSubquery})`)
+        .orderBy(sql`${sortField} ${sortDir}`)
+        .limit(limit)
+        .offset(offset);
+    } else {
+      const whereCondition = isNull(tagsTable.parentId);
+
+      countResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(tagsTable)
+        .where(whereCondition)
+        .then((rows) => rows[0]);
+
+      rootTags = await db
+        .select()
+        .from(tagsTable)
+        .where(whereCondition)
+        .orderBy(sql`${sortField} ${sortDir}`)
+        .limit(limit)
+        .offset(offset);
+    }
+
+    const total = Number(countResult?.count || 0);
+    const totalPages = Math.ceil(total / limit);
 
     // Fetch all tags once to build tree in-memory
     const allTags = await this.list({ limit: 10000 }).then((r) => r.data as Tag[]);

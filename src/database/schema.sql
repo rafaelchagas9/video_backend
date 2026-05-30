@@ -246,6 +246,19 @@ CREATE TABLE IF NOT EXISTS favorites (
 
 CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
 
+CREATE TABLE IF NOT EXISTS creator_favorites (
+    user_id INTEGER NOT NULL,
+    creator_id INTEGER NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (user_id, creator_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (creator_id) REFERENCES creators(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_creator_favorites_user ON creator_favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_creator_favorites_creator ON creator_favorites(creator_id);
+
 -- Bookmarks
 CREATE TABLE IF NOT EXISTS bookmarks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -8,6 +8,7 @@ export interface Creator {
   face_thumbnail_path: string | null;
   profile_picture_url?: string; // Computed field
   face_thumbnail_url?: string; // Computed field
+  is_favorite: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -90,6 +91,7 @@ export interface ListCreatorsOptions {
   minVideoCount?: number;
   maxVideoCount?: number;
   hasProfilePicture?: boolean;
+  isFavorite?: boolean;
   studioIds?: number[];
   missing?: "picture" | "platform" | "social" | "linked" | "any";
   complete?: boolean;

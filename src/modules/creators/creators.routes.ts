@@ -13,6 +13,7 @@ import { creatorsPlatformsService } from "./creators.platforms.service";
 import { creatorsSocialService } from "./creators.social.service";
 import { creatorsRelationshipsService } from "./creators.relationships.service";
 import { creatorsBulkService } from "./creators.bulk.service";
+import { creatorFavoritesService } from "./creators.favorites.service";
 import {
   idParamSchema,
   listCreatorsQuerySchema,
@@ -30,6 +31,7 @@ import {
   socialLinkListResponseSchema,
   studioListResponseSchema,
   messageResponseSchema,
+  favoriteCheckResponseSchema,
   errorResponseSchema,
   bulkPlatformsSchema,
   bulkSocialLinksSchema,
@@ -69,7 +71,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const result = await creatorsService.list(request.query);
+      const result = await creatorsService.list(request.query, request.user!.id);
 
       return reply.send({
         success: true,
@@ -95,7 +97,10 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const creator = await creatorsService.findById(request.params.id);
+      const creator = await creatorsService.findById(
+        request.params.id,
+        request.user!.id,
+      );
 
       return reply.send({
         success: true,
@@ -121,7 +126,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const creator = await creatorsService.create(request.body);
+      const creator = await creatorsService.create(request.body, request.user!.id);
 
       return reply.status(201).send({
         success: true,
@@ -187,6 +192,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const creator = await creatorsService.update(
         request.params.id,
         request.body,
+        request.user!.id,
       );
 
       return reply.send({
@@ -223,6 +229,85 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  app.post(
+    "/:id/favorite",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Favorite creator",
+        description: "Marks a creator as a favorite for the authenticated user.",
+        params: idParamSchema,
+        response: {
+          201: messageResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await creatorFavoritesService.add(request.user!.id, request.params.id);
+
+      return reply.status(201).send({
+        success: true,
+        message: "Creator added to favorites",
+      });
+    },
+  );
+
+  app.delete(
+    "/:id/favorite",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Unfavorite creator",
+        description:
+          "Removes a creator from the authenticated user's favorites.",
+        params: idParamSchema,
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await creatorFavoritesService.remove(request.user!.id, request.params.id);
+
+      return reply.send({
+        success: true,
+        message: "Creator removed from favorites",
+      });
+    },
+  );
+
+  app.get(
+    "/:id/favorite/check",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Check if creator is favorited",
+        description:
+          "Returns whether the authenticated user has favorited this creator.",
+        params: idParamSchema,
+        response: {
+          200: favoriteCheckResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const isFavorite = await creatorFavoritesService.isFavorite(
+        request.user!.id,
+        request.params.id,
+      );
+
+      return reply.send({
+        success: true,
+        data: { is_favorite: isFavorite },
+      });
+    },
+  );
+
   // Get videos by creator
   app.get(
     "/:id/videos",
@@ -242,7 +327,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      await creatorsService.findById(request.params.id);
+      await creatorsService.findById(request.params.id, request.user!.id);
       const result = await videosSearchService.list(request.user!.id, {
         ...request.query,
         creatorIds: [request.params.id],
@@ -311,7 +396,10 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const creator = await creatorsService.findById(Number(id));
+      const creator = await creatorsService.findById(
+        Number(id),
+        request.user!.id,
+      );
       const { type } = request.query as { type?: "face" };
 
       let filePath: string;
@@ -821,7 +909,11 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { q, limit } = request.query;
 
-      const creators = await creatorsService.autocomplete(q, limit);
+      const creators = await creatorsService.autocomplete(
+        q,
+        limit,
+        request.user!.id,
+      );
 
       return reply.send({
         success: true,
@@ -849,7 +941,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { limit } = request.query;
 
-      const creators = await creatorsService.getRecent(limit);
+      const creators = await creatorsService.getRecent(limit, request.user!.id);
 
       return reply.send({
         success: true,
@@ -879,7 +971,11 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { name, description } = request.body;
 
-      const creator = await creatorsService.quickCreate(name, description);
+      const creator = await creatorsService.quickCreate(
+        name,
+        description,
+        request.user!.id,
+      );
 
       return reply.status(201).send({
         success: true,

@@ -59,6 +59,7 @@ export const listCreatorsQuerySchema = z
     minVideoCount: z.coerce.number().int().min(0).optional(),
     maxVideoCount: z.coerce.number().int().min(0).optional(),
     hasProfilePicture: z.coerce.boolean().optional(),
+    isFavorite: z.coerce.boolean().optional(),
     studioIds: z
       .preprocess(
         parseCommaSeparatedIds,
@@ -101,6 +102,7 @@ const creatorSchema = z.object({
   face_thumbnail_path: z.string().optional().nullable(),
   profile_picture_url: z.string().optional(),
   face_thumbnail_url: z.string().optional(),
+  is_favorite: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
   // Enhanced fields
@@ -229,6 +231,13 @@ export const studioListResponseSchema = z.object({
 export const messageResponseSchema = z.object({
   success: z.literal(true),
   message: z.string(),
+});
+
+export const favoriteCheckResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    is_favorite: z.boolean(),
+  }),
 });
 
 export const errorResponseSchema = z.object({

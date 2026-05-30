@@ -301,6 +301,7 @@ export class CreatorsRelationshipsService {
         (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
           ? `/api/creators/${creator.id}/picture?type=face`
           : undefined,
+      is_favorite: false,
       created_at:
         creator.createdAt instanceof Date
           ? creator.createdAt.toISOString()

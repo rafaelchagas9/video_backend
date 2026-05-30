@@ -92,6 +92,7 @@ export class StudiosRelationshipsService {
       face_thumbnail_url: c.face_thumbnail_path
         ? `/api/creators/${c.id}/picture?type=face`
         : undefined,
+      is_favorite: false,
       created_at: new Date(c.created_at).toISOString(),
       updated_at: new Date(c.updated_at).toISOString(),
     }));

@@ -27,6 +27,7 @@ import {
   playlistsTable,
   playlistVideosTable,
   favoritesTable,
+  creatorFavoritesTable,
   bookmarksTable,
   ratingsTable,
 } from "./content.schema";
@@ -59,6 +60,7 @@ export const usersRelations = relations(usersTable, ({ many }) => ({
   accounts: many(accountsTable),
   playlists: many(playlistsTable),
   favorites: many(favoritesTable),
+  creatorFavorites: many(creatorFavoritesTable),
   bookmarks: many(bookmarksTable),
   videoStats: many(videoStatsTable),
   triageProgress: many(triageProgressTable),
@@ -203,6 +205,7 @@ export const creatorsRelations = relations(creatorsTable, ({ many }) => ({
   creatorPlatforms: many(creatorPlatformsTable),
   creatorSocialLinks: many(creatorSocialLinksTable),
   creatorAliases: many(creatorAliasesTable),
+  creatorFavorites: many(creatorFavoritesTable),
 }));
 
 // Video-Creator junction relations
@@ -373,6 +376,20 @@ export const favoritesRelations = relations(favoritesTable, ({ one }) => ({
     references: [videosTable.id],
   }),
 }));
+
+export const creatorFavoritesRelations = relations(
+  creatorFavoritesTable,
+  ({ one }) => ({
+    user: one(usersTable, {
+      fields: [creatorFavoritesTable.userId],
+      references: [usersTable.id],
+    }),
+    creator: one(creatorsTable, {
+      fields: [creatorFavoritesTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+  }),
+);
 
 // Bookmarks relations
 export const bookmarksRelations = relations(bookmarksTable, ({ one }) => ({

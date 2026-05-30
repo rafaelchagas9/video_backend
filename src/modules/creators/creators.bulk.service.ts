@@ -58,6 +58,7 @@ export class CreatorsBulkService {
             description: existing.description,
             profile_picture_path: existing.profilePicturePath,
             face_thumbnail_path: existing.faceThumbnailPath,
+            is_favorite: false,
             created_at: existing.createdAt.toISOString(),
             updated_at: existing.updatedAt.toISOString(),
           };

@@ -10,6 +10,7 @@ import {
   ratingsTable,
   playlistsTable,
   favoritesTable,
+  creatorFavoritesTable,
   bookmarksTable,
 } from "@/database/schema";
 import { env } from "@/config/env";
@@ -153,6 +154,7 @@ export class BackupService {
       ratings,
       playlists,
       favorites,
+      creatorFavorites,
       bookmarks,
     ] = await Promise.all([
       db
@@ -174,6 +176,7 @@ export class BackupService {
       db.select().from(ratingsTable),
       db.select().from(playlistsTable),
       db.select().from(favoritesTable),
+      db.select().from(creatorFavoritesTable),
       db.select().from(bookmarksTable),
     ]);
 
@@ -191,6 +194,7 @@ export class BackupService {
         ratings,
         playlists,
         favorites,
+        creator_favorites: creatorFavorites,
         bookmarks,
       },
     };

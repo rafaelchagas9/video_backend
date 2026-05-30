@@ -2,6 +2,7 @@ import { pgTable, serial, text, integer, real, timestamp, index, primaryKey, che
 import { sql } from 'drizzle-orm';
 import { usersTable } from './users.schema';
 import { videosTable } from './videos.schema';
+import { creatorsTable } from './organization.schema';
 
 // Playlists table
 export const playlistsTable = pgTable('playlists', {
@@ -34,6 +35,17 @@ export const favoritesTable = pgTable('favorites', {
 }, (table) => ({
   pk: primaryKey({ columns: [table.userId, table.videoId] }),
   userIdx: index('idx_favorites_user').on(table.userId),
+}));
+
+// Creator favorites table
+export const creatorFavoritesTable = pgTable('creator_favorites', {
+  userId: integer('user_id').notNull().references(() => usersTable.id, { onDelete: 'cascade' }),
+  creatorId: integer('creator_id').notNull().references(() => creatorsTable.id, { onDelete: 'cascade' }),
+  addedAt: timestamp('added_at').defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.userId, table.creatorId] }),
+  userIdx: index('idx_creator_favorites_user').on(table.userId),
+  creatorIdx: index('idx_creator_favorites_creator').on(table.creatorId),
 }));
 
 // Bookmarks table
@@ -70,6 +82,8 @@ export type PlaylistVideo = typeof playlistVideosTable.$inferSelect;
 export type NewPlaylistVideo = typeof playlistVideosTable.$inferInsert;
 export type Favorite = typeof favoritesTable.$inferSelect;
 export type NewFavorite = typeof favoritesTable.$inferInsert;
+export type CreatorFavorite = typeof creatorFavoritesTable.$inferSelect;
+export type NewCreatorFavorite = typeof creatorFavoritesTable.$inferInsert;
 export type Bookmark = typeof bookmarksTable.$inferSelect;
 export type NewBookmark = typeof bookmarksTable.$inferInsert;
 export type Rating = typeof ratingsTable.$inferSelect;

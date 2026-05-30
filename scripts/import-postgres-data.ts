@@ -39,6 +39,7 @@ const TABLES_TO_IMPORT = [
   'studio_social_links',
   'playlists',
   'favorites',
+  'creator_favorites',
   'bookmarks',
   'ratings',
   'video_stats',

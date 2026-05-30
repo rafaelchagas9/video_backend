@@ -41,6 +41,7 @@ const TABLES_TO_EXPORT = [
   // User features
   'playlists',
   'favorites',
+  'creator_favorites',
   'bookmarks',
   'ratings',
   'video_stats',

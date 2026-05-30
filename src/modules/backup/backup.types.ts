@@ -19,6 +19,7 @@ export interface ExportData {
     ratings: unknown[];
     playlists: unknown[];
     favorites: unknown[];
+    creator_favorites: unknown[];
     bookmarks: unknown[];
   };
 }

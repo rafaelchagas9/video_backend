@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
-import { creatorsTable } from "@/database/schema";
+import { creatorFavoritesTable, creatorsTable } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { existsSync, unlinkSync } from "fs";
@@ -14,7 +14,10 @@ import type {
 } from "./creators.types";
 
 export class CreatorsService {
-  async list(options: ListCreatorsOptions = {}): Promise<PaginatedCreators> {
+  async list(
+    options: ListCreatorsOptions = {},
+    userId?: number,
+  ): Promise<PaginatedCreators> {
     const {
       page = 1,
       limit = 20,
@@ -24,6 +27,7 @@ export class CreatorsService {
       minVideoCount,
       maxVideoCount,
       hasProfilePicture,
+      isFavorite,
       studioIds,
       missing,
       complete,
@@ -50,6 +54,17 @@ export class CreatorsService {
       whereConditions.push(sql`c.profile_picture_path IS NOT NULL`);
     } else if (hasProfilePicture === false) {
       whereConditions.push(sql`c.profile_picture_path IS NULL`);
+    }
+
+    if (isFavorite === true && userId) {
+      whereConditions.push(sql`EXISTS (
+        SELECT 1
+        FROM creator_favorites cf_only
+        WHERE cf_only.user_id = ${userId}
+          AND cf_only.creator_id = c.id
+      )`);
+    } else if (isFavorite === true) {
+      whereConditions.push(sql`false`);
     }
 
     // Video count filters
@@ -188,7 +203,8 @@ export class CreatorsService {
         c.*,
         COALESCE(MAX(vc.video_count), 0) as linked_video_count,
         COALESCE(MAX(pc.platform_count), 0) as platform_count,
-        COALESCE(MAX(sc.social_link_count), 0) as social_link_count
+        COALESCE(MAX(sc.social_link_count), 0) as social_link_count,
+        ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       ${baseFrom}
       ${studioJoin}
       ${platformSearchJoin}
@@ -233,12 +249,15 @@ export class CreatorsService {
     };
   }
 
-  async findById(id: number): Promise<Creator> {
-    const result = await db
-      .select()
-      .from(creatorsTable)
-      .where(eq(creatorsTable.id, id))
-      .limit(1);
+  async findById(id: number, userId?: number): Promise<Creator> {
+    const result = await db.execute(sql`
+      SELECT
+        c.*,
+        ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
+      FROM creators c
+      WHERE c.id = ${id}
+      LIMIT 1
+    `);
 
     if (!result || result.length === 0) {
       throw new NotFoundError(`Creator not found with id: ${id}`);
@@ -247,7 +266,7 @@ export class CreatorsService {
     return this.mapToSnakeCase(result[0]);
   }
 
-  async create(input: CreateCreatorInput): Promise<Creator> {
+  async create(input: CreateCreatorInput, userId?: number): Promise<Creator> {
     try {
       const result = await db
         .insert(creatorsTable)
@@ -261,7 +280,7 @@ export class CreatorsService {
         throw new Error("Failed to create creator");
       }
 
-      return this.findById(result[0].id);
+      return this.findById(result[0].id, userId);
     } catch (error: any) {
       if (error.code === "23505") {
         // UNIQUE violation
@@ -273,7 +292,11 @@ export class CreatorsService {
     }
   }
 
-  async update(id: number, input: UpdateCreatorInput): Promise<Creator> {
+  async update(
+    id: number,
+    input: UpdateCreatorInput,
+    userId?: number,
+  ): Promise<Creator> {
     await this.findById(id); // Ensure exists
 
     const updates: any = {};
@@ -287,7 +310,7 @@ export class CreatorsService {
     }
 
     if (Object.keys(updates).length === 0) {
-      return this.findById(id);
+      return this.findById(id, userId);
     }
 
     updates.updatedAt = new Date();
@@ -298,7 +321,7 @@ export class CreatorsService {
         .set(updates)
         .where(eq(creatorsTable.id, id));
 
-      return this.findById(id);
+      return this.findById(id, userId);
     } catch (error: any) {
       if (error.code === "23505") {
         // UNIQUE violation
@@ -347,6 +370,7 @@ export class CreatorsService {
   async autocomplete(
     query: string,
     limitParam: number = 10,
+    userId?: number,
   ): Promise<EnhancedCreator[]> {
     if (!query || query.trim().length < 1) {
       return [];
@@ -358,7 +382,8 @@ export class CreatorsService {
       SELECT c.*,
         COALESCE(vc.video_count, 0) as linked_video_count,
         COALESCE(pc.platform_count, 0) as platform_count,
-        COALESCE(sc.social_link_count, 0) as social_link_count
+        COALESCE(sc.social_link_count, 0) as social_link_count,
+        ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       FROM creators c
       LEFT JOIN (
         SELECT creator_id, COUNT(*) as video_count
@@ -403,12 +428,16 @@ export class CreatorsService {
     ) as EnhancedCreator[];
   }
 
-  async getRecent(limitParam: number = 10): Promise<EnhancedCreator[]> {
+  async getRecent(
+    limitParam: number = 10,
+    userId?: number,
+  ): Promise<EnhancedCreator[]> {
     const rawQuery = sql`
       SELECT c.*,
         COALESCE(vc.video_count, 0) as linked_video_count,
         COALESCE(pc.platform_count, 0) as platform_count,
-        COALESCE(sc.social_link_count, 0) as social_link_count
+        COALESCE(sc.social_link_count, 0) as social_link_count,
+        ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       FROM creators c
       LEFT JOIN (
         SELECT creator_id, COUNT(*) as video_count
@@ -449,8 +478,28 @@ export class CreatorsService {
     ) as EnhancedCreator[];
   }
 
-  async quickCreate(name: string, description?: string): Promise<Creator> {
-    return this.create({ name: name.trim(), description: description?.trim() });
+  async quickCreate(
+    name: string,
+    description?: string,
+    userId?: number,
+  ): Promise<Creator> {
+    return this.create(
+      { name: name.trim(), description: description?.trim() },
+      userId,
+    );
+  }
+
+  private favoriteSelectSql(userId: number | undefined, creatorIdSql: ReturnType<typeof sql>) {
+    if (!userId) {
+      return sql`false`;
+    }
+
+    return sql`EXISTS (
+      SELECT 1
+      FROM ${creatorFavoritesTable} cf
+      WHERE cf.user_id = ${userId}
+        AND cf.creator_id = ${creatorIdSql}
+    )`;
   }
 
   // Helper to map Drizzle results (camelCase) to API format (snake_case)
@@ -478,6 +527,7 @@ export class CreatorsService {
         (creator.faceThumbnailPath ?? creator.face_thumbnail_path)
           ? `/api/creators/${creator.id}/picture?type=face`
           : undefined,
+      is_favorite: Boolean(creator.is_favorite),
       created_at: toISOString(creator.createdAt ?? creator.created_at),
       updated_at: toISOString(creator.updatedAt ?? creator.updated_at),
       // Pass through any additional fields (for enhanced creators)

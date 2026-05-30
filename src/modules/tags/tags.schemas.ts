@@ -62,7 +62,7 @@ const tagWithPathSchema = tagSchema.extend({
 
 const tagTreeNodeSchema: z.ZodType<any> = z.lazy(() =>
   tagSchema.extend({
-    children: z.array(tagTreeNodeSchema),
+    children: z.array(tagTreeNodeSchema).optional(),
   }),
 );
 

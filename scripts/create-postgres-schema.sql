@@ -324,6 +324,19 @@ CREATE TABLE favorites (
 
 CREATE INDEX idx_favorites_user ON favorites(user_id);
 
+CREATE TABLE creator_favorites (
+    user_id INTEGER NOT NULL,
+    creator_id INTEGER NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (user_id, creator_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (creator_id) REFERENCES creators(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_creator_favorites_user ON creator_favorites(user_id);
+CREATE INDEX idx_creator_favorites_creator ON creator_favorites(creator_id);
+
 -- Bookmarks
 CREATE TABLE bookmarks (
     id SERIAL PRIMARY KEY,
