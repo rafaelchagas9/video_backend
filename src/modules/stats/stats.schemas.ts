@@ -2,7 +2,9 @@ import { z } from "zod";
 
 // Query schemas
 export const historyQuerySchema = z.object({
-  days: z.coerce.number().min(1).max(365).default(30),
+  // Upper bound is effectively "all time" (~100 years); multi-day ranges are
+  // collapsed to one snapshot per day by the stats services.
+  days: z.coerce.number().min(1).max(36500).default(30),
   limit: z.coerce.number().min(1).max(1000).default(100),
 });
 
@@ -134,8 +136,10 @@ const topItemSchema = z.object({
 });
 
 const currentContentStatsSchema = z.object({
+  total_video_count: z.number(),
   videos_without_tags: z.number(),
   videos_without_creators: z.number(),
+  videos_without_studios: z.number(),
   videos_without_ratings: z.number(),
   videos_without_thumbnails: z.number(),
   videos_without_storyboards: z.number(),
@@ -149,8 +153,10 @@ const currentContentStatsSchema = z.object({
 
 const contentSnapshotSchema = z.object({
   id: z.number(),
+  total_video_count: z.number(),
   videos_without_tags: z.number(),
   videos_without_creators: z.number(),
+  videos_without_studios: z.number(),
   videos_without_ratings: z.number(),
   videos_without_thumbnails: z.number(),
   videos_without_storyboards: z.number(),

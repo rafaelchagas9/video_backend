@@ -37,8 +37,11 @@ export const statsLibrarySnapshotsTable = pgTable('stats_library_snapshots', {
 // Content organization statistics snapshots (daily)
 export const statsContentSnapshotsTable = pgTable('stats_content_snapshots', {
   id: serial('id').primaryKey(),
+  // Total videos at snapshot time — denominator for organization coverage %.
+  totalVideoCount: integer('total_video_count').default(0).notNull(),
   videosWithoutTags: integer('videos_without_tags').notNull(),
   videosWithoutCreators: integer('videos_without_creators').notNull(),
+  videosWithoutStudios: integer('videos_without_studios').default(0).notNull(),
   videosWithoutRatings: integer('videos_without_ratings').notNull(),
   videosWithoutThumbnails: integer('videos_without_thumbnails').notNull(),
   videosWithoutStoryboards: integer('videos_without_storyboards').notNull(),

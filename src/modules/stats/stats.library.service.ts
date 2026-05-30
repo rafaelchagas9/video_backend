@@ -171,12 +171,31 @@ export class LibraryStatsService {
     days: number = 30,
     limit: number = 100,
   ): Promise<LibrarySnapshot[]> {
-    const query = sql`
-      SELECT * FROM stats_library_snapshots
-      WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-      ORDER BY created_at DESC
-      LIMIT ${limit}
-    `;
+    // For multi-day ranges, collapse to one snapshot per day (the latest of
+    // each day) so a long range isn't truncated by intraday snapshot volume.
+    // Single-day ranges keep full intraday granularity. Rows are always
+    // returned in ascending chronological order for charting.
+    const query =
+      days <= 1
+        ? sql`
+            SELECT * FROM (
+              SELECT * FROM stats_library_snapshots
+              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
+              ORDER BY created_at DESC
+              LIMIT ${limit}
+            ) t
+            ORDER BY created_at ASC
+          `
+        : sql`
+            SELECT * FROM (
+              SELECT DISTINCT ON (date_trunc('day', created_at)) *
+              FROM stats_library_snapshots
+              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
+              ORDER BY date_trunc('day', created_at) DESC, created_at DESC
+              LIMIT ${limit}
+            ) t
+            ORDER BY created_at ASC
+          `;
 
     const rows = await db.execute(query);
 

@@ -1,4 +1,4 @@
-import { eq, sql, and, inArray } from "drizzle-orm";
+import { eq, sql, and, inArray, desc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   videosTable,
@@ -10,6 +10,9 @@ import {
   thumbnailsTable,
   favoritesTable,
   storyboardsTable,
+  watchedDirectoriesTable,
+  videoFaceDetectionsTable,
+  faceImagesTable,
 } from "@/database/schema";
 import { BadRequestError, NotFoundError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
@@ -20,6 +23,7 @@ import type {
   RandomVideoOptions,
   Video,
   UpdateVideoInput,
+  UnavailableVideo,
 } from "./videos.types";
 import { computeFileHash } from "@/utils/file-utils";
 import { metadataService } from "./metadata.service";
@@ -29,6 +33,7 @@ import { creatorsRelationshipsService } from "@/modules/creators/creators.relati
 import { tagsService } from "@/modules/tags/tags.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
 import { buildVideoFilters } from "./videos.query-builder";
+import { videosBulkService } from "./videos.bulk.service";
 
 // Import specialized services
 export { videosSearchService } from "./videos.search.service";
@@ -383,48 +388,12 @@ export class VideosService {
   async delete(id: number): Promise<void> {
     const video = await this.findById(id); // Ensure exists
 
-    // Query associated thumbnail paths
-    const thumbnails = await db
-      .select({ filePath: thumbnailsTable.filePath })
-      .from(thumbnailsTable)
-      .where(eq(thumbnailsTable.videoId, id));
-
-    // Query associated storyboard paths
-    const storyboards = await db
-      .select({ spritePath: storyboardsTable.spritePath, vttPath: storyboardsTable.vttPath })
-      .from(storyboardsTable)
-      .where(eq(storyboardsTable.videoId, id));
+    // Delete derived artifact files (thumbnails, storyboards, face images)
+    await videosBulkService.deleteVideoArtifactFiles([id]);
 
     const fs = await import("fs");
 
-    // Delete physical files
-    for (const thumbnail of thumbnails) {
-      if (thumbnail.filePath && fs.existsSync(thumbnail.filePath)) {
-        try {
-          fs.unlinkSync(thumbnail.filePath);
-        } catch (error) {
-          logger.warn({ error, path: thumbnail.filePath }, "Failed to delete thumbnail file");
-        }
-      }
-    }
-
-    for (const storyboard of storyboards) {
-      if (storyboard.spritePath && fs.existsSync(storyboard.spritePath)) {
-        try {
-          fs.unlinkSync(storyboard.spritePath);
-        } catch (error) {
-          logger.warn({ error, path: storyboard.spritePath }, "Failed to delete storyboard sprite");
-        }
-      }
-      if (storyboard.vttPath && fs.existsSync(storyboard.vttPath)) {
-        try {
-          fs.unlinkSync(storyboard.vttPath);
-        } catch (error) {
-          logger.warn({ error, path: storyboard.vttPath }, "Failed to delete storyboard VTT");
-        }
-      }
-    }
-
+    // Delete the source video file (no-op when already removed/unavailable)
     if (video.file_path && fs.existsSync(video.file_path)) {
       try {
         fs.unlinkSync(video.file_path);
@@ -453,6 +422,228 @@ export class VideosService {
       .where(eq(videosTable.id, id));
 
     return { ...video, is_available: exists, last_verified_at: lastVerifiedAt.toISOString() };
+  }
+
+  /**
+   * List videos currently marked unavailable (their source file is missing from
+   * disk), enriched with a summary of the derived artifacts that can be reclaimed
+   * by purging them.
+   */
+  async listUnavailable(options: {
+    page: number;
+    limit: number;
+    directoryId?: number;
+  }): Promise<{
+    data: UnavailableVideo[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const { page, limit, directoryId } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions = [eq(videosTable.isAvailable, false)];
+    if (directoryId !== undefined) {
+      conditions.push(eq(videosTable.directoryId, directoryId));
+    }
+    const whereClause = and(...conditions);
+
+    const [countRow] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(videosTable)
+      .where(whereClause);
+    const total = countRow?.total ?? 0;
+
+    const rows = await db
+      .select({
+        id: videosTable.id,
+        filePath: videosTable.filePath,
+        fileName: videosTable.fileName,
+        directoryId: videosTable.directoryId,
+        directoryPath: watchedDirectoriesTable.path,
+        fileSizeBytes: videosTable.fileSizeBytes,
+        lastVerifiedAt: videosTable.lastVerifiedAt,
+        updatedAt: videosTable.updatedAt,
+      })
+      .from(videosTable)
+      .leftJoin(
+        watchedDirectoriesTable,
+        eq(videosTable.directoryId, watchedDirectoriesTable.id),
+      )
+      .where(whereClause)
+      .orderBy(desc(videosTable.updatedAt))
+      .limit(limit)
+      .offset(offset);
+
+    const ids = rows.map((row) => row.id);
+
+    // Per-video artifact summaries (empty maps when there are no rows)
+    const thumbnailMap = new Map<number, { id: number; bytes: number }>();
+    const storyboardMap = new Map<number, number>();
+    const faceMap = new Map<number, { count: number; bytes: number }>();
+
+    if (ids.length > 0) {
+      const [thumbnails, storyboards, faces] = await Promise.all([
+        db
+          .select({
+            id: thumbnailsTable.id,
+            videoId: thumbnailsTable.videoId,
+            bytes: thumbnailsTable.fileSizeBytes,
+          })
+          .from(thumbnailsTable)
+          .where(inArray(thumbnailsTable.videoId, ids)),
+        db
+          .select({
+            videoId: storyboardsTable.videoId,
+            bytes: storyboardsTable.spriteSizeBytes,
+          })
+          .from(storyboardsTable)
+          .where(inArray(storyboardsTable.videoId, ids)),
+        db
+          .select({
+            videoId: videoFaceDetectionsTable.videoId,
+            count: sql<number>`count(${faceImagesTable.id})::int`,
+            bytes: sql<number>`coalesce(sum(${faceImagesTable.fileSizeBytes}), 0)::int`,
+          })
+          .from(faceImagesTable)
+          .innerJoin(
+            videoFaceDetectionsTable,
+            eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id),
+          )
+          .where(inArray(videoFaceDetectionsTable.videoId, ids))
+          .groupBy(videoFaceDetectionsTable.videoId),
+      ]);
+
+      for (const thumbnail of thumbnails) {
+        thumbnailMap.set(thumbnail.videoId, {
+          id: thumbnail.id,
+          bytes: thumbnail.bytes ?? 0,
+        });
+      }
+      for (const storyboard of storyboards) {
+        storyboardMap.set(storyboard.videoId, storyboard.bytes ?? 0);
+      }
+      for (const face of faces) {
+        faceMap.set(face.videoId, { count: face.count, bytes: face.bytes });
+      }
+    }
+
+    const data: UnavailableVideo[] = rows.map((row) => {
+      const thumbnail = thumbnailMap.get(row.id);
+      const hasThumbnail = thumbnail !== undefined;
+      const hasStoryboard = storyboardMap.has(row.id);
+      const faceSummary = faceMap.get(row.id);
+      const reclaimableBytes =
+        (thumbnail?.bytes ?? 0) +
+        (storyboardMap.get(row.id) ?? 0) +
+        (faceSummary?.bytes ?? 0);
+
+      return {
+        id: row.id,
+        file_path: row.filePath,
+        file_name: row.fileName,
+        directory_id: row.directoryId,
+        directory_path: row.directoryPath ?? null,
+        last_verified_at: row.lastVerifiedAt?.toISOString() ?? null,
+        thumbnail_url: thumbnail
+          ? `${API_PREFIX}/thumbnails/${thumbnail.id}/image`
+          : null,
+        artifacts: {
+          thumbnail: hasThumbnail,
+          storyboard: hasStoryboard,
+          face_count: faceSummary?.count ?? 0,
+          reclaimable_bytes: reclaimableBytes,
+        },
+      };
+    });
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
+   * Fully purge unavailable videos: deletes the database record plus all derived
+   * artifacts (thumbnails, storyboards, extracted face images, and the cascaded
+   * detection/stats/link rows).
+   *
+   * Only videos that are actually marked unavailable are purged — passing the id
+   * of an available video is a no-op, so the endpoint can never delete a video
+   * whose file is still present.
+   */
+  async purgeUnavailable(input: {
+    ids?: number[];
+    directoryId?: number;
+  }): Promise<{ deleted_count: number; deleted_ids: number[] }> {
+    const conditions = [eq(videosTable.isAvailable, false)];
+    if (input.ids && input.ids.length > 0) {
+      conditions.push(inArray(videosTable.id, input.ids));
+    }
+    if (input.directoryId !== undefined) {
+      conditions.push(eq(videosTable.directoryId, input.directoryId));
+    }
+
+    const targets = await db
+      .select({ id: videosTable.id })
+      .from(videosTable)
+      .where(and(...conditions));
+
+    const ids = targets.map((target) => target.id);
+    if (ids.length === 0) {
+      return { deleted_count: 0, deleted_ids: [] };
+    }
+
+    await videosBulkService.bulkDelete(ids);
+
+    logger.info({ deletedCount: ids.length }, "Purged unavailable videos");
+    return { deleted_count: ids.length, deleted_ids: ids };
+  }
+
+  /**
+   * Re-verify the on-disk availability of videos (optionally scoped to a
+   * directory). Useful before purging so files that have returned are no longer
+   * counted as unavailable.
+   */
+  async verifyAvailabilityBulk(options: {
+    directoryId?: number;
+  }): Promise<{ checked: number; now_available: number; still_missing: number }> {
+    const conditions =
+      options.directoryId !== undefined
+        ? [eq(videosTable.directoryId, options.directoryId)]
+        : [];
+
+    const videos = await db
+      .select({ id: videosTable.id, filePath: videosTable.filePath })
+      .from(videosTable)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+
+    const fs = await import("fs");
+    const now = new Date();
+    let nowAvailable = 0;
+    let stillMissing = 0;
+
+    for (const video of videos) {
+      const exists = fs.existsSync(video.filePath);
+      if (exists) {
+        nowAvailable++;
+      } else {
+        stillMissing++;
+      }
+      await db
+        .update(videosTable)
+        .set({ isAvailable: exists, lastVerifiedAt: now })
+        .where(eq(videosTable.id, video.id));
+    }
+
+    return {
+      checked: videos.length,
+      now_available: nowAvailable,
+      still_missing: stillMissing,
+    };
   }
 
   /**

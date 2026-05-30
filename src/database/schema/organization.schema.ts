@@ -182,6 +182,28 @@ export const creatorSocialLinksTable = pgTable(
   }),
 );
 
+// Creator aliases (alternate / former names the creator is known by)
+export const creatorAliasesTable = pgTable(
+  "creator_aliases",
+  {
+    id: serial("id").primaryKey(),
+    creatorId: integer("creator_id")
+      .notNull()
+      .references(() => creatorsTable.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    creatorIdx: index("idx_creator_aliases_creator").on(table.creatorId),
+    nameIdx: index("idx_creator_aliases_name").on(table.name),
+    uniqueCreatorAlias: unique("unique_creator_alias").on(
+      table.creatorId,
+      table.name,
+    ),
+  }),
+);
+
 // Studio social media links
 export const studioSocialLinksTable = pgTable(
   "studio_social_links",
@@ -212,5 +234,7 @@ export type CreatorPlatform = typeof creatorPlatformsTable.$inferSelect;
 export type NewCreatorPlatform = typeof creatorPlatformsTable.$inferInsert;
 export type CreatorSocialLink = typeof creatorSocialLinksTable.$inferSelect;
 export type NewCreatorSocialLink = typeof creatorSocialLinksTable.$inferInsert;
+export type CreatorAlias = typeof creatorAliasesTable.$inferSelect;
+export type NewCreatorAlias = typeof creatorAliasesTable.$inferInsert;
 export type StudioSocialLink = typeof studioSocialLinksTable.$inferSelect;
 export type NewStudioSocialLink = typeof studioSocialLinksTable.$inferInsert;

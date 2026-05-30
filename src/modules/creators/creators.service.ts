@@ -34,11 +34,14 @@ export class CreatorsService {
     // Build WHERE conditions as SQL fragments
     const whereConditions: any[] = [];
 
-    // Search filter (name OR platform username)
+    // Search filter (name OR platform username OR alias)
     if (search) {
       const searchPattern = `%${search}%`;
       whereConditions.push(
-        sql`(c.name ILIKE ${searchPattern} OR cp_search.username ILIKE ${searchPattern})`,
+        sql`(c.name ILIKE ${searchPattern} OR cp_search.username ILIKE ${searchPattern} OR EXISTS (
+          SELECT 1 FROM creator_aliases ca_search
+          WHERE ca_search.creator_id = c.id AND ca_search.name ILIKE ${searchPattern}
+        ))`,
       );
     }
 
@@ -369,7 +372,10 @@ export class CreatorsService {
         SELECT creator_id, COUNT(*) as social_link_count
         FROM creator_social_links GROUP BY creator_id
       ) sc ON c.id = sc.creator_id
-      WHERE c.name ILIKE ${searchTerm}
+      WHERE (c.name ILIKE ${searchTerm} OR EXISTS (
+        SELECT 1 FROM creator_aliases ca_search
+        WHERE ca_search.creator_id = c.id AND ca_search.name ILIKE ${searchTerm}
+      ))
       ORDER BY c.name ASC
       LIMIT ${limitParam}
     `;

@@ -91,6 +91,7 @@ const envSchema = z.object({
     .default("70")
     .transform(Number)
     .pipe(z.number().min(1).max(100)),
+  STORYBOARD_MAX_CONCURRENT: z.string().default("1").transform(Number),
 
   // File Scanning
   DEFAULT_SCAN_INTERVAL_MINUTES: z.string().default("30").transform(Number),

@@ -111,8 +111,10 @@ export interface TopItem {
 
 export interface ContentSnapshot {
   id: number;
+  total_video_count: number;
   videos_without_tags: number;
   videos_without_creators: number;
+  videos_without_studios: number;
   videos_without_ratings: number;
   videos_without_thumbnails: number;
   videos_without_storyboards: number;
@@ -127,8 +129,10 @@ export interface ContentSnapshot {
 
 export interface ContentSnapshotRow {
   id: number;
+  total_video_count: number;
   videos_without_tags: number;
   videos_without_creators: number;
+  videos_without_studios: number;
   videos_without_ratings: number;
   videos_without_thumbnails: number;
   videos_without_storyboards: number;
@@ -142,8 +146,10 @@ export interface ContentSnapshotRow {
 }
 
 export interface CurrentContentStats {
+  total_video_count: number;
   videos_without_tags: number;
   videos_without_creators: number;
+  videos_without_studios: number;
   videos_without_ratings: number;
   videos_without_thumbnails: number;
   videos_without_storyboards: number;

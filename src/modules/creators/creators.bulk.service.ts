@@ -1,6 +1,7 @@
 import { creatorsService } from "./creators.service";
 import { creatorsPlatformsService } from "./creators.platforms.service";
 import { creatorsSocialService } from "./creators.social.service";
+import { creatorsAliasesService } from "./creators.aliases.service";
 import { creatorsRelationshipsService } from "./creators.relationships.service";
 import { logger } from "@/utils/logger";
 import type {
@@ -202,6 +203,39 @@ export class CreatorsBulkService {
           }
         }
 
+        // Compute alias changes
+        if (item.aliases) {
+          const existingAliases = await creatorsAliasesService.getAliases(
+            existingCreator.id,
+          );
+          let add = 0,
+            update = 0,
+            remove = 0;
+
+          for (const a of item.aliases) {
+            const existing = existingAliases.find((ea) => ea.name === a.name);
+            if (existing) {
+              if (existing.note !== (a.note ?? null)) update++;
+            } else {
+              add++;
+            }
+          }
+
+          if (mode === "replace") {
+            remove = existingAliases.filter(
+              (ea) => !item.aliases!.some((a) => a.name === ea.name),
+            ).length;
+          }
+
+          if (add > 0 || update > 0 || remove > 0) {
+            changes.aliases = {
+              add,
+              update,
+              remove: mode === "replace" ? remove : undefined,
+            };
+          }
+        }
+
         // Compute video link changes
         if (item.link_video_ids) {
           const existingVideos = await creatorsRelationshipsService.getVideos(
@@ -236,6 +270,9 @@ export class CreatorsBulkService {
         }
         if (item.social_links && item.social_links.length > 0) {
           changes.social_links = { add: item.social_links.length, update: 0 };
+        }
+        if (item.aliases && item.aliases.length > 0) {
+          changes.aliases = { add: item.aliases.length, update: 0 };
         }
         if (item.link_video_ids && item.link_video_ids.length > 0) {
           changes.videos = { add: item.link_video_ids.length };
@@ -342,6 +379,23 @@ export class CreatorsBulkService {
           await creatorsSocialService.bulkUpsertSocialLinks(
             creatorId,
             item.social_links,
+          );
+        }
+
+        // Handle aliases
+        if (item.aliases && item.aliases.length > 0) {
+          if (mode === "replace") {
+            const existing =
+              await creatorsAliasesService.getAliases(creatorId);
+            for (const ea of existing) {
+              if (!item.aliases.some((a) => a.name === ea.name)) {
+                await creatorsAliasesService.deleteAlias(ea.id);
+              }
+            }
+          }
+          await creatorsAliasesService.bulkUpsertAliases(
+            creatorId,
+            item.aliases,
           );
         }
 

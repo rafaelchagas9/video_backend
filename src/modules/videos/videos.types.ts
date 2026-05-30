@@ -240,3 +240,19 @@ export interface RelatedVideosResult {
     candidate_count: number;
   };
 }
+
+export interface UnavailableVideo {
+  id: number;
+  file_path: string;
+  file_name: string;
+  directory_id: number;
+  directory_path: string | null;
+  last_verified_at: string | null;
+  thumbnail_url: string | null;
+  artifacts: {
+    thumbnail: boolean;
+    storyboard: boolean;
+    face_count: number;
+    reclaimable_bytes: number;
+  };
+}

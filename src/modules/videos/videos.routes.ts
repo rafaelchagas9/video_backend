@@ -57,6 +57,12 @@ import {
   bulkConditionalApplySchema,
   bulkConditionalApplyResponseSchema,
   duplicatesResponseSchema,
+  unavailableVideosQuerySchema,
+  unavailableVideosResponseSchema,
+  cleanupUnavailableSchema,
+  cleanupUnavailableResponseSchema,
+  verifyUnavailableSchema,
+  verifyUnavailableResponseSchema,
 } from "./videos.schemas";
 
 export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -207,6 +213,93 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         success: true,
         message: "Videos deleted successfully",
+      });
+    },
+  );
+
+  // List videos whose source file is missing from disk
+  app.get(
+    "/unavailable",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "List unavailable videos",
+        description:
+          "Returns videos marked unavailable (source file missing from disk), with a summary of the derived artifacts (thumbnail, storyboard, face images) that can be reclaimed by purging them.",
+        querystring: unavailableVideosQuerySchema,
+        response: {
+          200: unavailableVideosResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videosService.listUnavailable({
+        page: request.query.page,
+        limit: request.query.limit,
+        directoryId: request.query.directoryId,
+      });
+
+      return reply.send({
+        success: true,
+        ...result,
+      });
+    },
+  );
+
+  // Re-verify on-disk availability (so files that returned are no longer counted)
+  app.post(
+    "/unavailable/verify",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Re-verify video availability",
+        description:
+          "Re-checks the on-disk existence of videos (optionally scoped to a directory) and updates their availability flag. Useful before purging.",
+        body: verifyUnavailableSchema,
+        response: {
+          200: verifyUnavailableResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videosService.verifyAvailabilityBulk({
+        directoryId: request.body.directoryId,
+      });
+
+      return reply.send({
+        success: true,
+        ...result,
+      });
+    },
+  );
+
+  // Fully purge unavailable videos and all their artifacts
+  app.post(
+    "/unavailable/cleanup",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Purge unavailable videos",
+        description:
+          "Fully deletes unavailable videos (DB record + thumbnails, storyboards, extracted face images, and cascaded rows). Scope with `ids`, `directoryId`, or `all: true`. Only videos actually marked unavailable are affected.",
+        body: cleanupUnavailableSchema,
+        response: {
+          200: cleanupUnavailableResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videosService.purgeUnavailable({
+        ids: request.body.ids,
+        directoryId: request.body.directoryId,
+      });
+
+      return reply.send({
+        success: true,
+        ...result,
       });
     },
   );

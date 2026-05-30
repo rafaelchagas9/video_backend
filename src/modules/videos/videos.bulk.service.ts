@@ -8,6 +8,8 @@ import {
   favoritesTable,
   thumbnailsTable,
   storyboardsTable,
+  videoFaceDetectionsTable,
+  faceImagesTable,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
 import type { ListVideosOptions } from "./videos.types";
@@ -26,27 +28,17 @@ export class VideosBulkService {
     if (ids.length === 0) return;
 
     try {
-      // 1. Fetch all matching videos
+      // 1. Fetch source file paths for the videos being deleted
       const videos = await db
-        .select({ id: videosTable.id, filePath: videosTable.filePath })
+        .select({ filePath: videosTable.filePath })
         .from(videosTable)
         .where(inArray(videosTable.id, ids));
 
-      // 2. Fetch all associated thumbnails
-      const thumbnails = await db
-        .select({ filePath: thumbnailsTable.filePath })
-        .from(thumbnailsTable)
-        .where(inArray(thumbnailsTable.videoId, ids));
+      // 2. Delete derived artifact files (thumbnails, storyboards, face images)
+      await this.deleteVideoArtifactFiles(ids);
 
-      // 3. Fetch all associated storyboards
-      const storyboards = await db
-        .select({ spritePath: storyboardsTable.spritePath, vttPath: storyboardsTable.vttPath })
-        .from(storyboardsTable)
-        .where(inArray(storyboardsTable.videoId, ids));
-
+      // 3. Delete source video files (no-op for already-removed/unavailable files)
       const fs = await import("fs");
-
-      // 4. Delete physical files
       for (const video of videos) {
         if (video.filePath && fs.existsSync(video.filePath)) {
           try {
@@ -57,38 +49,68 @@ export class VideosBulkService {
         }
       }
 
-      for (const thumbnail of thumbnails) {
-        if (thumbnail.filePath && fs.existsSync(thumbnail.filePath)) {
-          try {
-            fs.unlinkSync(thumbnail.filePath);
-          } catch (error) {
-            logger.warn({ error, path: thumbnail.filePath }, "Failed to delete thumbnail file in bulk operation");
-          }
-        }
-      }
-
-      for (const storyboard of storyboards) {
-        if (storyboard.spritePath && fs.existsSync(storyboard.spritePath)) {
-          try {
-            fs.unlinkSync(storyboard.spritePath);
-          } catch (error) {
-            logger.warn({ error, path: storyboard.spritePath }, "Failed to delete storyboard sprite in bulk operation");
-          }
-        }
-        if (storyboard.vttPath && fs.existsSync(storyboard.vttPath)) {
-          try {
-            fs.unlinkSync(storyboard.vttPath);
-          } catch (error) {
-            logger.warn({ error, path: storyboard.vttPath }, "Failed to delete storyboard VTT in bulk operation");
-          }
-        }
-      }
-
-      // 5. Delete videos from database (CASCADE handles relations automatically)
+      // 4. Delete videos from database (CASCADE handles relations automatically)
       await db.delete(videosTable).where(inArray(videosTable.id, ids));
     } catch (error) {
       logger.error({ error, ids }, "Failed to execute bulk delete operation");
       throw error;
+    }
+  }
+
+  /**
+   * Delete the on-disk derived artifact files (thumbnails, storyboard
+   * sprite/VTT, and extracted face images) for the given videos.
+   *
+   * The corresponding database rows are removed separately via FK cascade when
+   * the video records are deleted, so this only handles the physical files that
+   * would otherwise be orphaned on disk.
+   */
+  async deleteVideoArtifactFiles(videoIds: number[]): Promise<void> {
+    if (videoIds.length === 0) return;
+
+    const [thumbnails, storyboards, faceImages] = await Promise.all([
+      db
+        .select({ filePath: thumbnailsTable.filePath })
+        .from(thumbnailsTable)
+        .where(inArray(thumbnailsTable.videoId, videoIds)),
+      db
+        .select({
+          spritePath: storyboardsTable.spritePath,
+          vttPath: storyboardsTable.vttPath,
+        })
+        .from(storyboardsTable)
+        .where(inArray(storyboardsTable.videoId, videoIds)),
+      db
+        .select({ filePath: faceImagesTable.filePath })
+        .from(faceImagesTable)
+        .innerJoin(
+          videoFaceDetectionsTable,
+          eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id),
+        )
+        .where(inArray(videoFaceDetectionsTable.videoId, videoIds)),
+    ]);
+
+    const paths: string[] = [];
+    for (const thumbnail of thumbnails) {
+      if (thumbnail.filePath) paths.push(thumbnail.filePath);
+    }
+    for (const storyboard of storyboards) {
+      if (storyboard.spritePath) paths.push(storyboard.spritePath);
+      if (storyboard.vttPath) paths.push(storyboard.vttPath);
+    }
+    for (const faceImage of faceImages) {
+      if (faceImage.filePath) paths.push(faceImage.filePath);
+    }
+
+    const fs = await import("fs");
+    for (const path of paths) {
+      if (fs.existsSync(path)) {
+        try {
+          fs.unlinkSync(path);
+        } catch (error) {
+          logger.warn({ error, path }, "Failed to delete video artifact file");
+        }
+      }
     }
   }
 

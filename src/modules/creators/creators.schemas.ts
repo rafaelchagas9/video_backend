@@ -6,6 +6,8 @@ export {
   updateCreatorSchema,
   createSocialLinkSchema,
   updateSocialLinkSchema,
+  createAliasSchema,
+  updateAliasSchema,
 } from "./creators.types";
 export {
   createCreatorPlatformSchema,
@@ -129,6 +131,14 @@ const socialLinkSchema = z.object({
   created_at: z.string(),
 });
 
+const aliasSchema = z.object({
+  id: z.number(),
+  creator_id: z.number(),
+  name: z.string(),
+  note: z.string().nullable(),
+  created_at: z.string(),
+});
+
 const studioSchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -200,6 +210,17 @@ export const socialLinkListResponseSchema = z.object({
   data: z.array(socialLinkSchema),
 });
 
+export const aliasResponseSchema = z.object({
+  success: z.literal(true),
+  data: aliasSchema,
+  message: z.string().optional(),
+});
+
+export const aliasListResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(aliasSchema),
+});
+
 export const studioListResponseSchema = z.object({
   success: z.literal(true),
   data: z.array(studioSchema),
@@ -234,6 +255,15 @@ export const bulkSocialLinkItemSchema = z.object({
 
 export const bulkSocialLinksSchema = z.object({
   items: z.array(bulkSocialLinkItemSchema).min(1).max(50),
+});
+
+export const bulkAliasItemSchema = z.object({
+  name: z.string().min(1).max(255),
+  note: z.string().max(500).optional(),
+});
+
+export const bulkAliasesSchema = z.object({
+  items: z.array(bulkAliasItemSchema).min(1).max(50),
 });
 
 export const pictureFromUrlSchema = z.object({
@@ -271,6 +301,7 @@ export const bulkCreatorImportItemSchema = z.object({
   profile_picture_url: z.string().url().optional(),
   platforms: z.array(bulkPlatformItemSchema).optional(),
   social_links: z.array(bulkSocialLinkItemSchema).optional(),
+  aliases: z.array(bulkAliasItemSchema).optional(),
   link_video_ids: z.array(z.number().int().positive()).optional(),
 });
 
@@ -301,6 +332,13 @@ export const bulkImportPreviewItemSchema = z.object({
       })
       .optional(),
     social_links: z
+      .object({
+        add: z.number(),
+        update: z.number(),
+        remove: z.number().optional(),
+      })
+      .optional(),
+    aliases: z
       .object({
         add: z.number(),
         update: z.number(),

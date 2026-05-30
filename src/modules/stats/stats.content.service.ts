@@ -20,8 +20,10 @@ export class ContentStatsService {
     // Videos without organization using optimized NOT EXISTS subqueries
     const gapsQuery = sql`
       SELECT
+        (SELECT COUNT(*) FROM videos) as total_videos,
         (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM video_tags vt WHERE vt.video_id = v.id)) as no_tags,
         (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM video_creators vc WHERE vc.video_id = v.id)) as no_creators,
+        (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM video_studios vs WHERE vs.video_id = v.id)) as no_studios,
         (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM ratings r WHERE r.video_id = v.id)) as no_ratings,
         (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM thumbnails t WHERE t.video_id = v.id)) as no_thumbnails,
         (SELECT COUNT(*) FROM videos v WHERE NOT EXISTS (SELECT 1 FROM storyboards s WHERE s.video_id = v.id)) as no_storyboards
@@ -72,8 +74,10 @@ export class ContentStatsService {
     ]);
 
     const gapsRaw = gapsRows[0] as {
+      total_videos: string | number;
       no_tags: string | number;
       no_creators: string | number;
+      no_studios: string | number;
       no_ratings: string | number;
       no_thumbnails: string | number;
       no_storyboards: string | number;
@@ -84,8 +88,10 @@ export class ContentStatsService {
     }
 
     const gaps = {
+      total_videos: Number(gapsRaw.total_videos),
       no_tags: Number(gapsRaw.no_tags),
       no_creators: Number(gapsRaw.no_creators),
+      no_studios: Number(gapsRaw.no_studios),
       no_ratings: Number(gapsRaw.no_ratings),
       no_thumbnails: Number(gapsRaw.no_thumbnails),
       no_storyboards: Number(gapsRaw.no_storyboards),
@@ -134,8 +140,10 @@ export class ContentStatsService {
     }));
 
     return {
+      total_video_count: gaps.total_videos,
       videos_without_tags: gaps.no_tags,
       videos_without_creators: gaps.no_creators,
+      videos_without_studios: gaps.no_studios,
       videos_without_ratings: gaps.no_ratings,
       videos_without_thumbnails: gaps.no_thumbnails,
       videos_without_storyboards: gaps.no_storyboards,
@@ -157,8 +165,10 @@ export class ContentStatsService {
     const result = await db
       .insert(statsContentSnapshotsTable)
       .values({
+        totalVideoCount: current.total_video_count,
         videosWithoutTags: current.videos_without_tags,
         videosWithoutCreators: current.videos_without_creators,
+        videosWithoutStudios: current.videos_without_studios,
         videosWithoutRatings: current.videos_without_ratings,
         videosWithoutThumbnails: current.videos_without_thumbnails,
         videosWithoutStoryboards: current.videos_without_storyboards,
@@ -187,12 +197,31 @@ export class ContentStatsService {
     days: number = 30,
     limit: number = 100,
   ): Promise<ContentSnapshot[]> {
-    const query = sql`
-      SELECT * FROM stats_content_snapshots
-      WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-      ORDER BY created_at DESC
-      LIMIT ${limit}
-    `;
+    // For multi-day ranges, collapse to one snapshot per day (the latest of
+    // each day) so a long range isn't truncated by intraday snapshot volume.
+    // Single-day ranges keep full intraday granularity. Rows are always
+    // returned in ascending chronological order for charting.
+    const query =
+      days <= 1
+        ? sql`
+            SELECT * FROM (
+              SELECT * FROM stats_content_snapshots
+              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
+              ORDER BY created_at DESC
+              LIMIT ${limit}
+            ) t
+            ORDER BY created_at ASC
+          `
+        : sql`
+            SELECT * FROM (
+              SELECT DISTINCT ON (date_trunc('day', created_at)) *
+              FROM stats_content_snapshots
+              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
+              ORDER BY date_trunc('day', created_at) DESC, created_at DESC
+              LIMIT ${limit}
+            ) t
+            ORDER BY created_at ASC
+          `;
 
     const rows = await db.execute(query);
 
@@ -245,11 +274,17 @@ export class ContentStatsService {
 
     return {
       id: Number(row.id),
+      total_video_count: Number(
+        row.total_video_count ?? row.totalVideoCount ?? 0,
+      ),
       videos_without_tags: Number(
         row.videos_without_tags ?? row.videosWithoutTags ?? 0,
       ),
       videos_without_creators: Number(
         row.videos_without_creators ?? row.videosWithoutCreators ?? 0,
+      ),
+      videos_without_studios: Number(
+        row.videos_without_studios ?? row.videosWithoutStudios ?? 0,
       ),
       videos_without_ratings: Number(
         row.videos_without_ratings ?? row.videosWithoutRatings ?? 0,

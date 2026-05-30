@@ -20,6 +20,27 @@ export interface SocialLink {
   created_at: string;
 }
 
+export interface Alias {
+  id: number;
+  creator_id: number;
+  name: string;
+  note: string | null;
+  created_at: string;
+}
+
+export const createAliasSchema = z.object({
+  name: z.string().min(1).max(255),
+  note: z.string().max(500).optional(),
+});
+
+export const updateAliasSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  note: z.string().max(500).nullable().optional(),
+});
+
+export type CreateAliasInput = z.infer<typeof createAliasSchema>;
+export type UpdateAliasInput = z.infer<typeof updateAliasSchema>;
+
 export const createCreatorSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
@@ -97,6 +118,11 @@ export interface BulkSocialLinkItem {
   url: string;
 }
 
+export interface BulkAliasItem {
+  name: string;
+  note?: string | null;
+}
+
 export interface BulkOperationResult<T> {
   created: T[];
   updated: T[];
@@ -111,6 +137,7 @@ export interface BulkCreatorImportItem {
   profile_picture_url?: string;
   platforms?: BulkPlatformItem[];
   social_links?: BulkSocialLinkItem[];
+  aliases?: BulkAliasItem[];
   link_video_ids?: number[];
 }
 
@@ -131,6 +158,7 @@ export interface BulkImportPreviewItem {
     profile_picture?: { action: "set" | "unchanged" };
     platforms?: { add: number; update: number; remove?: number };
     social_links?: { add: number; update: number; remove?: number };
+    aliases?: { add: number; update: number; remove?: number };
     videos?: { add: number; remove?: number };
   };
   missing_dependencies: string[];

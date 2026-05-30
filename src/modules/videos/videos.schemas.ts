@@ -486,6 +486,67 @@ export const bulkDeleteVideosSchema = z.object({
   ids: z.array(z.number().int().positive()).min(1),
 });
 
+// Unavailable Video Management Schemas
+export const unavailableVideosQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+  directoryId: z.coerce.number().int().positive().optional(),
+});
+
+const unavailableVideoSchema = z.object({
+  id: z.number(),
+  file_path: z.string(),
+  file_name: z.string(),
+  directory_id: z.number(),
+  directory_path: z.string().nullable(),
+  last_verified_at: z.string().nullable(),
+  thumbnail_url: z.string().nullable(),
+  artifacts: z.object({
+    thumbnail: z.boolean(),
+    storyboard: z.boolean(),
+    face_count: z.number(),
+    reclaimable_bytes: z.number(),
+  }),
+});
+
+export const unavailableVideosResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(unavailableVideoSchema),
+  pagination: z.object({
+    page: z.number(),
+    limit: z.number(),
+    total: z.number(),
+    totalPages: z.number(),
+  }),
+});
+
+export const cleanupUnavailableSchema = z
+  .object({
+    ids: z.array(z.number().int().positive()).min(1).optional(),
+    directoryId: z.number().int().positive().optional(),
+    all: z.literal(true).optional(),
+  })
+  .refine((value) => value.ids !== undefined || value.directoryId !== undefined || value.all === true, {
+    message: "Provide one of: ids, directoryId, or all=true",
+  });
+
+export const cleanupUnavailableResponseSchema = z.object({
+  success: z.literal(true),
+  deleted_count: z.number(),
+  deleted_ids: z.array(z.number()),
+});
+
+export const verifyUnavailableSchema = z.object({
+  directoryId: z.number().int().positive().optional(),
+});
+
+export const verifyUnavailableResponseSchema = z.object({
+  success: z.literal(true),
+  checked: z.number(),
+  now_available: z.number(),
+  still_missing: z.number(),
+});
+
 export const bulkUpdateCreatorsSchema = z.object({
   videoIds: z.array(z.number().int().positive()).min(1),
   creatorIds: z.array(z.number().int().positive()).min(1),

@@ -20,6 +20,7 @@ import {
   platformsTable,
   creatorPlatformsTable,
   creatorSocialLinksTable,
+  creatorAliasesTable,
   studioSocialLinksTable,
 } from "./organization.schema";
 import {
@@ -201,6 +202,7 @@ export const creatorsRelations = relations(creatorsTable, ({ many }) => ({
   creatorStudios: many(creatorStudiosTable),
   creatorPlatforms: many(creatorPlatformsTable),
   creatorSocialLinks: many(creatorSocialLinksTable),
+  creatorAliases: many(creatorAliasesTable),
 }));
 
 // Video-Creator junction relations
@@ -306,6 +308,17 @@ export const creatorSocialLinksRelations = relations(
   ({ one }) => ({
     creator: one(creatorsTable, {
       fields: [creatorSocialLinksTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+  }),
+);
+
+// Creator aliases relations
+export const creatorAliasesRelations = relations(
+  creatorAliasesTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorAliasesTable.creatorId],
       references: [creatorsTable.id],
     }),
   }),
