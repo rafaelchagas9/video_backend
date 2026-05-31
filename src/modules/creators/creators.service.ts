@@ -1,5 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import {
   creatorFavoritesTable,
   creatorGalleryMediaTable,
@@ -22,6 +23,10 @@ export class CreatorsService {
     options: ListCreatorsOptions = {},
     userId?: number,
   ): Promise<PaginatedCreators> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreators(options) as PaginatedCreators;
+    }
     const {
       page = 1,
       limit = 20,
@@ -255,6 +260,10 @@ export class CreatorsService {
   }
 
   async findById(id: number, userId?: number): Promise<Creator> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreatorById(id);
+    }
     const result = await db.execute(sql`
       SELECT
         c.*,
@@ -274,6 +283,24 @@ export class CreatorsService {
   }
 
   async create(input: CreateCreatorInput, userId?: number): Promise<Creator> {
+    if (env.DEMO_MODE) {
+      return {
+        id: 9999,
+        name: input.name,
+        description: input.description || null,
+        profile_picture_path: null,
+        main_picture_path: null,
+        face_thumbnail_path: null,
+        profile_picture_url: undefined,
+        main_picture_url: undefined,
+        face_thumbnail_url: undefined,
+        gallery_media: [],
+        is_favorite: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
     try {
       const result = await db
         .insert(creatorsTable)
@@ -304,6 +331,15 @@ export class CreatorsService {
     input: UpdateCreatorInput,
     userId?: number,
   ): Promise<Creator> {
+    if (env.DEMO_MODE) {
+      const creator = await this.findById(id);
+      return {
+        ...creator,
+        name: input.name !== undefined ? input.name : creator.name,
+        description: input.description !== undefined ? input.description : creator.description,
+      };
+    }
+
     await this.findById(id); // Ensure exists
 
     const updates: any = {};
@@ -341,6 +377,10 @@ export class CreatorsService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      return;
+    }
+
     const creator = await this.findById(id); // Ensure exists
 
     // Delete profile picture file if exists
@@ -406,6 +446,12 @@ export class CreatorsService {
     limitParam: number = 10,
     userId?: number,
   ): Promise<EnhancedCreator[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const listObj = demoMockService.getCreators({ search: query, limit: limitParam });
+      return listObj.data as EnhancedCreator[];
+    }
+
     if (!query || query.trim().length < 1) {
       return [];
     }
@@ -467,6 +513,12 @@ export class CreatorsService {
     limitParam: number = 10,
     userId?: number,
   ): Promise<EnhancedCreator[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const listObj = demoMockService.getCreators({ limit: limitParam });
+      return listObj.data as EnhancedCreator[];
+    }
+
     const rawQuery = sql`
       SELECT c.*,
         COALESCE(vc.video_count, 0) as linked_video_count,

@@ -851,6 +851,11 @@ export class StoryboardsService {
    * Find storyboard by video ID.
    */
   async findByVideoId(videoId: number): Promise<Storyboard | null> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(videoId);
+      return video && video.storyboard ? video.storyboard as Storyboard : null;
+    }
     const rows = await db
       .select()
       .from(storyboardsTable)
@@ -864,6 +869,14 @@ export class StoryboardsService {
    * Get VTT file content for a video.
    */
   async getVttContent(videoId: number): Promise<string> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(videoId);
+      if (video && video.storyboard && video.storyboard.vtt_path) {
+        return readFile(video.storyboard.vtt_path, "utf-8");
+      }
+      throw new NotFoundError(`VTT file not found for demo video: ${videoId}`);
+    }
     const storyboard = await this.findByVideoId(videoId);
 
     if (!storyboard) {
@@ -883,6 +896,17 @@ export class StoryboardsService {
   async getSpriteAsset(
     videoId: number,
   ): Promise<{ buffer: Buffer; contentType: string }> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(videoId);
+      if (video && video.storyboard && video.storyboard.sprite_path) {
+        const spritePath = video.storyboard.sprite_path;
+        const extension = spritePath.split(".").pop()?.toLowerCase();
+        const contentType = extension === "webp" ? "image/webp" : "image/jpeg";
+        return { buffer: await readFile(spritePath), contentType };
+      }
+      throw new NotFoundError(`Sprite asset not found for demo video: ${videoId}`);
+    }
     const storyboard = await this.findByVideoId(videoId);
 
     if (!storyboard) {

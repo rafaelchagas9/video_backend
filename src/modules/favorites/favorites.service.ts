@@ -3,9 +3,16 @@ import { eq, and, sql } from "drizzle-orm";
 import { favoritesTable } from "@/database/schema";
 import { videosService } from "@/modules/videos/videos.service";
 import { API_PREFIX } from "@/config/constants";
+import { env } from "@/config/env";
 
 export class FavoritesService {
   async add(userId: number, videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.addFavoriteVideo(videoId);
+      return;
+    }
+
     // Verify video exists
     await videosService.findById(videoId);
 
@@ -31,6 +38,12 @@ export class FavoritesService {
   }
 
   async remove(userId: number, videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.removeFavoriteVideo(videoId);
+      return;
+    }
+
     await db
       .delete(favoritesTable)
       .where(
@@ -45,6 +58,11 @@ export class FavoritesService {
   }
 
   async list(userId: number) {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getFavoriteVideos();
+    }
+
     const query = sql`
       SELECT v.*, f.added_at, t.id as thumbnail_id
       FROM videos v
@@ -68,6 +86,11 @@ export class FavoritesService {
   }
 
   async isFavorite(userId: number, videoId: number): Promise<boolean> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.isFavoriteVideo(videoId);
+    }
+
     const result = await db
       .select()
       .from(favoritesTable)

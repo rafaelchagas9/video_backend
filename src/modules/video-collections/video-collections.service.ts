@@ -8,6 +8,7 @@ import {
   videosTable,
 } from "@/database/schema";
 import { ConflictError, NotFoundError } from "@/utils/errors";
+import { env } from "@/config/env";
 import type {
   CreateVideoCollectionEntryInput,
   CreateVideoCollectionInput,
@@ -43,6 +44,11 @@ type CollectionEntryRow = {
 
 export class VideoCollectionsService {
   async list(): Promise<VideoCollection[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.listCollections();
+    }
+
     const rows = await db.execute<{
       id: number;
       title: string;
@@ -85,6 +91,11 @@ export class VideoCollectionsService {
   }
 
   async create(input: CreateVideoCollectionInput): Promise<VideoCollection> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.createCollection(input);
+    }
+
     const result = await db
       .insert(videoCollectionsTable)
       .values({
@@ -104,6 +115,11 @@ export class VideoCollectionsService {
   }
 
   async findById(id: number): Promise<VideoCollection> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCollectionById(id);
+    }
+
     const rows = await db.execute<{
       id: number;
       title: string;
@@ -155,6 +171,11 @@ export class VideoCollectionsService {
     id: number,
     input: UpdateVideoCollectionInput,
   ): Promise<VideoCollection> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.updateCollection(id, input);
+    }
+
     await this.findById(id);
 
     const updates: Partial<typeof videoCollectionsTable.$inferInsert> = {};
@@ -182,6 +203,12 @@ export class VideoCollectionsService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.deleteCollection(id);
+      return;
+    }
+
     await this.findById(id);
     await db
       .delete(videoCollectionsTable)
@@ -189,6 +216,11 @@ export class VideoCollectionsService {
   }
 
   async listEntries(collectionId: number): Promise<VideoCollectionEntry[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.listCollectionEntries(collectionId);
+    }
+
     await this.findById(collectionId);
 
     const rows = await db
@@ -231,6 +263,11 @@ export class VideoCollectionsService {
     collectionId: number,
     input: CreateVideoCollectionEntryInput,
   ): Promise<VideoCollectionEntry> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.addCollectionEntry(collectionId, input);
+    }
+
     await this.findById(collectionId);
 
     const video = await db
@@ -291,6 +328,11 @@ export class VideoCollectionsService {
     collectionId: number,
     input: ReorderVideoCollectionEntriesInput,
   ): Promise<VideoCollectionEntry[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.reorderCollectionEntries(collectionId, input);
+    }
+
     await this.findById(collectionId);
 
     const existingEntries = await db
@@ -344,6 +386,12 @@ export class VideoCollectionsService {
   }
 
   async removeEntry(collectionId: number, videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.removeCollectionEntry(collectionId, videoId);
+      return;
+    }
+
     await this.findById(collectionId);
 
     const existing = await db
@@ -381,6 +429,11 @@ export class VideoCollectionsService {
   async getCollectionContextByVideoId(
     videoId: number,
   ): Promise<VideoCollectionContext | null> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCollectionContextByVideoId(videoId);
+    }
+
     const rows = await db
       .select({
         collectionId: videoCollectionsTable.id,
@@ -439,6 +492,11 @@ export class VideoCollectionsService {
   async getCollectionContextsByVideoIds(
     videoIds: number[],
   ): Promise<Map<number, VideoCollectionContext>> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCollectionContextsByVideoIds(videoIds);
+    }
+
     if (videoIds.length === 0) {
       return new Map();
     }
@@ -501,6 +559,11 @@ export class VideoCollectionsService {
   async getNeighborsByVideoId(
     videoId: number,
   ): Promise<VideoCollectionNeighbors | null> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getNeighborsByVideoId(videoId);
+    }
+
     const context = await this.getCollectionContextByVideoId(videoId);
     if (!context) {
       return null;

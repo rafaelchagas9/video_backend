@@ -11,6 +11,7 @@ import {
   asc,
 } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import {
   videosTable,
   thumbnailsTable,
@@ -84,6 +85,10 @@ export class VideosSearchService {
     userId: number,
     options: ListVideosOptions = {},
   ): Promise<PaginatedVideos> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getVideos(options) as PaginatedVideos;
+    }
     const {
       page = 1,
       limit = 20,

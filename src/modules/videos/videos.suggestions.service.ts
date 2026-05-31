@@ -1,5 +1,6 @@
 import { eq, sql, and, not, exists } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import {
   videosTable,
   videoStatsTable,
@@ -14,6 +15,7 @@ import { API_PREFIX } from "@/config/constants";
 import type {
   CompressionSuggestion,
   CompressionSuggestionsSummary,
+  Video,
 } from "./videos.types";
 
 /** Hardcoded conservative fallback ratios when no history exists */
@@ -109,6 +111,56 @@ export class VideosSuggestionsService {
     const maxSuggestions = await settingsService.getNumber("max_suggestions");
     const limit = Math.min(options.limit ?? 50, maxSuggestions || 200);
     const offset = options.offset ?? 0;
+
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const videosObj = demoMockService.getVideos({ limit: 100 });
+      const candidates = (videosObj.data as Video[]).filter((v) => !v.codec?.toLowerCase().includes("av1"));
+      
+      const suggestions: CompressionSuggestion[] = candidates.map((v) => {
+        const fileSizeBytes = v.file_size_bytes;
+        const estimatedOutputBytes = Math.round(fileSizeBytes * 0.35);
+        const estimatedSavingsBytes = fileSizeBytes - estimatedOutputBytes;
+        const estimatedSavingsPercent = 65.0;
+        
+        return {
+          video_id: v.id,
+          file_name: v.file_name,
+          file_size_bytes: fileSizeBytes,
+          width: v.width,
+          height: v.height,
+          codec: v.codec,
+          bitrate: v.bitrate,
+          fps: v.fps,
+          duration_seconds: v.duration_seconds,
+          is_favorite: v.is_favorite,
+          bytes_per_second: v.duration_seconds ? Math.round(fileSizeBytes / v.duration_seconds) : null,
+          estimated_output_bytes: estimatedOutputBytes,
+          estimated_savings_bytes: estimatedSavingsBytes,
+          estimated_savings_percent: estimatedSavingsPercent,
+          confidence: "low",
+          priority_score: 85,
+          recommended_preset: "1080p_av1",
+          recommended_preset_name: "1080p AV1 (Slower, High Quality)",
+          reasons: ["codec-inefficient", "large-savings"],
+          thumbnail_id: v.thumbnail_id,
+          thumbnail_url: v.thumbnail_url
+        } as CompressionSuggestion;
+      });
+      
+      const totalEstimatedSavings = suggestions.reduce((sum, s) => sum + s.estimated_savings_bytes, 0);
+      const avgSavingsPercent = suggestions.length > 0 ? 65.0 : 0;
+      
+      return {
+        suggestions: suggestions.slice(offset, offset + limit),
+        summary: {
+          total_candidates: suggestions.length,
+          total_estimated_savings_bytes: totalEstimatedSavings,
+          avg_estimated_savings_percent: avgSavingsPercent,
+          historical_accuracy_note: "Demo Mode Active - Mocked estimates based on demo data"
+        }
+      };
+    }
 
     // Phase A: Historical ratios
     const historicalRatios = await this.buildHistoricalRatios();

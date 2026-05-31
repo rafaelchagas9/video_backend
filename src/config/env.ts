@@ -171,6 +171,12 @@ const envSchema = z.object({
   OLLAMA_URL: z.string().default("http://localhost:11434"),
   OLLAMA_MODEL: z.string().default("gemma3n:e2b"),
   OLLAMA_TIMEOUT_MS: z.string().default("60000").transform(Number),
+  
+  // Demo Mode
+  DEMO_MODE: z
+    .string()
+    .default("false")
+    .transform((value) => value.toLowerCase() === "true"),
 });
 
 function loadEnv() {

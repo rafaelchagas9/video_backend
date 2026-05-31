@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import {
   favoritesTable,
   thumbnailsTable,
@@ -93,6 +94,61 @@ export class VideosRelatedService {
   ): Promise<RelatedVideosResult> {
     const limit = Math.min(options.limit ?? DEFAULT_LIMIT, 100);
     await videosService.findById(sourceVideoId, userId);
+
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const videosObj = demoMockService.getVideos({ limit: 100 });
+      const sourceVideo = demoMockService.getVideoById(sourceVideoId) as Video;
+      
+      const candidates = (videosObj.data as Video[]).filter((v) => v.id !== sourceVideoId);
+      
+      const scored = candidates.map((v) => {
+        let score = 0;
+        const reasons: string[] = [];
+        
+        const sharedTags = v.tags ? v.tags.filter((t) => 
+          sourceVideo.tags?.some((st) => st.name === t.name)
+        ).length : 0;
+        if (sharedTags > 0) {
+          score += sharedTags * 18;
+          reasons.push(`shared-tags:${sharedTags}`);
+        }
+        
+        const sharedCreators = v.creators ? v.creators.filter((c) => 
+          sourceVideo.creators?.some((sc) => sc.name === c.name)
+        ).length : 0;
+        if (sharedCreators > 0) {
+          score += sharedCreators * 24;
+          reasons.push(`shared-creators:${sharedCreators}`);
+        }
+        
+        const sharedStudios = v.studios ? v.studios.filter((s) => 
+          sourceVideo.studios?.some((ss) => ss.name === s.name)
+        ).length : 0;
+        if (sharedStudios > 0) {
+          score += sharedStudios * 14;
+          reasons.push(`shared-studios:${sharedStudios}`);
+        }
+        
+        return {
+          video: v,
+          score,
+          reasons
+        };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+      
+      return {
+        data: scored,
+        meta: {
+          computed_at: new Date().toISOString(),
+          refreshed: false,
+          candidate_count: scored.length
+        }
+      };
+    }
 
     let refreshed = false;
     const cacheState = await this.getCacheState(sourceVideoId);

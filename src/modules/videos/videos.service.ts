@@ -1,5 +1,6 @@
 import { eq, sql, and, inArray, desc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import {
   videosTable,
   videoStatsTable,
@@ -64,6 +65,15 @@ export class VideosService {
   async findFilePathById(
     id: number,
   ): Promise<{ file_path: string; is_available: boolean }> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(id);
+      return {
+        file_path: video.file_path,
+        is_available: true,
+      };
+    }
+
     const results = await db
       .select({
         filePath: videosTable.filePath,
@@ -92,6 +102,10 @@ export class VideosService {
     userId?: number,
     include: VideoInclude[] = [],
   ): Promise<Video> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getVideoById(id);
+    }
     const results = await db
       .select({
         id: videosTable.id,
@@ -228,6 +242,27 @@ export class VideosService {
     userId: number,
     options: RandomVideoOptions = {},
   ): Promise<Video | Video[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const videosObj = demoMockService.getVideos({
+        tagIds: options.tagIds,
+        creatorIds: options.creatorIds,
+        studioIds: options.studioIds,
+        limit: 100
+      });
+      const list = videosObj.data;
+      if (list.length === 0) {
+        throw new NotFoundError("No matching videos found");
+      }
+      const shuffled = [...list].sort(() => 0.5 - Math.random());
+      const limit = options.limit !== undefined ? options.limit : 1;
+      const sliced = shuffled.slice(0, limit);
+      if (options.limit !== undefined) {
+        return sliced;
+      }
+      return sliced[0];
+    }
+
     const tagIds = await this.expandTagIds(options.tagIds);
     const resolvedOptions = { ...options, tagIds };
     const { conditions } = buildVideoFilters(userId, resolvedOptions);
@@ -356,6 +391,16 @@ export class VideosService {
    * Update video
    */
   async update(id: number, input: UpdateVideoInput): Promise<Video> {
+    if (env.DEMO_MODE) {
+      const video = await this.findById(id);
+      return {
+        ...video,
+        title: input.title !== undefined ? input.title : video.title,
+        description: input.description !== undefined ? input.description : video.description,
+        themes: input.themes !== undefined ? input.themes : video.themes,
+      };
+    }
+
     const updateData: Partial<typeof videosTable.$inferInsert> = {};
 
     if (input.title !== undefined) updateData.title = input.title;
@@ -386,6 +431,10 @@ export class VideosService {
    * Delete video (including file and related data)
    */
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      return;
+    }
+
     const video = await this.findById(id); // Ensure exists
 
     // Delete derived artifact files (thumbnails, storyboards, face images)
@@ -410,6 +459,10 @@ export class VideosService {
    * Verify video file availability
    */
   async verifyAvailability(id: number): Promise<Video> {
+    if (env.DEMO_MODE) {
+      return this.findById(id);
+    }
+
     const video = await this.findById(id);
 
     const fs = await import("fs");
@@ -439,6 +492,13 @@ export class VideosService {
   }> {
     const { page, limit, directoryId } = options;
     const offset = (page - 1) * limit;
+
+    if (env.DEMO_MODE) {
+      return {
+        data: [],
+        pagination: { page, limit, total: 0, totalPages: 0 }
+      };
+    }
 
     const conditions = [eq(videosTable.isAvailable, false)];
     if (directoryId !== undefined) {
@@ -579,6 +639,10 @@ export class VideosService {
     ids?: number[];
     directoryId?: number;
   }): Promise<{ deleted_count: number; deleted_ids: number[] }> {
+    if (env.DEMO_MODE) {
+      return { deleted_count: 0, deleted_ids: [] };
+    }
+
     const conditions = [eq(videosTable.isAvailable, false)];
     if (input.ids && input.ids.length > 0) {
       conditions.push(inArray(videosTable.id, input.ids));
@@ -611,6 +675,10 @@ export class VideosService {
   async verifyAvailabilityBulk(options: {
     directoryId?: number;
   }): Promise<{ checked: number; now_available: number; still_missing: number }> {
+    if (env.DEMO_MODE) {
+      return { checked: 0, now_available: 0, still_missing: 0 };
+    }
+
     const conditions =
       options.directoryId !== undefined
         ? [eq(videosTable.directoryId, options.directoryId)]
@@ -651,6 +719,10 @@ export class VideosService {
    * Useful when a file was indexed before a download completed.
    */
   async refreshDerivedData(id: number, userId?: number): Promise<Video> {
+    if (env.DEMO_MODE) {
+      return this.findById(id, userId);
+    }
+
     const video = await this.findById(id, userId);
 
     if (!existsSync(video.file_path)) {
@@ -701,6 +773,11 @@ export class VideosService {
    * Get studios associated with a video
    */
   async getStudios(videoId: number) {
+    if (env.DEMO_MODE) {
+      const video = await this.findById(videoId);
+      return video.studios || [];
+    }
+
     await this.findById(videoId); // Ensure video exists
 
     const studios = await db
@@ -735,6 +812,10 @@ export class VideosService {
    * Updates file path, size, hash, and all technical metadata from the new file.
    */
   async replaceFile(videoId: number, newFilePath: string): Promise<Video> {
+    if (env.DEMO_MODE) {
+      return this.findById(videoId);
+    }
+
     await this.findById(videoId);
 
     const fileStats = statSync(newFilePath);

@@ -1,5 +1,6 @@
 import { eq, sql, isNull, or, and, ilike } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import { tagsTable, videoTagsTable } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
@@ -16,6 +17,19 @@ import type { Video } from "@/modules/videos/videos.types";
 
 export class TagsService {
   async list(options: ListTagsOptions = {}): Promise<PaginatedTags> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const tags = demoMockService.getTags() as Tag[];
+      return {
+        data: tags,
+        pagination: {
+          page: 1,
+          limit: 10000,
+          total: tags.length,
+          totalPages: 1
+        }
+      };
+    }
     const {
       page = 1,
       limit = 20,
@@ -208,6 +222,15 @@ export class TagsService {
   }
 
   async findById(id: number): Promise<Tag> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const tag = demoMockService.getTags().find((t) => t.id === id);
+      if (!tag) {
+        throw new NotFoundError(`Tag not found with id: ${id}`);
+      }
+      return tag;
+    }
+
     const tag = await db
       .select()
       .from(tagsTable)
@@ -223,6 +246,11 @@ export class TagsService {
   }
 
   async findByIdWithPath(id: number): Promise<TagWithPath> {
+    if (env.DEMO_MODE) {
+      const tag = await this.findById(id);
+      return { ...tag, path: tag.name };
+    }
+
     const tag = await this.findById(id);
     const ancestors = await this.getAncestors(id);
     const path = [...ancestors.map((a) => a.name), tag.name].join(" > ");
@@ -231,6 +259,23 @@ export class TagsService {
   }
 
   async getAncestors(id: number): Promise<Tag[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const tags = demoMockService.getTags();
+      const ancestors: Tag[] = [];
+      let current = tags.find((t) => t.id === id);
+      while (current && current.parent_id !== null) {
+        const parent = tags.find((t) => t.id === current!.parent_id);
+        if (parent) {
+          ancestors.unshift(parent);
+          current = parent;
+        } else {
+          break;
+        }
+      }
+      return ancestors;
+    }
+
     // Recursive CTE to get all ancestors
     const ancestors = await db.execute<{
       id: number;
@@ -263,6 +308,22 @@ export class TagsService {
   }
 
   async getDescendants(id: number): Promise<Tag[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const tags = demoMockService.getTags();
+      const descendants: Tag[] = [];
+      const queue = [id];
+      while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        const children = tags.filter((t) => t.parent_id === currentId);
+        for (const child of children) {
+          descendants.push(child);
+          queue.push(child.id);
+        }
+      }
+      return descendants;
+    }
+
     // Recursive CTE to get all descendants
     const descendants = await db.execute<{
       id: number;
@@ -295,6 +356,12 @@ export class TagsService {
   }
 
   async getChildren(id: number): Promise<Tag[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const tags = demoMockService.getTags();
+      return tags.filter((t) => t.parent_id === id);
+    }
+
     await this.findById(id); // Ensure exists
 
     const children = await db
@@ -307,6 +374,18 @@ export class TagsService {
   }
 
   async create(input: CreateTagInput): Promise<Tag> {
+    if (env.DEMO_MODE) {
+      return {
+        id: 9999,
+        name: input.name,
+        parent_id: input.parent_id || null,
+        description: input.description || null,
+        color: input.color || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
     // Verify parent exists if provided
     if (input.parent_id) {
       await this.findById(input.parent_id);
@@ -341,6 +420,17 @@ export class TagsService {
   }
 
   async update(id: number, input: UpdateTagInput): Promise<Tag> {
+    if (env.DEMO_MODE) {
+      const tag = await this.findById(id);
+      return {
+        ...tag,
+        name: input.name !== undefined ? input.name : tag.name,
+        parent_id: input.parent_id !== undefined ? input.parent_id : tag.parent_id,
+        description: input.description !== undefined ? input.description : tag.description,
+        color: input.color !== undefined ? input.color : tag.color,
+      };
+    }
+
     await this.findById(id); // Ensure exists
 
     // Verify new parent exists and prevent circular reference
@@ -397,12 +487,24 @@ export class TagsService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      return;
+    }
+
     await this.findById(id); // Ensure exists
     // CASCADE will delete children due to schema constraint
     await db.delete(tagsTable).where(eq(tagsTable.id, id));
   }
 
   async getVideos(tagId: number): Promise<Video[]> {
+    if (env.DEMO_MODE) {
+      const descendants = await this.getDescendants(tagId);
+      const tagIds = [tagId, ...descendants.map((d) => d.id)];
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const videosObj = demoMockService.getVideos({ tagIds, limit: 100 });
+      return videosObj.data as Video[];
+    }
+
     await this.findById(tagId); // Ensure tag exists
 
     const descendants = await this.getDescendants(tagId);
@@ -430,6 +532,10 @@ export class TagsService {
   }
 
   async addToVideo(videoId: number, tagId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      return;
+    }
+
     // Verify tag exists
     await this.findById(tagId);
 
@@ -468,6 +574,10 @@ export class TagsService {
   }
 
   async removeFromVideo(videoId: number, tagId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      return;
+    }
+
     await db
       .delete(videoTagsTable)
       .where(
@@ -479,6 +589,11 @@ export class TagsService {
   }
 
   async getTagsForVideo(videoId: number): Promise<Tag[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(videoId);
+      return video.tags || [];
+    }
     const tags = await db.execute<{
       id: number;
       name: string;
@@ -508,6 +623,18 @@ export class TagsService {
 
   async getTagsForVideos(videoIds: number[]): Promise<Map<number, Tag[]>> {
     const grouped = new Map<number, Tag[]>();
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      for (const id of videoIds) {
+        try {
+          const video = demoMockService.getVideoById(id);
+          grouped.set(id, video.tags || []);
+        } catch {
+          // ignore
+        }
+      }
+      return grouped;
+    }
     if (videoIds.length === 0) {
       return grouped;
     }

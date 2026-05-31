@@ -9,9 +9,15 @@ import type {
   UpdatePlaylistInput,
 } from "./playlists.types";
 import { videosService } from "@/modules/videos/videos.service";
+import { env } from "@/config/env";
 
 export class PlaylistsService {
   async create(userId: number, input: CreatePlaylistInput): Promise<Playlist> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.createPlaylist(userId, input);
+    }
+
     const result = await db
       .insert(playlistsTable)
       .values({
@@ -29,6 +35,11 @@ export class PlaylistsService {
   }
 
   async findById(id: number): Promise<Playlist> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getPlaylistById(id);
+    }
+
     const playlists = await db
       .select()
       .from(playlistsTable)
@@ -53,6 +64,11 @@ export class PlaylistsService {
   }
 
   async list(userId: number): Promise<Playlist[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.listPlaylists(userId);
+    }
+
     // Use raw SQL for complex subquery
     const query = sql`
       SELECT
@@ -92,6 +108,11 @@ export class PlaylistsService {
     userId: number,
     input: UpdatePlaylistInput,
   ): Promise<Playlist> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.updatePlaylist(id, userId, input);
+    }
+
     const playlist = await this.findById(id);
 
     // Verify ownership
@@ -126,6 +147,12 @@ export class PlaylistsService {
   }
 
   async delete(id: number, userId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.deletePlaylist(id, userId);
+      return;
+    }
+
     const playlist = await this.findById(id);
 
     // Verify ownership
@@ -144,6 +171,12 @@ export class PlaylistsService {
     videoId: number,
     position?: number,
   ): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      await demoMockService.addVideoToPlaylist(playlistId, userId, videoId);
+      return;
+    }
+
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
@@ -197,6 +230,12 @@ export class PlaylistsService {
     userId: number,
     videoId: number,
   ): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.removeVideoFromPlaylist(playlistId, userId, videoId);
+      return;
+    }
+
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
@@ -220,6 +259,11 @@ export class PlaylistsService {
   }
 
   async getVideos(playlistId: number, userId: number) {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getPlaylistVideos(playlistId, userId);
+    }
+
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
@@ -261,6 +305,12 @@ export class PlaylistsService {
     userId: number,
     positions: { video_id: number; position: number }[],
   ): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.reorderPlaylistVideos(playlistId, userId, positions);
+      return;
+    }
+
     const playlist = await this.findById(playlistId);
 
     // Verify ownership
@@ -294,6 +344,12 @@ export class PlaylistsService {
     userId: number,
     input: { videoIds: number[]; action: "add" | "remove" },
   ): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.bulkUpdatePlaylistVideos(playlistId, userId, input);
+      return;
+    }
+
     const { videoIds, action } = input;
     if (videoIds.length === 0) return;
 

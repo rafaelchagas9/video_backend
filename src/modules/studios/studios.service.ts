@@ -1,5 +1,6 @@
 import { eq, sql, like, desc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import { studiosTable } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
@@ -15,6 +16,10 @@ import type {
 export class StudiosService {
   // Basic CRUD Operations
   async list(options: ListStudiosOptions = {}): Promise<PaginatedStudios> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getStudios(options) as PaginatedStudios;
+    }
     const {
       page = 1,
       limit = 20,
@@ -210,6 +215,10 @@ export class StudiosService {
   }
 
   async findById(id: number): Promise<Studio> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getStudioById(id);
+    }
     const studio = await db
       .select()
       .from(studiosTable)
@@ -225,6 +234,17 @@ export class StudiosService {
   }
 
   async create(input: CreateStudioInput): Promise<Studio> {
+    if (env.DEMO_MODE) {
+      return {
+        id: 9999,
+        name: input.name,
+        description: input.description || null,
+        profile_picture_path: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
     try {
       const result = await db
         .insert(studiosTable)
@@ -252,6 +272,15 @@ export class StudiosService {
   }
 
   async update(id: number, input: UpdateStudioInput): Promise<Studio> {
+    if (env.DEMO_MODE) {
+      const studio = await this.findById(id);
+      return {
+        ...studio,
+        name: input.name !== undefined ? input.name : studio.name,
+        description: input.description !== undefined ? input.description : studio.description,
+      };
+    }
+
     await this.findById(id); // Ensure exists
 
     const updates: any = {};
@@ -286,6 +315,10 @@ export class StudiosService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      return;
+    }
+
     const studio = await this.findById(id); // Ensure exists
 
     // Delete profile picture file if exists
@@ -307,6 +340,12 @@ export class StudiosService {
   }
 
   async autocomplete(query: string, limit: number = 10): Promise<Studio[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const list = demoMockService.getStudios({ search: query, limit }).data;
+      return list as Studio[];
+    }
+
     if (!query || query.trim().length < 1) {
       return [];
     }
@@ -324,6 +363,12 @@ export class StudiosService {
   }
 
   async getRecent(limit: number = 10): Promise<Studio[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const list = demoMockService.getStudios({ limit }).data;
+      return list as Studio[];
+    }
+
     const studios = await db
       .select()
       .from(studiosTable)

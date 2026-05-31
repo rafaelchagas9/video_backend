@@ -233,6 +233,13 @@ export class ThumbnailsService {
   }
 
   async findById(id: number): Promise<Thumbnail> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(id);
+      if (video && video.thumbnail) {
+        return video.thumbnail as Thumbnail;
+      }
+    }
     const thumbnail = await db
       .select()
       .from(thumbnailsTable)
@@ -258,6 +265,11 @@ export class ThumbnailsService {
   }
 
   async getByVideoId(videoId: number): Promise<Thumbnail[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(videoId);
+      return video && video.thumbnail ? [video.thumbnail as Thumbnail] : [];
+    }
     const thumbnails = await db
       .select()
       .from(thumbnailsTable)

@@ -1,10 +1,17 @@
 import { db } from "@/config/drizzle";
 import { creatorFavoritesTable } from "@/database/schema";
 import { and, eq } from "drizzle-orm";
+import { env } from "@/config/env";
 import { creatorsService } from "./creators.service";
 
 export class CreatorFavoritesService {
   async add(userId: number, creatorId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.addFavoriteCreator(creatorId);
+      return;
+    }
+
     await creatorsService.findById(creatorId);
 
     if (await this.isFavorite(userId, creatorId)) {
@@ -25,6 +32,12 @@ export class CreatorFavoritesService {
   }
 
   async remove(userId: number, creatorId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      demoMockService.removeFavoriteCreator(creatorId);
+      return;
+    }
+
     await db
       .delete(creatorFavoritesTable)
       .where(
@@ -36,6 +49,11 @@ export class CreatorFavoritesService {
   }
 
   async isFavorite(userId: number, creatorId: number): Promise<boolean> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.isFavoriteCreator(creatorId);
+    }
+
     const result = await db
       .select({ creatorId: creatorFavoritesTable.creatorId })
       .from(creatorFavoritesTable)
