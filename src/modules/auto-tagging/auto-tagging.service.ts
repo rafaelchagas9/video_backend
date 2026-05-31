@@ -174,7 +174,6 @@ export class AutoTaggingService {
 
       switch (condition.condition_type) {
         case "path_pattern":
-        case "file_pattern":
           try {
             const regex = new RegExp(condition.value);
             matches = regex.test(filePath);
@@ -183,7 +182,7 @@ export class AutoTaggingService {
           }
           break;
 
-        case "resolution":
+        case "resolution": {
           if (
             pathResult.extracted.tags.some((t) =>
               ["4K", "1080p", "720p", "480p", "360p"].includes(t.toUpperCase()),
@@ -219,11 +218,13 @@ export class AutoTaggingService {
             }
           }
           break;
+        }
 
-        case "codec":
+        case "codec": {
           const lowerValue = condition.value.toLowerCase();
           matches = filePath.toLowerCase().includes(lowerValue);
           break;
+        }
 
         case "file_pattern":
           matches = filePath

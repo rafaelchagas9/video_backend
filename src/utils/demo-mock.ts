@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { readFileSync } from "fs";
 import { join } from "path";
 import { API_PREFIX } from "@/config/constants";

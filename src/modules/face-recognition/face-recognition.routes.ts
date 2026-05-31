@@ -113,7 +113,6 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         // Exclude internal fields: thumbnailPath (security) and embedding (not needed by frontend)
         const {
           thumbnailPath,
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           embedding: _embedding,
           ...enrichedEmbedding
         } = embedding;
@@ -231,7 +230,6 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         // Exclude internal fields: thumbnailPath (security) and embedding (not needed by frontend)
         const {
           thumbnailPath,
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           embedding: _embedding,
           ...enrichedEmbedding
         } = embedding;
@@ -434,7 +432,6 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
               };
             } catch {
               // Creator might have been deleted
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
             }
           }
 

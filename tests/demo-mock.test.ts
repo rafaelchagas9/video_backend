@@ -3,7 +3,7 @@ import { demoMockService } from "@/utils/demo-mock";
 import { creatorListResponseSchema, creatorResponseSchema } from "@/modules/creators/creators.schemas";
 import { videoListResponseSchema, videoResponseSchema } from "@/modules/videos/videos.schemas";
 import { playlistResponseSchema, playlistListResponseSchema, playlistVideosResponseSchema } from "@/modules/playlists/playlists.schemas";
-import { videoCollectionResponseSchema, videoCollectionsListResponseSchema, videoCollectionEntriesResponseSchema } from "@/modules/video-collections/video-collections.schemas";
+import { videoCollectionResponseSchema, videoCollectionEntriesResponseSchema } from "@/modules/video-collections/video-collections.schemas";
 
 describe("Demo Mock Service Zod Schema Validation", () => {
   it("validates all getVideos() list elements", () => {
@@ -172,7 +172,7 @@ describe("Demo Mock Service Zod Schema Validation", () => {
         season_number: 1,
         episode_number: 1,
       });
-      const entry2 = demoMockService.addCollectionEntry(collection.id, {
+      demoMockService.addCollectionEntry(collection.id, {
         video_id: 3,
         entry_kind: "episode",
         sequence_number: 2,

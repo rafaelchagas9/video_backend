@@ -106,6 +106,10 @@ export const videoMetadataTable = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => ({
+    videoKeyUnique: unique("video_metadata_video_id_key_unique").on(
+      table.videoId,
+      table.key,
+    ),
     videoKeyIdx: index("idx_video_metadata_video_key").on(table.videoId, table.key),
   }),
 );

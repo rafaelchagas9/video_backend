@@ -173,7 +173,13 @@ export class DirectoriesService {
       throw new Error("Failed to get directory stats");
     }
 
-    return stats;
+    return {
+      directory_id: Number(stats.directory_id),
+      total_videos: Number(stats.total_videos),
+      total_size_bytes: Number(stats.total_size_bytes),
+      available_videos: Number(stats.available_videos ?? 0),
+      unavailable_videos: Number(stats.unavailable_videos ?? 0),
+    };
   }
 
   async updateLastScanTime(id: number): Promise<void> {

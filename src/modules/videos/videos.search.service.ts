@@ -596,9 +596,27 @@ export class VideosSearchService {
     const currentVideo = await videosService.findById(currentId, userId);
 
     const sortColumn = getValidSortColumn(sort);
-    const currentSortValue = (
-      currentVideo as unknown as Record<string, unknown>
-    )[sortColumn];
+    const responseSortColumnMap: Record<string, string> = {
+      createdAt: "created_at",
+      fileName: "file_name",
+      durationSeconds: "duration_seconds",
+      fileSizeBytes: "file_size_bytes",
+      indexedAt: "indexed_at",
+    };
+    const currentVideoRecord = currentVideo as unknown as Record<
+      string,
+      unknown
+    >;
+    let currentSortValue =
+      currentVideoRecord[sortColumn] ??
+      currentVideoRecord[responseSortColumnMap[sortColumn] ?? sortColumn];
+
+    if (
+      (sortColumn === "createdAt" || sortColumn === "indexedAt") &&
+      typeof currentSortValue === "string"
+    ) {
+      currentSortValue = new Date(currentSortValue);
+    }
 
     // Build filter conditions
     const { conditions } = buildVideoFilters(userId, options);
@@ -614,13 +632,13 @@ export class VideosSearchService {
       if (isDescending) {
         comparisonOp = lte(
           videosTable[sortColumn],
-          currentSortValue as number | Date,
+          currentSortValue as number | string | Date,
         );
         sortDirection = desc;
       } else {
         comparisonOp = gte(
           videosTable[sortColumn],
-          currentSortValue as number | Date,
+          currentSortValue as number | string | Date,
         );
         sortDirection = asc;
       }
@@ -628,13 +646,13 @@ export class VideosSearchService {
       if (isDescending) {
         comparisonOp = gte(
           videosTable[sortColumn],
-          currentSortValue as number | Date,
+          currentSortValue as number | string | Date,
         );
         sortDirection = asc;
       } else {
         comparisonOp = lte(
           videosTable[sortColumn],
-          currentSortValue as number | Date,
+          currentSortValue as number | string | Date,
         );
         sortDirection = desc;
       }
@@ -646,7 +664,7 @@ export class VideosSearchService {
       or(
         comparisonOp,
         and(
-          eq(videosTable[sortColumn], currentSortValue as number | Date),
+          eq(videosTable[sortColumn], currentSortValue as number | string | Date),
           isNext
             ? gte(videosTable.id, currentId)
             : lte(videosTable.id, currentId),
@@ -830,7 +848,7 @@ export class VideosSearchService {
 
     // Get ordered IDs
     const ids = await db
-      .selectDistinct({ id: videosTable.id })
+      .select({ id: videosTable.id })
       .from(videosTable)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(

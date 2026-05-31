@@ -1,5 +1,5 @@
 import { db } from "@/config/drizzle";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import {
   taggingRulesTable,
   taggingRuleConditionsTable,
@@ -9,6 +9,7 @@ import {
   videoStudiosTable,
   creatorsTable,
   studiosTable,
+  videosTable,
 } from "@/database/schema";
 import { NotFoundError, ConflictError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
@@ -195,7 +196,9 @@ export class TaggingRulesService {
       return { deleted: 0 };
     }
 
-    await db.execute(sql`DELETE FROM tagging_rules WHERE id = ANY(${ids})`);
+    await db
+      .delete(taggingRulesTable)
+      .where(inArray(taggingRulesTable.id, ids));
     // We can't easily get rowCount, so we just return the count of IDs passed
     return { deleted: ids.length };
   }
@@ -260,10 +263,14 @@ export class TaggingRulesService {
 
     let videos: any[];
     if (video_ids && video_ids.length > 0) {
-      const videosResult = await db.execute(
-        sql`SELECT id, file_path, file_name FROM videos WHERE id = ANY(${video_ids})`,
-      );
-      videos = videosResult as any[];
+      videos = await db
+        .select({
+          id: videosTable.id,
+          file_path: videosTable.filePath,
+          file_name: videosTable.fileName,
+        })
+        .from(videosTable)
+        .where(inArray(videosTable.id, video_ids));
     } else {
       const videosResult = await db.execute(sql`
         SELECT id, file_path, file_name FROM videos
@@ -365,9 +372,15 @@ export class TaggingRulesService {
 
       switch (condition.condition_type) {
         case "path_pattern":
-        case "file_pattern":
           matches = this.matchPattern(
             video.file_path,
+            condition.operator,
+            condition.value,
+          );
+          break;
+        case "file_pattern":
+          matches = this.matchPattern(
+            video.file_name,
             condition.operator,
             condition.value,
           );
@@ -417,12 +430,23 @@ export class TaggingRulesService {
     operator: string,
     value: string,
   ): boolean {
-    try {
-      const regex = new RegExp(value);
-      const result = regex.test(filePath);
-      return operator === "matches" ? result : !result;
-    } catch {
-      return false;
+    const normalizedPath = filePath.toLowerCase();
+    const normalizedValue = value.toLowerCase();
+
+    switch (operator) {
+      case "contains":
+        return normalizedPath.includes(normalizedValue);
+      case "equals":
+        return normalizedPath === normalizedValue;
+      case "matches":
+      case "regex":
+        try {
+          return new RegExp(value).test(filePath);
+        } catch {
+          return false;
+        }
+      default:
+        return false;
     }
   }
 

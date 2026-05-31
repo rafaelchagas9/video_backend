@@ -37,13 +37,13 @@ export interface PathParserConfig {
 const DEFAULT_PATTERNS: PathPattern[] = [
   {
     name: "OnlyFans Creator Folder",
-    pattern: "/(?:onlyfans|OF)/(?<creator>[^/]+)/?",
+    pattern: "/(?:onlyfans|OF)/(?<creator>[^/]+)/",
     creatorGroup: "creator",
     confidence: "high",
   },
   {
     name: "Fansly Creator Folder",
-    pattern: "/(?:fansly|FS)/(?<creator>[^/]+)/?",
+    pattern: "/(?:fansly|FS)/(?<creator>[^/]+)/",
     creatorGroup: "creator",
     confidence: "high",
   },
@@ -64,7 +64,7 @@ const DEFAULT_PATTERNS: PathPattern[] = [
   },
   {
     name: "Studio Creator Folder",
-    pattern: "/(?<studio>[^/]+)/(?<creator>[^/]+)/?",
+    pattern: "/(?<studio>[^/]+)/(?<creator>[^/]+)/[^/]+$",
     studioGroup: "studio",
     creatorGroup: "creator",
     confidence: "high",
@@ -72,7 +72,7 @@ const DEFAULT_PATTERNS: PathPattern[] = [
   {
     name: "Platform Prefix",
     pattern:
-      "(?i)(?:onlyfans|fansly|pornhub|ph|chaturbate|cb)[_\\-\\s]*(?<creator>[a-z0-9_]+)",
+      "(?:onlyfans|fansly|pornhub|ph|chaturbate|cb)[_\\-\\s]*(?<creator>[a-z0-9_]+)",
     creatorGroup: "creator",
     confidence: "medium",
   },
@@ -127,7 +127,7 @@ export function parseVideoPath(
 
   for (const patternConfig of patterns) {
     try {
-      const regex = new RegExp(patternConfig.pattern);
+      const regex = new RegExp(patternConfig.pattern, "i");
       const match = regex.exec(filePath);
 
       if (match) {
@@ -221,7 +221,7 @@ export function parseVideoPath(
 
   if (result.extracted.tags.length === 0) {
     const resolutionMatch = fileName.match(
-      /(?:^|[_-\s])(4K|1080p|720p|480p|360p)(?:[_-\s]|$)/i,
+      /(?:^|[._-\s])(4K|1080p|720p|480p|360p)(?:[._-\s]|$)/i,
     );
     if (resolutionMatch) {
       result.extracted.tags.push(resolutionMatch[1].toUpperCase());
