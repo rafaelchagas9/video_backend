@@ -1,287 +1,182 @@
 # Video Streaming Backend
 
-A TypeScript/Bun backend application for managing and streaming local video files. Built with Fastify and PostgreSQL, it provides video indexing, metadata management, and HTTP streaming with support for hierarchical organization, creators, tags, ratings, playlists, bookmarks, and face recognition.
+A self-hosted video library manager and streaming server. Indexes local video files, extracts metadata, generates thumbnails and storyboards, transcodes videos, and streams them over HTTP with full range-request support. Includes hierarchical tagging, creator/studio management, playlists, ratings, bookmarks, auto-tagging rules, and face recognition via a Python/InsightFace microservice.
+
+Built with Bun + Fastify + PostgreSQL.
 
 ## Features
 
-### Video Management
-
-- Automatic video indexing from registered directories
-- Recursive directory scanning with file detection
-- Metadata extraction (duration, resolution, codecs, bitrate, fps) via FFprobe
-- SHA256 file hashing for deduplication detection
-- Soft-delete for missing files (availability tracking)
-- UTF-8 filename support (tested with special characters)
-
-### Media Organization
-
-- Creator management with many-to-many video associations
-- Hierarchical tags with recursive queries (parent/child relationships)
-- Custom metadata key-value storage per video
-- Tag tree navigation and filtering
-- Studios and platforms support
-
-### User Experience
-
-- Playlist creation with custom ordering
-- Favorites/watchlist functionality
-- Video bookmarks with timestamps
-- 1-5 star rating system with optional comments
-- Automatic thumbnail generation at configurable timestamps
-
-### Advanced Features
-
-- HTTP range request video streaming
-- Scheduled directory scanning with node-cron
-- Storyboard generation for video scrubbing
-- Face recognition with auto-tagging
-- Background conversion queue (VAAPI GPU acceleration)
-- Redis-based job queue for async processing
-- Database backup/export utilities
-
-### Authentication & Security
-
-- Better Auth with Drizzle-backed session management
-- Email/password authentication with legacy username login compatibility
-- HTTP-only secure cookies with configurable expiration
-- Rate limiting and security headers
-
-## Technology Stack
-
-- **Runtime**: [Bun](https://bun.sh) - Fast JavaScript runtime
-- **Framework**: [Fastify](https://fastify.dev) - High-performance web framework
-- **Database**: PostgreSQL with [Drizzle ORM](https://orm.drizzle.team)
-- **Authentication**: Better Auth + session-based cookies
-- **Validation**: [Zod](https://zod.dev) - TypeScript-first schema validation
-- **Logging**: [Pino](https://getpino.io) - Fast JSON logger
-- **Video Processing**: FFmpeg/FFprobe
-- **Queue**: Redis with BullMQ pattern
-- **Testing**: Bun's built-in test runner
+- **Video Indexing** — Automatic scanning from registered directories, recursive file detection, FFprobe metadata extraction (duration, resolution, codecs, bitrate, fps), SHA256 deduplication, soft-delete for missing files
+- **Organization** — Creators (with aliases, social links, gallery media, platform profiles), hierarchical tags (parent/child with hex colors), studios, platforms, video collections (series/episodic grouping with season/episode numbering)
+- **User Content** — Playlists (custom ordering), favorites (videos + creators), timestamp bookmarks, 1-5 star ratings with comments
+- **Media Processing** — Thumbnails (configurable timestamp/position), Vidstack-compatible sprite storyboards (VTT), unified frame extraction, video transcoding (VAAPI GPU acceleration, job queue)
+- **Auto-Tagging** — Rule engine with conditions (path pattern, duration, resolution, codec, file size) and actions (add/remove tags, creators, studios)
+- **Face Recognition** — Python/InsightFace microservice for face detection, 512-dim embedding extraction, auto-matching to known creators, similarity search
+- **Video Editing** — Timeline-based trimming jobs with configurable output codecs
+- **Streaming** — HTTP range-request support, chunked delivery
+- **Real-Time** — WebSocket multiplayer remote control system (pairing, sessions, display/remote devices), SSE event stream
+- **Multiplayer Remote** — Pairing codes, display device management, remote control commands (playback, audio, layout, filters)
+- **Analytics** — Watch statistics (plays, watch time, position tracking), library stats snapshots (storage, library composition, content coverage, usage patterns)
+- **Authentication** — Better Auth with Drizzle-backed sessions, email/password, single-user with auto-disabled registration
+- **Backup** — Full database export/import to JSON
+- **Scheduling** — Cron-based directory rescanning, configurable intervals
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) v1.3 or higher
+- [Bun](https://bun.sh) 1.3+
 - PostgreSQL 14+
-- [FFmpeg](https://ffmpeg.org) and FFprobe
-- Redis (optional, for job queues)
+- FFmpeg + FFprobe
+- Redis (optional, for job queue)
+- Python 3.12+ (optional, for face recognition service)
 - Linux, macOS, or WSL2
 
-## Installation
-
-1. **Clone the repository**
-
-   ```bash
-   git clone <repository-url>
-   cd conversor-video
-   ```
-
-2. **Install dependencies**
-
-   ```bash
-   bun install
-   ```
-
-3. **Configure environment**
-
-   ```bash
-   cp .env.example .env
-   # Edit .env with your PostgreSQL credentials and SESSION_SECRET
-   ```
-
-4. **Setup database**
-
-   ```bash
-   bun db:generate
-   bun db:migrate
-   ```
-
-5. **Verify FFmpeg installation**
-   ```bash
-   which ffmpeg
-   which ffprobe
-   # Update FFMPEG_PATH and FFPROBE_PATH in .env if needed
-   ```
-
-## Usage
-
-### Development
-
-Start the development server with auto-reload:
+## Quick Start
 
 ```bash
+git clone <repo-url>
+cd conversor-video
+bun install
+cp .env.example .env
+# Edit .env with your PostgreSQL credentials and SESSION_SECRET
+bun db:generate
+bun db:migrate
 bun dev
 ```
 
-The server will start at `http://localhost:3000` (configurable via `PORT` in `.env`).
+Server starts at `http://localhost:3000`. Swagger UI at `http://localhost:3000/docs`.
 
-### Production
+## Environment Variables
 
-Build and start the production server:
+See `.env.example` for all options. Key variables:
 
-```bash
-bun run build
-bun run start:prod
-```
+| Variable | Description |
+|---|---|
+| `POSTGRES_*` | Database connection |
+| `SESSION_SECRET` | Min 32 chars — used for cookie signing |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | Paths to FFmpeg binaries |
+| `REDIS_URL` | Redis connection for job queue (optional) |
+| `FACE_SERVICE_URL` | Python face service endpoint (optional) |
 
-The production startup includes:
+## Commands
 
-- Environment variable validation
-- Dependency checks (PostgreSQL, FFmpeg, required directories)
-- Automatic migration of any pending database changes
-- Running compiled JavaScript instead of TypeScript on-the-fly
-
-### First-Time Setup
-
-1. **Register a user**:
-
-   ```bash
-   curl -X POST http://localhost:3000/api/auth/register \
-     -H "Content-Type: application/json" \
-     -d '{"email": "admin@example.com", "name": "Admin", "password": "your-secure-password"}'
-   ```
-
-2. **Login to get session cookie**:
-
-   ```bash
-   curl -X POST http://localhost:3000/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email": "admin@example.com", "password": "your-secure-password"}' \
-     -c cookies.txt
-   ```
-
-3. **Register a directory to watch**:
-   ```bash
-   curl -X POST http://localhost:3000/api/directories \
-     -H "Content-Type: application/json" \
-     -b cookies.txt \
-     -d '{"path": "/path/to/your/videos", "auto_scan": true, "scan_interval_minutes": 30}'
-   ```
-
-The system will automatically scan the directory and index all video files.
-
-### API Documentation
-
-Access Swagger UI documentation at: `http://localhost:3000/docs`
-
-### Health Check
-
-```bash
-curl http://localhost:3000/health
-```
-
-## Testing
-
-```bash
-bun test                    # Run all tests
-bun test tests/integration/auth.test.ts  # Run specific file
-bun test --filter "should register"      # Run by pattern
-```
+| Command | Description |
+|---|---|
+| `bun dev` | Dev server with auto-reload |
+| `bun start` | Production server |
+| `bun run build` | Compile TS to JS |
+| `bun run start:prod` | Production from compiled build |
+| `bun run validate:env` | Validate environment variables |
+| `bun run check:deps` | Check PostgreSQL, FFmpeg, directories |
+| `bun db:generate` | Generate Drizzle migrations |
+| `bun db:migrate` | Apply pending migrations |
+| `bun db:push` | Direct schema sync (dev only) |
+| `bun db:studio` | Drizzle Studio GUI |
+| `bun db:introspect` | Introspect DB to schema |
+| `bun db:apply-migration` | Run custom migration script |
+| `bunx eslint .` | Lint |
+| `bunx tsc --noEmit` | Type check |
 
 ## Project Structure
 
 ```
 src/
-├── index.ts                    # Application entry point
-├── server.ts                   # Fastify server setup
+├── index.ts                     # Entry point
+├── server.ts                    # Fastify server setup + route registration
 ├── config/
-│   ├── database.ts             # Drizzle database connection
-│   ├── drizzle.ts              # Drizzle config and schema
-│   └── env.ts                  # Environment variable validation
+│   ├── database.ts              # DB connection pool
+│   ├── drizzle.ts               # Drizzle ORM setup
+│   └── env.ts                   # Env validation
 ├── database/
-│   ├── schema/                 # Drizzle table definitions
-│   └── migrations/             # Generated migrations
+│   ├── schema/                  # 18 schema files, 40 tables
+│   │   ├── users.schema.ts      # Auth (users, sessions, accounts)
+│   │   ├── videos.schema.ts     # Core video records + stats + metadata
+│   │   ├── organization.schema.ts # Creators, tags, studios, platforms
+│   │   ├── content.schema.ts    # Playlists, favorites, bookmarks, ratings
+│   │   ├── video-collections.schema.ts # Series/episodic grouping
+│   │   ├── media.schema.ts      # Thumbnails, storyboards
+│   │   ├── conversion.schema.ts # Transcoding jobs
+│   │   ├── edits.schema.ts      # Video editing jobs
+│   │   ├── stats.schema.ts      # Analytics snapshots
+│   │   ├── tagging.schema.ts    # Auto-tagging rules
+│   │   ├── face-recognition.schema.ts # Face embeddings, detections
+│   │   ├── multiplayer-remote.schema.ts # Remote control sessions
+│   │   ├── app-settings.schema.ts
+│   │   └── triage.schema.ts
+│   └── drizzle-migrations/      # Generated SQL migrations
 ├── modules/
-│   ├── auth/                   # Authentication and sessions
-│   ├── directories/            # Directory registration and scanning
-│   ├── videos/                 # Video CRUD, metadata, streaming
-│   ├── creators/               # Creator management
-│   ├── studios/                # Studio management
-│   ├── platforms/              # Platform management
-│   ├── tags/                   # Tag management
-│   ├── thumbnails/             # Thumbnail generation
-│   ├── storyboards/            # Storyboard/sprite generation
-│   ├── playlists/              # Playlist management
-│   ├── favorites/              # Favorites management
-│   ├── bookmarks/              # Video bookmarks
-│   ├── ratings/                # Rating system
-│   ├── auto-tagging/           # Auto-tagging rules
-│   ├── face-recognition/       # Face detection and recognition
-│   ├── frame-extraction/       # Unified frame extraction
-│   ├── video-stats/            # Video view statistics
-│   ├── stats/                  # Library statistics
-│   ├── settings/               # Application settings
-│   ├── scheduler/              # Cron-based scheduling
-│   ├── backup/                 # Database backup
-│   ├── websocket/              # WebSocket support
-│   └── conversion/             # Video conversion queue
-└── utils/
-    ├── errors.ts               # Custom error classes
-    ├── validation.ts           # Zod validation helpers
-    ├── logger.ts               # Pino logger configuration
-    └── file-utils.ts           # File operations
+│   ├── auth/                    # Authentication (Better Auth)
+│   ├── videos/                  # Video CRUD, search, streaming, metadata
+│   ├── directories/             # Watched directory management + scanning
+│   ├── creators/                # Creator/performer management
+│   ├── studios/                 # Studio management
+│   ├── platforms/               # Platform reference data
+│   ├── tags/                    # Hierarchical tags
+│   ├── auto-tagging/            # Auto-tagging logic
+│   ├── tagging-rules/           # Rule engine (conditions + actions)
+│   ├── ratings/                 # 1-5 star ratings
+│   ├── favorites/               # Video + creator favorites
+│   ├── bookmarks/               # Timestamp bookmarks
+│   ├── playlists/               # Playlist management
+│   ├── video-collections/       # Series/episodic collections
+│   ├── thumbnails/              # Thumbnail generation
+│   ├── storyboards/             # Sprite storyboards (Vidstack)
+│   ├── frame-extraction/        # Unified frame extraction
+│   ├── face-recognition/        # Face detection + matching
+│   ├── conversion/              # Video transcoding queue
+│   ├── edits/                   # Video trimming/editing jobs
+│   ├── video-stats/             # Watch statistics
+│   ├── stats/                   # Library analytics snapshots
+│   ├── scheduler/               # Cron-based scanning
+│   ├── events/                  # SSE event stream
+│   ├── multiplayer-remote/      # WebSocket remote control
+│   ├── settings/                # App configuration
+│   └── backup/                  # Database backup/restore
+├── utils/
+│   ├── errors.ts                # AppError base class
+│   ├── validation.ts            # validateSchema helper
+│   ├── logger.ts                # Pino logger
+│   └── file-utils.ts            # File operations
+├── scripts/
+│   ├── validate-env.ts
+│   └── check-dependencies.ts
+└── demo_mode/                   # Demo data generation
 ```
 
-## Environment Variables
+Face recognition requires a separate Python microservice at `face-service/` (InsightFace, FastAPI port 8100). See `face-service/README.md`.
 
-Required PostgreSQL variables:
+## API
+
+All routes are prefixed with `/api/v1` and documented via Swagger at `/docs`.
+
+Health check: `GET /health`
+
+### First-Time Setup
 
 ```bash
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=video_streaming_db
-POSTGRES_USER=your_user
-POSTGRES_PASSWORD=your_password
-POSTGRES_MAX_CONNECTIONS=20
+# Register first user
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@example.com", "name": "Admin", "password": "your-password"}'
+
+# Login
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@example.com", "password": "your-password"}' \
+  -c cookies.txt
+
+# Register a directory to scan
+curl -X POST http://localhost:3000/api/directories \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"path": "/path/to/videos", "auto_scan": true, "scan_interval_minutes": 30}'
 ```
 
-Other important keys:
+## Supported Formats
 
-```bash
-SESSION_SECRET=your-32-char-minimum-secret
-FFMPEG_PATH=/usr/bin/ffmpeg
-FFPROBE_PATH=/usr/bin/ffprobe
-```
+MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V, MPEG, MPV, OGM, RMVB
 
-See `.env.example` for all available options.
+## Video Processing Backends
 
-## Supported Video Formats
-
-- MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V, MPEG, MPV, OGM, RMVB
-
-Format detection is based on file extensions. Add more in `src/utils/file-utils.ts`.
-
-## Commands
-
-| Command                | Description                                      |
-| ---------------------- | ------------------------------------------------ |
-| `bun dev`              | Start dev server with auto-reload                |
-| `bun start`            | Start production server (from TypeScript source) |
-| `bun run build`        | Compile TypeScript to JavaScript                 |
-| `bun run start:prod`   | Start production server (from compiled build)    |
-| `bun run validate:env` | Validate environment variables                   |
-| `bun run check:deps`   | Check dependencies (PostgreSQL, FFmpeg, dirs)    |
-| `bun db:generate`      | Generate Drizzle migrations                      |
-| `bun db:migrate`       | Apply pending migrations                         |
-| `bun db:push`          | Push schema (dev only)                           |
-| `bun db:studio`        | Open Drizzle Studio GUI                          |
-| `bun test`             | Run all tests                                    |
-| `bunx eslint .`        | Run linter                                       |
-| `bunx tsc --noEmit`    | Type check                                       |
-
-## Security
-
-- Single-user design with registration auto-disable
-- HTTP-only secure cookies, no JWT exposure
-- Better Auth credential hashing and session management
-- Zod schemas on all endpoints
-- Path traversal prevention
-- Parameterized queries (Drizzle ORM)
-- Rate limiting and security headers (Fastify Helmet)
-
-## Contributing
-
-This is a personal project. Suggestions and bug reports via issues are welcome.
-
-## License
-
-[Add your license here]
+- **Thumbnails/Storyboards**: FFmpeg with configurable quality, format, size
+- **Conversion**: VAAPI hardware acceleration (Linux/Intel GPU), fallback software
+- **Face Recognition**: InsightFace via Python microservice (CUDA/ROCm supported)

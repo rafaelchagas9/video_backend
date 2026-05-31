@@ -10,7 +10,6 @@
     "prestart:prod": "bun run validate:env && bun run check:deps && bun run db:migrate",
     "validate:env": "bun scripts/validate-env.ts",
     "check:deps": "bun scripts/check-dependencies.ts",
-    "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

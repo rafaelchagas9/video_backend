@@ -609,21 +609,6 @@ from .routes import my_router
 app.include_router(my_router)
 ```
 
-### Testing
-
-```bash
-# Install dev dependencies (optional)
-uv pip install pytest httpx
-
-# Run tests (if test suite exists)
-pytest tests/
-
-# Manual testing with curl
-curl -X POST http://localhost:8100/detect \
-  -F "file=@test_image.jpg" \
-  | jq '.faces | length'
-```
-
 ### Code Quality
 
 ```bash
