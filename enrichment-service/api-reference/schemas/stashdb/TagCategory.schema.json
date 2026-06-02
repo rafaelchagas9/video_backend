@@ -1,0 +1,57 @@
+{
+  "name": "TagCategory",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "id",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "ID",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "name",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "String",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "group",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "ENUM",
+          "name": "TagGroupEnum",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "description",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}

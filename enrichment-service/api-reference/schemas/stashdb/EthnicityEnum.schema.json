@@ -1,0 +1,33 @@
+{
+  "name": "EthnicityEnum",
+  "kind": "ENUM",
+  "description": null,
+  "fields": [],
+  "inputFields": [],
+  "enumValues": [
+    {
+      "name": "CAUCASIAN"
+    },
+    {
+      "name": "BLACK"
+    },
+    {
+      "name": "ASIAN"
+    },
+    {
+      "name": "INDIAN"
+    },
+    {
+      "name": "LATIN"
+    },
+    {
+      "name": "MIDDLE_EASTERN"
+    },
+    {
+      "name": "MIXED"
+    },
+    {
+      "name": "OTHER"
+    }
+  ]
+}

@@ -6,7 +6,7 @@ import {
   creatorGalleryMediaTable,
   creatorsTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { existsSync, unlinkSync } from "fs";
 import type {
@@ -60,9 +60,15 @@ export class CreatorsService {
 
     // Profile picture presence
     if (hasProfilePicture === true) {
-      whereConditions.push(sql`c.profile_picture_path IS NOT NULL`);
+      whereConditions.push(sql`EXISTS (
+        SELECT 1 FROM creator_gallery_media cgm_profile
+        WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
+      )`);
     } else if (hasProfilePicture === false) {
-      whereConditions.push(sql`c.profile_picture_path IS NULL`);
+      whereConditions.push(sql`NOT EXISTS (
+        SELECT 1 FROM creator_gallery_media cgm_profile
+        WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
+      )`);
     }
 
     if (isFavorite === true && userId) {
@@ -97,7 +103,10 @@ export class CreatorsService {
     if (missing) {
       switch (missing) {
         case "picture":
-          whereConditions.push(sql`c.profile_picture_path IS NULL`);
+          whereConditions.push(sql`NOT EXISTS (
+            SELECT 1 FROM creator_gallery_media cgm_profile
+            WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
+          )`);
           break;
         case "platform":
           whereConditions.push(sql`COALESCE(pc.platform_count, 0) = 0`);
@@ -110,7 +119,10 @@ export class CreatorsService {
           break;
         case "any":
           whereConditions.push(sql`(
-            c.profile_picture_path IS NULL
+            NOT EXISTS (
+              SELECT 1 FROM creator_gallery_media cgm_profile
+              WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
+            )
             OR (COALESCE(pc.platform_count, 0) = 0 AND COALESCE(sc.social_link_count, 0) = 0)
             OR COALESCE(vc.video_count, 0) = 0
           )`);
@@ -121,7 +133,10 @@ export class CreatorsService {
     // Complete filter
     if (complete !== undefined) {
       const completenessCondition = sql`(
-        c.profile_picture_path IS NOT NULL
+        EXISTS (
+          SELECT 1 FROM creator_gallery_media cgm_profile
+          WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
+        )
         AND (COALESCE(pc.platform_count, 0) > 0 OR COALESCE(sc.social_link_count, 0) > 0)
         AND COALESCE(vc.video_count, 0) > 0
       )`;
@@ -169,7 +184,7 @@ export class CreatorsService {
         ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
         : sql``;
 
-    const groupByClause = sql`GROUP BY c.id`;
+    const groupByClause = sql`GROUP BY c.id, profile_media.file_path, main_media.file_path`;
 
     // Get total count
     const countQuery = sql`
@@ -210,11 +225,25 @@ export class CreatorsService {
     const selectQuery = sql`
       SELECT
         c.*,
+        profile_media.file_path as unified_profile_picture_path,
+        main_media.file_path as unified_main_picture_path,
         COALESCE(MAX(vc.video_count), 0) as linked_video_count,
         COALESCE(MAX(pc.platform_count), 0) as platform_count,
         COALESCE(MAX(sc.social_link_count), 0) as social_link_count,
         ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       ${baseFrom}
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_profile_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) profile_media ON true
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_main_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) main_media ON true
       ${studioJoin}
       ${platformSearchJoin}
       ${whereClause}
@@ -227,7 +256,7 @@ export class CreatorsService {
 
     // Compute completeness for each creator
     const creators = (rawCreators as any[]).map((creator: any) => {
-      const hasPicture = creator.profile_picture_path !== null;
+      const hasPicture = creator.unified_profile_picture_path !== null;
       const hasPlatformOrSocial =
         creator.platform_count > 0 || creator.social_link_count > 0;
       const hasVideos = creator.linked_video_count > 0;
@@ -240,7 +269,7 @@ export class CreatorsService {
       return this.mapToSnakeCase({
         ...creator,
         has_profile_picture: hasPicture,
-        has_main_picture: creator.main_picture_path !== null,
+        has_main_picture: creator.unified_main_picture_path !== null,
         completeness: {
           is_complete: hasPicture && hasPlatformOrSocial && hasVideos,
           missing_fields: missingFields,
@@ -267,8 +296,22 @@ export class CreatorsService {
     const result = await db.execute(sql`
       SELECT
         c.*,
+        profile_media.file_path as unified_profile_picture_path,
+        main_media.file_path as unified_main_picture_path,
         ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       FROM creators c
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_profile_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) profile_media ON true
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_main_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) main_media ON true
       WHERE c.id = ${id}
       LIMIT 1
     `);
@@ -316,7 +359,7 @@ export class CreatorsService {
 
       return this.findById(result[0].id, userId);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
           `Creator with name "${input.name}" already exists`,
@@ -366,7 +409,7 @@ export class CreatorsService {
 
       return this.findById(id, userId);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
           `Creator with name "${input.name}" already exists`,
@@ -383,21 +426,6 @@ export class CreatorsService {
 
     const creator = await this.findById(id); // Ensure exists
 
-    // Delete profile picture file if exists
-    if (creator.profile_picture_path) {
-      try {
-        if (existsSync(creator.profile_picture_path)) {
-          unlinkSync(creator.profile_picture_path);
-        }
-      } catch (error) {
-        logger.warn(
-          { error, path: creator.profile_picture_path },
-          "Failed to delete creator profile picture file",
-        );
-        // Continue with database deletion even if file deletion fails
-      }
-    }
-
     if (creator.face_thumbnail_path) {
       try {
         if (existsSync(creator.face_thumbnail_path)) {
@@ -407,19 +435,6 @@ export class CreatorsService {
         logger.warn(
           { error, path: creator.face_thumbnail_path },
           "Failed to delete creator face thumbnail file",
-        );
-      }
-    }
-
-    if (creator.main_picture_path) {
-      try {
-        if (existsSync(creator.main_picture_path)) {
-          unlinkSync(creator.main_picture_path);
-        }
-      } catch (error) {
-        logger.warn(
-          { error, path: creator.main_picture_path },
-          "Failed to delete creator main picture file",
         );
       }
     }
@@ -460,11 +475,25 @@ export class CreatorsService {
 
     const rawQuery = sql`
       SELECT c.*,
+        profile_media.file_path as unified_profile_picture_path,
+        main_media.file_path as unified_main_picture_path,
         COALESCE(vc.video_count, 0) as linked_video_count,
         COALESCE(pc.platform_count, 0) as platform_count,
         COALESCE(sc.social_link_count, 0) as social_link_count,
         ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       FROM creators c
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_profile_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) profile_media ON true
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_main_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) main_media ON true
       LEFT JOIN (
         SELECT creator_id, COUNT(*) as video_count
         FROM video_creators GROUP BY creator_id
@@ -490,15 +519,15 @@ export class CreatorsService {
     return (creators as any[]).map((creator: any) =>
       this.mapToSnakeCase({
         ...creator,
-        has_profile_picture: creator.profile_picture_path !== null,
-        has_main_picture: creator.main_picture_path !== null,
+        has_profile_picture: creator.unified_profile_picture_path !== null,
+        has_main_picture: creator.unified_main_picture_path !== null,
         completeness: {
           is_complete:
-            creator.profile_picture_path !== null &&
+            creator.unified_profile_picture_path !== null &&
             (creator.platform_count > 0 || creator.social_link_count > 0) &&
             creator.linked_video_count > 0,
           missing_fields: [
-            ...(creator.profile_picture_path ? [] : ["picture"]),
+            ...(creator.unified_profile_picture_path ? [] : ["picture"]),
             ...(creator.platform_count > 0 || creator.social_link_count > 0
               ? []
               : ["platform_or_social"]),
@@ -521,11 +550,25 @@ export class CreatorsService {
 
     const rawQuery = sql`
       SELECT c.*,
+        profile_media.file_path as unified_profile_picture_path,
+        main_media.file_path as unified_main_picture_path,
         COALESCE(vc.video_count, 0) as linked_video_count,
         COALESCE(pc.platform_count, 0) as platform_count,
         COALESCE(sc.social_link_count, 0) as social_link_count,
         ${this.favoriteSelectSql(userId, sql`c.id`)} as is_favorite
       FROM creators c
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_profile_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) profile_media ON true
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_main_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) main_media ON true
       LEFT JOIN (
         SELECT creator_id, COUNT(*) as video_count
         FROM video_creators GROUP BY creator_id
@@ -547,15 +590,15 @@ export class CreatorsService {
     return (creators as any[]).map((creator: any) =>
       this.mapToSnakeCase({
         ...creator,
-        has_profile_picture: creator.profile_picture_path !== null,
-        has_main_picture: creator.main_picture_path !== null,
+        has_profile_picture: creator.unified_profile_picture_path !== null,
+        has_main_picture: creator.unified_main_picture_path !== null,
         completeness: {
           is_complete:
-            creator.profile_picture_path !== null &&
+            creator.unified_profile_picture_path !== null &&
             (creator.platform_count > 0 || creator.social_link_count > 0) &&
             creator.linked_video_count > 0,
           missing_fields: [
-            ...(creator.profile_picture_path ? [] : ["picture"]),
+            ...(creator.unified_profile_picture_path ? [] : ["picture"]),
             ...(creator.platform_count > 0 || creator.social_link_count > 0
               ? []
               : ["platform_or_social"]),
@@ -609,6 +652,8 @@ export class CreatorsService {
       label: item.label,
       description: item.description,
       file_path: item.filePath,
+      is_profile_picture: item.isProfilePicture,
+      is_main_picture: item.isMainPicture,
       url: `/api/creators/${creatorId}/gallery/${item.id}/image`,
       created_at:
         item.createdAt instanceof Date
@@ -635,16 +680,25 @@ export class CreatorsService {
       name: creator.name,
       description: creator.description,
       profile_picture_path:
-        creator.profilePicturePath ?? creator.profile_picture_path,
-      main_picture_path: creator.mainPicturePath ?? creator.main_picture_path,
+        creator.unified_profile_picture_path ??
+        creator.profilePicturePath ??
+        creator.profile_picture_path,
+      main_picture_path:
+        creator.unified_main_picture_path ??
+        creator.mainPicturePath ??
+        creator.main_picture_path,
       face_thumbnail_path:
         creator.faceThumbnailPath ?? creator.face_thumbnail_path ?? null,
       profile_picture_url:
-        (creator.profilePicturePath ?? creator.profile_picture_path)
+        (creator.unified_profile_picture_path ??
+          creator.profilePicturePath ??
+          creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
           : undefined,
       main_picture_url:
-        (creator.mainPicturePath ?? creator.main_picture_path)
+        (creator.unified_main_picture_path ??
+          creator.mainPicturePath ??
+          creator.main_picture_path)
           ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:

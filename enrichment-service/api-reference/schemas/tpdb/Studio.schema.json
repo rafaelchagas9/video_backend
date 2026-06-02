@@ -1,0 +1,136 @@
+{
+  "name": "Studio",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "id",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "ID",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "name",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "String",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "urls",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "URL",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "parent",
+      "description": null,
+      "type": {
+        "kind": "OBJECT",
+        "name": "Studio",
+        "ofType": null
+      }
+    },
+    {
+      "name": "images",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Image",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "aliases",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "NON_NULL",
+          "name": null,
+          "ofType": {
+            "kind": "SCALAR",
+            "name": "String",
+            "ofType": null
+          }
+        }
+      }
+    },
+    {
+      "name": "child_studios",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Studio",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "deleted",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Boolean",
+        "ofType": null
+      }
+    },
+    {
+      "name": "is_favorite",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Boolean",
+        "ofType": null
+      }
+    },
+    {
+      "name": "created",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "DateTime",
+        "ofType": null
+      }
+    },
+    {
+      "name": "updated",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "DateTime",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": null,
+  "enumValues": null
+}

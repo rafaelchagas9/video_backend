@@ -1,0 +1,27 @@
+{
+  "name": "EyeColorEnum",
+  "kind": "ENUM",
+  "description": null,
+  "fields": [],
+  "inputFields": [],
+  "enumValues": [
+    {
+      "name": "BLUE"
+    },
+    {
+      "name": "BROWN"
+    },
+    {
+      "name": "GREY"
+    },
+    {
+      "name": "GREEN"
+    },
+    {
+      "name": "HAZEL"
+    },
+    {
+      "name": "RED"
+    }
+  ]
+}

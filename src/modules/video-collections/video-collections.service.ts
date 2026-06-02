@@ -7,7 +7,7 @@ import {
   videoCollectionsTable,
   videosTable,
 } from "@/database/schema";
-import { ConflictError, NotFoundError } from "@/utils/errors";
+import { ConflictError, NotFoundError, isUniqueViolation } from "@/utils/errors";
 import { env } from "@/config/env";
 import type {
   CreateVideoCollectionEntryInput,
@@ -639,12 +639,7 @@ export class VideoCollectionsService {
   }
 
   private rethrowCollectionConflict(error: unknown): void {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "23505"
-    ) {
+    if (isUniqueViolation(error)) {
       throw new ConflictError(
         "Collection entry conflicts with an existing video order or membership",
       );

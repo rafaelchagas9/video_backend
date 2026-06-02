@@ -1,0 +1,27 @@
+{
+  "name": "FuzzyDate",
+  "kind": "OBJECT",
+  "description": "A type",
+  "fields": [
+    {
+      "name": "date",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "DateTime",
+        "ofType": null
+      }
+    },
+    {
+      "name": "accuracy",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": null,
+  "enumValues": null
+}

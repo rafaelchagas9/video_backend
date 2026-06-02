@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   creatorGalleryMediaTable,
@@ -224,21 +224,20 @@ export class CreatorsSocialService {
     });
 
     if (variant === "main") {
-      this.deleteFileIfExists(creator.main_picture_path);
+      await this.clearImageRole(id, "main");
 
-      await db
-        .update(creatorsTable)
-        .set({
-          mainPicturePath: filePath,
-          updatedAt: new Date(),
-        })
-        .where(eq(creatorsTable.id, id));
+      await this.createGalleryImage(id, filePath, {
+        label: "Main picture",
+        isMainPicture: true,
+      });
+
+      await this.touchCreator(id);
 
       return this.findCreatorById(id);
     }
 
-    this.deleteFileIfExists(creator.profile_picture_path);
     this.deleteFileIfExists(creator.face_thumbnail_path);
+    await this.clearImageRole(id, "portrait");
 
     const faceThumbnailPath = await this.generateFaceThumbnail(filePath, id);
 
@@ -246,10 +245,14 @@ export class CreatorsSocialService {
       await this.generateProfilePictureEmbedding(filePath, id);
     }
 
+    await this.createGalleryImage(id, filePath, {
+      label: "Profile picture",
+      isProfilePicture: true,
+    });
+
     await db
       .update(creatorsTable)
       .set({
-        profilePicturePath: filePath,
         faceThumbnailPath,
         updatedAt: new Date(),
       })
@@ -265,26 +268,18 @@ export class CreatorsSocialService {
     const creator = await this.findCreatorById(id);
 
     if (variant === "main") {
-      this.deleteFileIfExists(creator.main_picture_path);
-
-      await db
-        .update(creatorsTable)
-        .set({
-          mainPicturePath: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(creatorsTable.id, id));
+      await this.clearImageRole(id, "main");
+      await this.touchCreator(id);
 
       return this.findCreatorById(id);
     }
 
-    this.deleteFileIfExists(creator.profile_picture_path);
     this.deleteFileIfExists(creator.face_thumbnail_path);
+    await this.clearImageRole(id, "portrait");
 
     await db
       .update(creatorsTable)
       .set({
-        profilePicturePath: null,
         faceThumbnailPath: null,
         updatedAt: new Date(),
       })
@@ -373,6 +368,44 @@ export class CreatorsSocialService {
       .where(eq(creatorGalleryMediaTable.id, mediaId));
   }
 
+  async updateGalleryMediaRoles(
+    creatorId: number,
+    mediaId: number,
+    roles: { is_profile_picture?: boolean; is_main_picture?: boolean },
+  ): Promise<CreatorGalleryMedia> {
+    await this.findGalleryMediaById(creatorId, mediaId);
+
+    if (roles.is_profile_picture === true) {
+      await this.clearImageRole(creatorId, "portrait");
+    }
+
+    if (roles.is_main_picture === true) {
+      await this.clearImageRole(creatorId, "main");
+    }
+
+    await db
+      .update(creatorGalleryMediaTable)
+      .set({
+        ...(roles.is_profile_picture !== undefined && {
+          isProfilePicture: roles.is_profile_picture,
+        }),
+        ...(roles.is_main_picture !== undefined && {
+          isMainPicture: roles.is_main_picture,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(creatorGalleryMediaTable.id, mediaId),
+          eq(creatorGalleryMediaTable.creatorId, creatorId),
+        ),
+      );
+
+    await this.touchCreator(creatorId);
+
+    return this.findGalleryMediaById(creatorId, mediaId);
+  }
+
   private async findSocialLinkById(id: number): Promise<SocialLink> {
     const link = await db
       .select()
@@ -388,11 +421,27 @@ export class CreatorsSocialService {
   }
 
   private async findCreatorById(id: number): Promise<Creator> {
-    const result = await db
-      .select()
-      .from(creatorsTable)
-      .where(eq(creatorsTable.id, id))
-      .limit(1);
+    const result = await db.execute(sql`
+      SELECT
+        c.*,
+        profile_media.file_path as unified_profile_picture_path,
+        main_media.file_path as unified_main_picture_path
+      FROM creators c
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_profile_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) profile_media ON true
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_main_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) main_media ON true
+      WHERE c.id = ${id}
+      LIMIT 1
+    `);
 
     if (!result || result.length === 0) {
       throw new NotFoundError(`Creator not found with id: ${id}`);
@@ -439,19 +488,37 @@ export class CreatorsSocialService {
   }
 
   private mapCreatorToSnakeCase(creator: any): Creator {
+    const toISOString = (val: unknown): string => {
+      if (val instanceof Date) return val.toISOString();
+      if (typeof val === "string") return val;
+      return new Date().toISOString();
+    };
+
     return {
       id: creator.id,
       name: creator.name,
       description: creator.description,
-      profile_picture_path: creator.profilePicturePath,
-      main_picture_path: creator.mainPicturePath ?? null,
-      face_thumbnail_path: creator.faceThumbnailPath,
+      profile_picture_path:
+        creator.unified_profile_picture_path ??
+        creator.profilePicturePath ??
+        creator.profile_picture_path,
+      main_picture_path:
+        creator.unified_main_picture_path ??
+        creator.mainPicturePath ??
+        creator.main_picture_path ??
+        null,
+      face_thumbnail_path:
+        creator.faceThumbnailPath ?? creator.face_thumbnail_path ?? null,
       profile_picture_url:
-        (creator.profilePicturePath ?? creator.profile_picture_path)
+        (creator.unified_profile_picture_path ??
+          creator.profilePicturePath ??
+          creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
           : undefined,
       main_picture_url:
-        (creator.mainPicturePath ?? creator.main_picture_path)
+        (creator.unified_main_picture_path ??
+          creator.mainPicturePath ??
+          creator.main_picture_path)
           ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:
@@ -459,14 +526,8 @@ export class CreatorsSocialService {
           ? `/api/creators/${creator.id}/picture?type=face`
           : undefined,
       is_favorite: false,
-      created_at:
-        creator.createdAt instanceof Date
-          ? creator.createdAt.toISOString()
-          : creator.createdAt,
-      updated_at:
-        creator.updatedAt instanceof Date
-          ? creator.updatedAt.toISOString()
-          : creator.updatedAt,
+      created_at: toISOString(creator.createdAt ?? creator.created_at),
+      updated_at: toISOString(creator.updatedAt ?? creator.updated_at),
     };
   }
 
@@ -477,6 +538,8 @@ export class CreatorsSocialService {
       label: media.label ?? null,
       description: media.description ?? null,
       file_path: media.filePath,
+      is_profile_picture: media.isProfilePicture,
+      is_main_picture: media.isMainPicture,
       url: `/api/creators/${media.creatorId}/gallery/${media.id}/image`,
       created_at:
         media.createdAt instanceof Date
@@ -492,6 +555,48 @@ export class CreatorsSocialService {
   private normalizeOptionalText(value: string | undefined) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
+  }
+
+  private async createGalleryImage(
+    creatorId: number,
+    filePath: string,
+    options: {
+      label?: string;
+      description?: string;
+      isProfilePicture?: boolean;
+      isMainPicture?: boolean;
+    } = {},
+  ) {
+    await db.insert(creatorGalleryMediaTable).values({
+      creatorId,
+      label: this.normalizeOptionalText(options.label),
+      description: this.normalizeOptionalText(options.description),
+      filePath,
+      isProfilePicture: options.isProfilePicture ?? false,
+      isMainPicture: options.isMainPicture ?? false,
+    });
+  }
+
+  private async clearImageRole(
+    creatorId: number,
+    role: CreatorPictureVariant,
+  ) {
+    await db
+      .update(creatorGalleryMediaTable)
+      .set({
+        ...(role === "portrait"
+          ? { isProfilePicture: false }
+          : { isMainPicture: false }),
+        updatedAt: new Date(),
+      })
+      .where(eq(creatorGalleryMediaTable.creatorId, creatorId));
+  }
+
+  private async touchCreator(creatorId: number) {
+    await db
+      .update(creatorsTable)
+      .set({ updatedAt: new Date() })
+      .where(eq(creatorsTable.id, creatorId));
   }
 
   private deleteFileIfExists(filePath: string | null | undefined) {

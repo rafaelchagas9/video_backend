@@ -2,7 +2,12 @@ import { eq, sql, isNull, or, and, ilike } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { tagsTable, videoTagsTable } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+  isForeignKeyViolation,
+} from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import type {
   Tag,
@@ -409,7 +414,7 @@ export class TagsService {
 
       return this.findById(result.id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
           `Tag with name "${input.name}" already exists at this level`,
@@ -476,7 +481,7 @@ export class TagsService {
 
       return this.findById(id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
           `Tag with name "${input.name}" already exists at this level`,
@@ -561,11 +566,11 @@ export class TagsService {
         tagId,
       });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError("Tag is already associated with this video");
       }
-      if (error.code === "23503") {
+      if (isForeignKeyViolation(error)) {
         // FOREIGN KEY violation
         throw new NotFoundError(`Video not found with id: ${videoId}`);
       }

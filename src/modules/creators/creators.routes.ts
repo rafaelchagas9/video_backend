@@ -14,6 +14,7 @@ import { creatorsSocialService } from "./creators.social.service";
 import { creatorsRelationshipsService } from "./creators.relationships.service";
 import { creatorsBulkService } from "./creators.bulk.service";
 import { creatorFavoritesService } from "./creators.favorites.service";
+import { creatorsAliasesService } from "./creators.aliases.service";
 import {
   idParamSchema,
   listCreatorsQuerySchema,
@@ -23,23 +24,29 @@ import {
   updateCreatorPlatformSchema,
   createSocialLinkSchema,
   updateSocialLinkSchema,
+  createAliasSchema,
+  updateAliasSchema,
   creatorResponseSchema,
   creatorListResponseSchema,
   platformProfileResponseSchema,
   platformProfileListResponseSchema,
   socialLinkResponseSchema,
   socialLinkListResponseSchema,
+  aliasResponseSchema,
+  aliasListResponseSchema,
   studioListResponseSchema,
   messageResponseSchema,
   favoriteCheckResponseSchema,
   errorResponseSchema,
   bulkPlatformsSchema,
   bulkSocialLinksSchema,
+  bulkAliasesSchema,
   galleryMediaCreateSchema,
   galleryMediaFromUrlSchema,
   galleryMediaListResponseSchema,
   galleryMediaParamsSchema,
   galleryMediaResponseSchema,
+  galleryMediaRolesSchema,
   pictureFromUrlSchema,
   pictureMutationQuerySchema,
   pictureQuerySchema,
@@ -917,6 +924,39 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  app.patch(
+    "/:id/gallery/:mediaId",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Update creator gallery media roles",
+        description:
+          "Marks or unmarks a gallery image as the creator portrait and/or main picture without deleting it from the gallery.",
+        params: galleryMediaParamsSchema,
+        body: galleryMediaRolesSchema,
+        response: {
+          200: galleryMediaResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const media = await creatorsSocialService.updateGalleryMediaRoles(
+        request.params.id,
+        request.params.mediaId,
+        request.body,
+      );
+
+      return reply.send({
+        success: true,
+        data: media,
+        message: "Gallery media roles updated successfully",
+      });
+    },
+  );
+
   app.delete(
     "/:id/gallery/:mediaId",
     {
@@ -1027,6 +1067,160 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         success: true,
         message: "Social link deleted successfully",
+      });
+    },
+  );
+
+  // Add alias
+  app.post(
+    "/:id/aliases",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Add alias",
+        description:
+          "Adds an alternate name (alias) for the creator, e.g. a stage name or maiden name.",
+        params: idParamSchema,
+        body: createAliasSchema,
+        response: {
+          201: aliasResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const alias = await creatorsAliasesService.addAlias(
+        request.params.id,
+        request.body,
+      );
+
+      return reply.status(201).send({
+        success: true,
+        data: alias,
+        message: "Alias added successfully",
+      });
+    },
+  );
+
+  // Get aliases
+  app.get(
+    "/:id/aliases",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Get aliases",
+        description: "Returns all aliases for the creator.",
+        params: idParamSchema,
+        response: {
+          200: aliasListResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const aliases = await creatorsAliasesService.getAliases(
+        request.params.id,
+      );
+
+      return reply.send({
+        success: true,
+        data: aliases,
+      });
+    },
+  );
+
+  // Bulk upsert aliases
+  app.post(
+    "/:id/aliases/bulk",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Bulk upsert aliases",
+        description:
+          "Creates or updates multiple aliases for a creator. Upserts by name.",
+        params: idParamSchema,
+        body: bulkAliasesSchema,
+        response: {
+          200: bulkOperationResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await creatorsAliasesService.bulkUpsertAliases(
+        request.params.id,
+        request.body.items,
+      );
+
+      return reply.send({
+        success: true,
+        data: result,
+        message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
+      });
+    },
+  );
+
+  // Update alias
+  app.patch(
+    "/:id/aliases/:aliasId",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Update alias",
+        description: "Updates an existing alias.",
+        body: updateAliasSchema,
+        response: {
+          200: aliasResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { aliasId } = request.params as { aliasId: string };
+      const alias = await creatorsAliasesService.updateAlias(
+        Number(aliasId),
+        request.body,
+      );
+
+      return reply.send({
+        success: true,
+        data: alias,
+        message: "Alias updated successfully",
+      });
+    },
+  );
+
+  // Delete alias
+  app.delete(
+    "/:id/aliases/:aliasId",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Delete alias",
+        description: "Deletes an alias.",
+        response: {
+          200: messageResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { aliasId } = request.params as { aliasId: string };
+      await creatorsAliasesService.deleteAlias(Number(aliasId));
+
+      return reply.send({
+        success: true,
+        message: "Alias deleted successfully",
       });
     },
   );

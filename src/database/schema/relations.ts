@@ -19,9 +19,14 @@ import {
   creatorStudiosTable,
   platformsTable,
   creatorPlatformsTable,
+  creatorGalleryMediaTable,
   creatorSocialLinksTable,
   creatorAliasesTable,
   studioSocialLinksTable,
+  creatorBodyModificationsTable,
+  creatorExternalIdsTable,
+  studioAliasesTable,
+  studioExternalIdsTable,
 } from "./organization.schema";
 import {
   playlistsTable,
@@ -203,10 +208,45 @@ export const creatorsRelations = relations(creatorsTable, ({ many }) => ({
   videoCreators: many(videoCreatorsTable),
   creatorStudios: many(creatorStudiosTable),
   creatorPlatforms: many(creatorPlatformsTable),
+  galleryMedia: many(creatorGalleryMediaTable),
   creatorSocialLinks: many(creatorSocialLinksTable),
   creatorAliases: many(creatorAliasesTable),
   creatorFavorites: many(creatorFavoritesTable),
+  bodyModifications: many(creatorBodyModificationsTable),
+  externalIds: many(creatorExternalIdsTable),
 }));
+
+// Creator body modifications relations
+export const creatorBodyModificationsRelations = relations(
+  creatorBodyModificationsTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorBodyModificationsTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+  }),
+);
+
+// Creator external ids relations
+export const creatorExternalIdsRelations = relations(
+  creatorExternalIdsTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorExternalIdsTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+  }),
+);
+
+export const creatorGalleryMediaRelations = relations(
+  creatorGalleryMediaTable,
+  ({ one }) => ({
+    creator: one(creatorsTable, {
+      fields: [creatorGalleryMediaTable.creatorId],
+      references: [creatorsTable.id],
+    }),
+  }),
+);
 
 // Video-Creator junction relations
 export const videoCreatorsRelations = relations(
@@ -249,11 +289,43 @@ export const videoTagsRelations = relations(videoTagsTable, ({ one }) => ({
 }));
 
 // Studios relations
-export const studiosRelations = relations(studiosTable, ({ many }) => ({
+export const studiosRelations = relations(studiosTable, ({ one, many }) => ({
   videoStudios: many(videoStudiosTable),
   creatorStudios: many(creatorStudiosTable),
   studioSocialLinks: many(studioSocialLinksTable),
+  studioAliases: many(studioAliasesTable),
+  externalIds: many(studioExternalIdsTable),
+  parent: one(studiosTable, {
+    fields: [studiosTable.parentStudioId],
+    references: [studiosTable.id],
+    relationName: "studioParentChild",
+  }),
+  children: many(studiosTable, {
+    relationName: "studioParentChild",
+  }),
 }));
+
+// Studio aliases relations
+export const studioAliasesRelations = relations(
+  studioAliasesTable,
+  ({ one }) => ({
+    studio: one(studiosTable, {
+      fields: [studioAliasesTable.studioId],
+      references: [studiosTable.id],
+    }),
+  }),
+);
+
+// Studio external ids relations
+export const studioExternalIdsRelations = relations(
+  studioExternalIdsTable,
+  ({ one }) => ({
+    studio: one(studiosTable, {
+      fields: [studioExternalIdsTable.studioId],
+      references: [studiosTable.id],
+    }),
+  }),
+);
 
 // Video-Studio junction relations
 export const videoStudiosRelations = relations(

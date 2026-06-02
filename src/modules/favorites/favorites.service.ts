@@ -4,6 +4,7 @@ import { favoritesTable } from "@/database/schema";
 import { videosService } from "@/modules/videos/videos.service";
 import { API_PREFIX } from "@/config/constants";
 import { env } from "@/config/env";
+import { isUniqueViolation } from "@/utils/errors";
 
 export class FavoritesService {
   async add(userId: number, videoId: number): Promise<void> {
@@ -29,7 +30,7 @@ export class FavoritesService {
       });
     } catch (error: any) {
       // PostgreSQL UNIQUE constraint violation (already favorited)
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // Already favorited, this is fine (idempotent)
         return;
       }

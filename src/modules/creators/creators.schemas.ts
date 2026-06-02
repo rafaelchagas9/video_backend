@@ -99,6 +99,8 @@ const creatorGalleryMediaSchema = z.object({
   label: z.string().nullable(),
   description: z.string().nullable(),
   file_path: z.string(),
+  is_profile_picture: z.boolean(),
+  is_main_picture: z.boolean(),
   url: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -317,6 +319,18 @@ export const galleryMediaCreateSchema = z.object({
 export const galleryMediaFromUrlSchema = galleryMediaCreateSchema.extend({
   url: z.string().url(),
 });
+
+export const galleryMediaRolesSchema = z
+  .object({
+    is_profile_picture: z.boolean().optional(),
+    is_main_picture: z.boolean().optional(),
+  })
+  .refine(
+    (data) =>
+      data.is_profile_picture !== undefined ||
+      data.is_main_picture !== undefined,
+    { message: "At least one image role must be provided" },
+  );
 
 export const galleryMediaListResponseSchema = z.object({
   success: z.literal(true),

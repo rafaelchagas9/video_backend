@@ -1,0 +1,18 @@
+{
+  "name": "BreastTypeEnum",
+  "kind": "ENUM",
+  "description": null,
+  "fields": [],
+  "inputFields": [],
+  "enumValues": [
+    {
+      "name": "NATURAL"
+    },
+    {
+      "name": "FAKE"
+    },
+    {
+      "name": "NA"
+    }
+  ]
+}

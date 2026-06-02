@@ -1,0 +1,134 @@
+{
+  "name": "Tag",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "id",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "ID",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "name",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "String",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "description",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "aliases",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "deleted",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Boolean",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "edits",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "Edit",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "category",
+      "description": null,
+      "type": {
+        "kind": "OBJECT",
+        "name": "TagCategory",
+        "ofType": null
+      }
+    },
+    {
+      "name": "created",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Time",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "updated",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Time",
+          "ofType": null
+        }
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}

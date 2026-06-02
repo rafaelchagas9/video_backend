@@ -1,0 +1,31 @@
+{
+  "name": "PerformerAppearance",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "performer",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Performer",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "as",
+      "description": "Performing as alias",
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}

@@ -11,7 +11,7 @@ import {
   studiosTable,
   videosTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import type {
   TaggingRule,
@@ -137,7 +137,7 @@ export class TaggingRulesService {
 
       return this.findById(ruleId);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // Unique violation
         throw new ConflictError(
           `Tagging rule with name "${ruleData.name}" already exists`,

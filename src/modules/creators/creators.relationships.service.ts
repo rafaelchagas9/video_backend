@@ -1,4 +1,4 @@
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   videoCreatorsTable,
@@ -7,7 +7,12 @@ import {
   videosTable,
   studiosTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+  isForeignKeyViolation,
+} from "@/utils/errors";
 import type { Video } from "@/modules/videos/videos.types";
 import type { Creator } from "./creators.types";
 import type { Studio } from "@/modules/studios/studios.types";
@@ -79,12 +84,12 @@ export class CreatorsRelationshipsService {
         creatorId,
       });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         throw new ConflictError(
           "Creator is already associated with this video",
         );
       }
-      if (error.code === "23503") {
+      if (isForeignKeyViolation(error)) {
         // FOREIGN KEY violation
         throw new NotFoundError(`Video not found with id: ${videoId}`);
       }
@@ -112,7 +117,18 @@ export class CreatorsRelationshipsService {
         id: creatorsTable.id,
         name: creatorsTable.name,
         description: creatorsTable.description,
-        profilePicturePath: creatorsTable.profilePicturePath,
+        profilePicturePath: sql<string | null>`(
+          SELECT file_path FROM creator_gallery_media
+          WHERE creator_id = ${creatorsTable.id} AND is_profile_picture = true
+          ORDER BY updated_at DESC, id DESC
+          LIMIT 1
+        )`.as("profilePicturePath"),
+        mainPicturePath: sql<string | null>`(
+          SELECT file_path FROM creator_gallery_media
+          WHERE creator_id = ${creatorsTable.id} AND is_main_picture = true
+          ORDER BY updated_at DESC, id DESC
+          LIMIT 1
+        )`.as("mainPicturePath"),
         faceThumbnailPath: creatorsTable.faceThumbnailPath,
         createdAt: creatorsTable.createdAt,
         updatedAt: creatorsTable.updatedAt,
@@ -142,7 +158,18 @@ export class CreatorsRelationshipsService {
         id: creatorsTable.id,
         name: creatorsTable.name,
         description: creatorsTable.description,
-        profilePicturePath: creatorsTable.profilePicturePath,
+        profilePicturePath: sql<string | null>`(
+          SELECT file_path FROM creator_gallery_media
+          WHERE creator_id = ${creatorsTable.id} AND is_profile_picture = true
+          ORDER BY updated_at DESC, id DESC
+          LIMIT 1
+        )`.as("profilePicturePath"),
+        mainPicturePath: sql<string | null>`(
+          SELECT file_path FROM creator_gallery_media
+          WHERE creator_id = ${creatorsTable.id} AND is_main_picture = true
+          ORDER BY updated_at DESC, id DESC
+          LIMIT 1
+        )`.as("mainPicturePath"),
         faceThumbnailPath: creatorsTable.faceThumbnailPath,
         createdAt: creatorsTable.createdAt,
         updatedAt: creatorsTable.updatedAt,
@@ -192,10 +219,10 @@ export class CreatorsRelationshipsService {
         studioId,
       });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         throw new ConflictError("Creator is already linked to this studio");
       }
-      if (error.code === "23503") {
+      if (isForeignKeyViolation(error)) {
         throw new NotFoundError(`Studio not found with id: ${studioId}`);
       }
       throw error;

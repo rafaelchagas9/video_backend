@@ -58,3 +58,34 @@ export class InternalServerError extends AppError {
     Object.setPrototypeOf(this, InternalServerError.prototype);
   }
 }
+
+/**
+ * Extracts a PostgreSQL error code (e.g. "23505") from an error thrown by the
+ * database layer. Drizzle wraps the underlying PostgresError in a
+ * DrizzleQueryError, so the SQLSTATE `code` lives on the error's `cause` chain
+ * rather than on the top-level error. This walks that chain to find it.
+ */
+export function getPostgresErrorCode(error: unknown): string | undefined {
+  let current: unknown = error;
+
+  // Bound the walk so a self-referential cause can never loop forever.
+  for (let depth = 0; depth < 10 && current; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string') {
+      return code;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+
+  return undefined;
+}
+
+/** Whether the error represents a Postgres unique-constraint violation (23505). */
+export function isUniqueViolation(error: unknown): boolean {
+  return getPostgresErrorCode(error) === '23505';
+}
+
+/** Whether the error represents a Postgres foreign-key violation (23503). */
+export function isForeignKeyViolation(error: unknown): boolean {
+  return getPostgresErrorCode(error) === '23503';
+}

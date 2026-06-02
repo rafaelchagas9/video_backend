@@ -1,7 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { creatorAliasesTable, creatorsTable } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
 import type {
   Alias,
   CreateAliasInput,
@@ -30,7 +30,7 @@ export class CreatorsAliasesService {
 
       return this.findAliasById(result[0].id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         throw new ConflictError("This alias already exists for the creator");
       }
       throw error;
@@ -62,7 +62,7 @@ export class CreatorsAliasesService {
 
       return this.findAliasById(id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         throw new ConflictError("This alias already exists for the creator");
       }
       throw error;

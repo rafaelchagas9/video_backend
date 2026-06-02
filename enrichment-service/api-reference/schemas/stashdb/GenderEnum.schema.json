@@ -1,0 +1,27 @@
+{
+  "name": "GenderEnum",
+  "kind": "ENUM",
+  "description": null,
+  "fields": [],
+  "inputFields": [],
+  "enumValues": [
+    {
+      "name": "MALE"
+    },
+    {
+      "name": "FEMALE"
+    },
+    {
+      "name": "TRANSGENDER_MALE"
+    },
+    {
+      "name": "TRANSGENDER_FEMALE"
+    },
+    {
+      "name": "INTERSEX"
+    },
+    {
+      "name": "NON_BINARY"
+    }
+  ]
+}

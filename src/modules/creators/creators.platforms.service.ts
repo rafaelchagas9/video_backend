@@ -5,7 +5,12 @@ import {
   platformsTable,
   creatorsTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+  isForeignKeyViolation,
+} from "@/utils/errors";
 import type {
   CreatorPlatform,
   CreateCreatorPlatformInput,
@@ -47,12 +52,12 @@ export class CreatorsPlatformsService {
 
       return this.findPlatformProfileById(result[0].id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         throw new ConflictError(
           "Creator already has a profile on this platform",
         );
       }
-      if (error.code === "23503") {
+      if (isForeignKeyViolation(error)) {
         throw new NotFoundError("Platform not found");
       }
       throw error;

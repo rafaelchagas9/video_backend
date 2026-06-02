@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   AppError,
   ConflictError,
+  getPostgresErrorCode,
+  isUniqueViolation,
   NotFoundError,
   ValidationError,
 } from "@/utils/errors";
@@ -69,5 +71,43 @@ describe("validation utilities", () => {
     expect(conflict).toBeInstanceOf(ConflictError);
     expect(conflict.statusCode).toBe(409);
     expect(conflict.isOperational).toBe(true);
+  });
+
+  it("extracts a postgres error code from the top-level error", () => {
+    const error = Object.assign(new Error("duplicate key"), { code: "23505" });
+
+    expect(getPostgresErrorCode(error)).toBe("23505");
+    expect(isUniqueViolation(error)).toBe(true);
+  });
+
+  it("extracts a postgres error code wrapped in a drizzle cause chain", () => {
+    const pgError = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+    });
+    const drizzleError = Object.assign(new Error("Failed query"), {
+      cause: pgError,
+    });
+
+    expect(getPostgresErrorCode(drizzleError)).toBe("23505");
+    expect(isUniqueViolation(drizzleError)).toBe(true);
+  });
+
+  it("returns undefined / false for unrelated errors", () => {
+    expect(getPostgresErrorCode(new Error("boom"))).toBeUndefined();
+    expect(getPostgresErrorCode(undefined)).toBeUndefined();
+    expect(isUniqueViolation(new Error("boom"))).toBe(false);
+    expect(
+      isUniqueViolation(
+        Object.assign(new Error("other"), { code: "23503" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not loop forever on a self-referential cause chain", () => {
+    const error: any = new Error("circular");
+    error.cause = error;
+
+    expect(getPostgresErrorCode(error)).toBeUndefined();
+    expect(isUniqueViolation(error)).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { platformsTable } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
 import type { Platform, CreatePlatformInput } from "./platforms.types";
 
 export class PlatformsService {
@@ -77,7 +77,7 @@ export class PlatformsService {
 
       return this.findById(result.id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError(
           `Platform with name "${input.name}" already exists`,

@@ -1,0 +1,35 @@
+{
+  "name": "PerformerStudio",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "studio",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Studio",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "scene_count",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Int",
+          "ofType": null
+        }
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}

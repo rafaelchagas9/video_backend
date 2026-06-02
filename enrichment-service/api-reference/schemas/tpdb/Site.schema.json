@@ -1,0 +1,27 @@
+{
+  "name": "Site",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "id",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "ID",
+        "ofType": null
+      }
+    },
+    {
+      "name": "name",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": null,
+  "enumValues": null
+}

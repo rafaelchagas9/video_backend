@@ -1,0 +1,39 @@
+{
+  "name": "HairColorEnum",
+  "kind": "ENUM",
+  "description": null,
+  "fields": [],
+  "inputFields": [],
+  "enumValues": [
+    {
+      "name": "BLONDE"
+    },
+    {
+      "name": "BRUNETTE"
+    },
+    {
+      "name": "BLACK"
+    },
+    {
+      "name": "RED"
+    },
+    {
+      "name": "AUBURN"
+    },
+    {
+      "name": "GREY"
+    },
+    {
+      "name": "BALD"
+    },
+    {
+      "name": "VARIOUS"
+    },
+    {
+      "name": "WHITE"
+    },
+    {
+      "name": "OTHER"
+    }
+  ]
+}

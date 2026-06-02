@@ -5,7 +5,12 @@ import {
   creatorStudiosTable,
   videoStudiosTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+  isForeignKeyViolation,
+} from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import type { Studio } from "./studios.types";
 import type { Creator } from "@/modules/creators/creators.types";
@@ -38,11 +43,11 @@ export class StudiosRelationshipsService {
         studioId,
       });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError("Creator is already linked to this studio");
       }
-      if (error.code === "23503") {
+      if (isForeignKeyViolation(error)) {
         // PostgreSQL FOREIGN KEY violation
         throw new NotFoundError(`Creator not found with id: ${creatorId}`);
       }
@@ -73,7 +78,23 @@ export class StudiosRelationshipsService {
       created_at: Date;
       updated_at: Date;
     }>(sql`
-      SELECT c.* FROM creators c
+      SELECT
+        c.*,
+        profile_media.file_path as unified_profile_picture_path,
+        main_media.file_path as unified_main_picture_path
+      FROM creators c
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_profile_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) profile_media ON true
+      LEFT JOIN LATERAL (
+        SELECT file_path FROM creator_gallery_media
+        WHERE creator_id = c.id AND is_main_picture = true
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      ) main_media ON true
       INNER JOIN creator_studios cs ON c.id = cs.creator_id
       WHERE cs.studio_id = ${studioId}
       ORDER BY c.name ASC
@@ -84,13 +105,14 @@ export class StudiosRelationshipsService {
       id: c.id,
       name: c.name,
       description: c.description,
-      profile_picture_path: c.profile_picture_path,
-      main_picture_path: c.main_picture_path ?? null,
+      profile_picture_path:
+        c.unified_profile_picture_path ?? c.profile_picture_path,
+      main_picture_path: c.unified_main_picture_path ?? c.main_picture_path ?? null,
       face_thumbnail_path: c.face_thumbnail_path,
-      profile_picture_url: c.profile_picture_path
+      profile_picture_url: (c.unified_profile_picture_path ?? c.profile_picture_path)
         ? `/api/creators/${c.id}/picture`
         : undefined,
-      main_picture_url: c.main_picture_path
+      main_picture_url: (c.unified_main_picture_path ?? c.main_picture_path)
         ? `/api/creators/${c.id}/picture?variant=main`
         : undefined,
       face_thumbnail_url: c.face_thumbnail_path
@@ -128,11 +150,11 @@ export class StudiosRelationshipsService {
         studioId,
       });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError("Video is already linked to this studio");
       }
-      if (error.code === "23503") {
+      if (isForeignKeyViolation(error)) {
         // PostgreSQL FOREIGN KEY violation
         throw new NotFoundError(`Video not found with id: ${videoId}`);
       }
@@ -269,7 +291,7 @@ export class StudiosRelationshipsService {
           });
         } catch (error: any) {
           // Ignore unique constraint violations (already linked)
-          if (error.code !== "23505") {
+          if (!isUniqueViolation(error)) {
             throw error;
           }
         }

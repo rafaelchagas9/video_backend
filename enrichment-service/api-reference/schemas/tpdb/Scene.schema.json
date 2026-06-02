@@ -1,0 +1,212 @@
+{
+  "name": "Scene",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "id",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "ID",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "title",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "String",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "details",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "date",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "release_date",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "production_date",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "urls",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "URL",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "studio",
+      "description": null,
+      "type": {
+        "kind": "OBJECT",
+        "name": "Studio",
+        "ofType": null
+      }
+    },
+    {
+      "name": "tags",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Tag",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "images",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Image",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "performers",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "PerformerAppearance",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "fingerprints",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Fingerprint",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "duration",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "director",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "code",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "deleted",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Boolean",
+        "ofType": null
+      }
+    },
+    {
+      "name": "edits",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "OBJECT",
+          "name": "Edit",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "created",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "DateTime",
+        "ofType": null
+      }
+    },
+    {
+      "name": "updated",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "DateTime",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": null,
+  "enumValues": null
+}

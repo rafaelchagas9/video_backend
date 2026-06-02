@@ -2,6 +2,7 @@ import { db } from "@/config/drizzle";
 import { creatorFavoritesTable } from "@/database/schema";
 import { and, eq } from "drizzle-orm";
 import { env } from "@/config/env";
+import { isUniqueViolation } from "@/utils/errors";
 import { creatorsService } from "./creators.service";
 
 export class CreatorFavoritesService {
@@ -24,7 +25,7 @@ export class CreatorFavoritesService {
         creatorId,
       });
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         return;
       }
       throw error;

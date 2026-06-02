@@ -2,7 +2,7 @@ import { eq, sql, like, desc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { studiosTable } from "@/database/schema";
-import { NotFoundError, ConflictError } from "@/utils/errors";
+import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { existsSync, unlinkSync } from "fs";
 import type {
@@ -261,7 +261,7 @@ export class StudiosService {
 
       return this.findById(result.id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError(
           `Studio with name "${input.name}" already exists`,
@@ -304,7 +304,7 @@ export class StudiosService {
 
       return this.findById(id);
     } catch (error: any) {
-      if (error.code === "23505") {
+      if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError(
           `Studio with name "${input.name}" already exists`,

@@ -1,0 +1,443 @@
+{
+  "name": "Performer",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "id",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "ID",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "name",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "String",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "disambiguation",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "aliases",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gender",
+      "description": null,
+      "type": {
+        "kind": "ENUM",
+        "name": "GenderEnum",
+        "ofType": null
+      }
+    },
+    {
+      "name": "urls",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "URL",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "birth_date",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "death_date",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "age",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "ethnicity",
+      "description": null,
+      "type": {
+        "kind": "ENUM",
+        "name": "EthnicityEnum",
+        "ofType": null
+      }
+    },
+    {
+      "name": "country",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "eye_color",
+      "description": null,
+      "type": {
+        "kind": "ENUM",
+        "name": "EyeColorEnum",
+        "ofType": null
+      }
+    },
+    {
+      "name": "hair_color",
+      "description": null,
+      "type": {
+        "kind": "ENUM",
+        "name": "HairColorEnum",
+        "ofType": null
+      }
+    },
+    {
+      "name": "height",
+      "description": "Height in cm",
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "cup_size",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "band_size",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "waist_size",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "hip_size",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "breast_type",
+      "description": null,
+      "type": {
+        "kind": "ENUM",
+        "name": "BreastTypeEnum",
+        "ofType": null
+      }
+    },
+    {
+      "name": "career_start_year",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "career_end_year",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "tattoos",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "NON_NULL",
+          "name": null,
+          "ofType": {
+            "kind": "OBJECT",
+            "name": "BodyModification",
+            "ofType": null
+          }
+        }
+      }
+    },
+    {
+      "name": "piercings",
+      "description": null,
+      "type": {
+        "kind": "LIST",
+        "name": null,
+        "ofType": {
+          "kind": "NON_NULL",
+          "name": null,
+          "ofType": {
+            "kind": "OBJECT",
+            "name": "BodyModification",
+            "ofType": null
+          }
+        }
+      }
+    },
+    {
+      "name": "images",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "Image",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "deleted",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Boolean",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "edits",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "Edit",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "scene_count",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Int",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "scenes",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "Scene",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "merged_ids",
+      "description": "IDs of performers that were merged into this one",
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "ID",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "merged_into_id",
+      "description": "ID of performer that replaces this one",
+      "type": {
+        "kind": "SCALAR",
+        "name": "ID",
+        "ofType": null
+      }
+    },
+    {
+      "name": "studios",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "LIST",
+          "name": null,
+          "ofType": {
+            "kind": "NON_NULL",
+            "name": null,
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "PerformerStudio",
+              "ofType": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "is_favorite",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Boolean",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "created",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Time",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "updated",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Time",
+          "ofType": null
+        }
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}

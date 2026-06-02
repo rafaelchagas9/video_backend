@@ -1,0 +1,45 @@
+{
+  "name": "Measurements",
+  "kind": "OBJECT",
+  "description": "A type",
+  "fields": [
+    {
+      "name": "cup_size",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    },
+    {
+      "name": "band_size",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "hip",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    },
+    {
+      "name": "waist",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": null,
+  "enumValues": null
+}

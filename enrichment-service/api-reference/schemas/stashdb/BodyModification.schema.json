@@ -1,0 +1,31 @@
+{
+  "name": "BodyModification",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "location",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "String",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "description",
+      "description": null,
+      "type": {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": null
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}

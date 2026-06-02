@@ -22,6 +22,8 @@ export interface CreatorGalleryMedia {
   label: string | null;
   description: string | null;
   file_path: string;
+  is_profile_picture: boolean;
+  is_main_picture: boolean;
   url: string;
   created_at: string;
   updated_at: string;

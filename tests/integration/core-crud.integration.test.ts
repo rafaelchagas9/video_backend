@@ -606,6 +606,102 @@ describe("Fastify app integration", () => {
     ).toBe(200);
   });
 
+  it("covers creator alias create, list, update, bulk, conflict, and delete endpoints", async () => {
+    const creatorCreate = await ctx!.authInject({
+      method: "POST",
+      url: "/api/creators",
+      payload: {
+        name: `Creator Aliases ${Date.now()}`,
+        description: "Alias coverage",
+      },
+    });
+    expect(creatorCreate.statusCode).toBe(201);
+    const creator = creatorCreate.json().data as { id: number };
+
+    // Add an alias
+    const aliasCreate = await ctx!.authInject({
+      method: "POST",
+      url: `/api/creators/${creator.id}/aliases`,
+      payload: {
+        name: "Stage Name",
+        note: "Used on stage",
+      },
+    });
+    expect(aliasCreate.statusCode).toBe(201);
+    const alias = aliasCreate.json().data as {
+      id: number;
+      name: string;
+      note: string | null;
+    };
+    expect(alias.name).toBe("Stage Name");
+    expect(alias.note).toBe("Used on stage");
+
+    // Duplicate alias should conflict
+    const aliasDuplicate = await ctx!.authInject({
+      method: "POST",
+      url: `/api/creators/${creator.id}/aliases`,
+      payload: { name: "Stage Name" },
+    });
+    expect(aliasDuplicate.statusCode).toBe(409);
+
+    // List aliases
+    const aliasList = await ctx!.authInject({
+      method: "GET",
+      url: `/api/creators/${creator.id}/aliases`,
+    });
+    expect(aliasList.statusCode).toBe(200);
+    expect(aliasList.json().data).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: alias.id })]),
+    );
+
+    // Update alias
+    const aliasUpdate = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/creators/${creator.id}/aliases/${alias.id}`,
+      payload: { name: "Maiden Name", note: null },
+    });
+    expect(aliasUpdate.statusCode).toBe(200);
+    expect(aliasUpdate.json().data.name).toBe("Maiden Name");
+    expect(aliasUpdate.json().data.note).toBeNull();
+
+    // Bulk upsert aliases (one update of existing by name, one create)
+    const aliasBulk = await ctx!.authInject({
+      method: "POST",
+      url: `/api/creators/${creator.id}/aliases/bulk`,
+      payload: {
+        items: [
+          { name: "Maiden Name", note: "Updated via bulk" },
+          { name: "Nickname" },
+        ],
+      },
+    });
+    expect(aliasBulk.statusCode).toBe(200);
+    expect(aliasBulk.json().data.created.length).toBe(1);
+    expect(aliasBulk.json().data.updated.length).toBe(1);
+
+    // Adding an alias to a missing creator yields 404
+    const aliasMissingCreator = await ctx!.authInject({
+      method: "POST",
+      url: `/api/creators/99999999/aliases`,
+      payload: { name: "Ghost" },
+    });
+    expect(aliasMissingCreator.statusCode).toBe(404);
+
+    // Delete alias
+    const aliasDelete = await ctx!.authInject({
+      method: "DELETE",
+      url: `/api/creators/${creator.id}/aliases/${alias.id}`,
+    });
+    expect(aliasDelete.statusCode).toBe(200);
+
+    // Deleting a missing alias yields 404
+    const aliasDeleteMissing = await ctx!.authInject({
+      method: "DELETE",
+      url: `/api/creators/${creator.id}/aliases/99999999`,
+    });
+    expect(aliasDeleteMissing.statusCode).toBe(404);
+  });
+
   it("covers studio social, relationship, video, bulk, recent, and quick-create endpoints", async () => {
     const fixture = await seedVideoFixture("studio-subresources.mp4");
 

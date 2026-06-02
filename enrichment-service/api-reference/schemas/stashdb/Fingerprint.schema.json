@@ -1,0 +1,126 @@
+{
+  "name": "Fingerprint",
+  "kind": "OBJECT",
+  "description": null,
+  "fields": [
+    {
+      "name": "hash",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "FingerprintHash",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "algorithm",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "ENUM",
+          "name": "FingerprintAlgorithm",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "duration",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Int",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "submissions",
+      "description": "number of times this fingerprint has been submitted (excluding reports)",
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Int",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "reports",
+      "description": "number of times this fingerprint has been reported",
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Int",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "created",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Time",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "updated",
+      "description": null,
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Time",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "user_submitted",
+      "description": "true if the current user submitted this fingerprint",
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Boolean",
+          "ofType": null
+        }
+      }
+    },
+    {
+      "name": "user_reported",
+      "description": "true if the current user reported this fingerprint",
+      "type": {
+        "kind": "NON_NULL",
+        "name": null,
+        "ofType": {
+          "kind": "SCALAR",
+          "name": "Boolean",
+          "ofType": null
+        }
+      }
+    }
+  ],
+  "inputFields": [],
+  "enumValues": []
+}
