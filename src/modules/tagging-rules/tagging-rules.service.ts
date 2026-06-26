@@ -175,12 +175,52 @@ export class TaggingRulesService {
       updates.priority = input.priority;
     }
 
-    if (Object.keys(updates).length > 0) {
+    const replacingChildren =
+      input.conditions !== undefined || input.actions !== undefined;
+
+    if (Object.keys(updates).length > 0 || replacingChildren) {
       updates.updatedAt = new Date();
       await db
         .update(taggingRulesTable)
         .set(updates)
         .where(eq(taggingRulesTable.id, id));
+    }
+
+    // Replace child rows when the caller provides them. An empty array clears
+    // the existing rows; an omitted key leaves them untouched.
+    if (input.conditions !== undefined) {
+      await db
+        .delete(taggingRuleConditionsTable)
+        .where(eq(taggingRuleConditionsTable.ruleId, id));
+
+      if (input.conditions.length > 0) {
+        await db.insert(taggingRuleConditionsTable).values(
+          input.conditions.map((condition) => ({
+            ruleId: id,
+            conditionType: condition.condition_type,
+            operator: condition.operator,
+            value: condition.value,
+          })),
+        );
+      }
+    }
+
+    if (input.actions !== undefined) {
+      await db
+        .delete(taggingRuleActionsTable)
+        .where(eq(taggingRuleActionsTable.ruleId, id));
+
+      if (input.actions.length > 0) {
+        await db.insert(taggingRuleActionsTable).values(
+          input.actions.map((action) => ({
+            ruleId: id,
+            actionType: action.action_type,
+            targetId: action.target_id ?? null,
+            targetName: action.target_name ?? null,
+            dynamicValue: action.dynamic_value ?? null,
+          })),
+        );
+      }
     }
 
     return this.findById(id);

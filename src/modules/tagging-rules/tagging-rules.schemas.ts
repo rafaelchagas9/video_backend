@@ -143,6 +143,48 @@ export const updateTaggingRuleSchema = z.object({
   rule_type: z.enum(["path_match", "metadata_match", "manual"]).optional(),
   is_enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
+  conditions: z
+    .array(
+      z.object({
+        condition_type: z.enum([
+          "path_pattern",
+          "file_pattern",
+          "duration_range",
+          "resolution",
+          "codec",
+          "file_size",
+        ]),
+        operator: z.enum([
+          "matches",
+          "equals",
+          "contains",
+          "gt",
+          "lt",
+          "gte",
+          "lte",
+          "regex",
+        ]),
+        value: z.string().min(1).max(1000),
+      }),
+    )
+    .optional(),
+  actions: z
+    .array(
+      z.object({
+        action_type: z.enum([
+          "add_tag",
+          "remove_tag",
+          "add_creator",
+          "remove_creator",
+          "add_studio",
+          "remove_studio",
+        ]),
+        target_id: z.number().int().positive().optional(),
+        target_name: z.string().optional(),
+        dynamic_value: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const bulkDeleteSchema = z.object({

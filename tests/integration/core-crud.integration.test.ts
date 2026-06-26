@@ -1954,10 +1954,48 @@ describe("Fastify app integration", () => {
       url: `/api/tagging-rules/${rule.id}`,
       payload: {
         priority: 2,
+        conditions: [
+          {
+            condition_type: "path_pattern",
+            operator: "contains",
+            value: "tagging-rule-target",
+          },
+        ],
+        actions: [
+          {
+            action_type: "add_tag",
+            target_id: tagId,
+            target_name: "Replacement Action",
+          },
+        ],
       },
     });
     expect(update.statusCode).toBe(200);
     expect(update.json().data.priority).toBe(2);
+
+    // The PATCH replaces child rows: GET must return only the new
+    // condition/action with no stale rows from the original create.
+    const afterUpdate = await ctx!.authInject({
+      method: "GET",
+      url: `/api/tagging-rules/${rule.id}`,
+    });
+    expect(afterUpdate.statusCode).toBe(200);
+    const updatedRule = afterUpdate.json().data as {
+      conditions: Array<{ condition_type: string; value: string }>;
+      actions: Array<{ action_type: string; target_name: string | null }>;
+    };
+    expect(updatedRule.conditions).toEqual([
+      expect.objectContaining({
+        condition_type: "path_pattern",
+        value: "tagging-rule-target",
+      }),
+    ]);
+    expect(updatedRule.actions).toEqual([
+      expect.objectContaining({
+        action_type: "add_tag",
+        target_name: "Replacement Action",
+      }),
+    ]);
 
     const test = await ctx!.authInject({
       method: "POST",

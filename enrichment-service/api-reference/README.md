@@ -35,7 +35,6 @@ of TPDB-only convenience fields, enums vs free strings — see below).
 
 - TPDB CDN images download directly (`image/png|webp`, 200).
 - StashDB images **reject `HEAD` (405)** but `GET` works (`image/jpeg`, 200). The
-  Phase-1 downloader must use GET, not HEAD probes.
 
 ## Performer — field comparison
 
@@ -169,10 +168,3 @@ Proposed approach:
 - Enrichment **never auto-merges**; it raises a "possible duplicate" suggestion
   (same external id / strong face match / alias collision) for manual confirmation —
   consistent with the manual-review principle.
-
-## Recommended next step
-
-Insert a **Phase 0.5 — Schema expansion & external identity/merge** before Phase 0
-build: add the columns/tables above + the merge service + `creator_external_ids`, so
-that when enrichment starts writing accepted suggestions, there's somewhere to put the
-rich fields and a way to keep identities stable.
