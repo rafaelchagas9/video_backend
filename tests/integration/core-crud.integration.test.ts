@@ -1685,6 +1685,29 @@ describe("Fastify app integration", () => {
         total_play_count: 1,
       },
     });
+
+    const history = await ctx!.authInject({
+      method: "GET",
+      url: "/api/videos/history?limit=10",
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json()).toMatchObject({
+      success: true,
+      data: [
+        expect.objectContaining({
+          video: expect.objectContaining({
+            id: fixture.videoId,
+            file_name: "watch-stats.mp4",
+          }),
+          play_count: 1,
+          last_position_seconds: 6,
+        }),
+      ],
+      pagination: expect.objectContaining({
+        page: 1,
+        limit: 10,
+      }),
+    });
   });
 
   it("covers standalone rating and bookmark update/delete endpoints", async () => {

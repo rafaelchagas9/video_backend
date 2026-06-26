@@ -337,6 +337,12 @@ export class StudiosService {
     }
 
     await db.delete(studiosTable).where(eq(studiosTable.id, id));
+
+    // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
+    const { enrichmentService } = await import(
+      "@/modules/enrichment/enrichment.service"
+    );
+    await enrichmentService.deleteForEntity("studio", id);
   }
 
   async autocomplete(query: string, limit: number = 10): Promise<Studio[]> {

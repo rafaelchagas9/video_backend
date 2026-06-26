@@ -4,6 +4,8 @@ import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { videoStatsService } from "./video-stats.service";
 import {
   idParamSchema,
+  watchHistoryQuerySchema,
+  watchHistoryResponseSchema,
   watchUpdateSchema,
   watchUpdateResponseSchema,
   statsResponseSchema,
@@ -16,6 +18,35 @@ export async function videoStatsRoutes(
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/history",
+    {
+      schema: {
+        tags: ["video-stats"],
+        summary: "Get watch history",
+        description:
+          "Returns the authenticated user's recently watched videos.",
+        querystring: watchHistoryQuerySchema,
+        response: {
+          200: watchHistoryResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await videoStatsService.getHistory(
+        request.user!.id,
+        request.query,
+      );
+
+      return reply.send({
+        success: true,
+        data: result.data,
+        pagination: result.pagination,
+      });
+    },
+  );
 
   app.post(
     "/:id/watch",

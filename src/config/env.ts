@@ -130,6 +130,9 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value.toLowerCase() === "true"),
 
+  // Creator Enrichment (Python microservice)
+  ENRICHMENT_SERVICE_URL: z.string().default("http://localhost:8200"),
+
   // Face Recognition
   FACE_SERVICE_URL: z.string().default("http://localhost:8100"),
   FACE_SIMILARITY_THRESHOLD: z

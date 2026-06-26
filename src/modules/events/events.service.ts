@@ -92,6 +92,12 @@ class EventsService {
     };
   }
 
+  closeAll(reason: string): void {
+    for (const clientId of Array.from(this.clients.keys())) {
+      this.removeClient(clientId, reason);
+    }
+  }
+
   private async validateClientSession(clientId: string): Promise<void> {
     const client = this.clients.get(clientId);
     if (!client) return;

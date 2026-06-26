@@ -14,10 +14,6 @@ const queryClient = postgres(connectionString, {
 export const db = drizzle(queryClient, { schema });
 export type DrizzleTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-// Graceful shutdown
-async function closeDatabase() {
+export async function closeDrizzleDatabase(): Promise<void> {
   await queryClient.end({ timeout: 5 });
 }
-
-process.on('SIGINT', closeDatabase);
-process.on('SIGTERM', closeDatabase);

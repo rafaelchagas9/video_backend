@@ -4,6 +4,7 @@ import { creatorListResponseSchema, creatorResponseSchema } from "@/modules/crea
 import { videoListResponseSchema, videoResponseSchema } from "@/modules/videos/videos.schemas";
 import { playlistResponseSchema, playlistListResponseSchema, playlistVideosResponseSchema } from "@/modules/playlists/playlists.schemas";
 import { videoCollectionResponseSchema, videoCollectionEntriesResponseSchema } from "@/modules/video-collections/video-collections.schemas";
+import { favoritesListResponseSchema } from "@/modules/favorites/favorites.schemas";
 
 describe("Demo Mock Service Zod Schema Validation", () => {
   it("validates all getVideos() list elements", () => {
@@ -80,8 +81,8 @@ describe("Demo Mock Service Zod Schema Validation", () => {
 
       // Validate favorites list
       const favList = demoMockService.getFavoriteVideos();
-      expect(favList.length).toBe(1);
-      expect(favList[0].id).toBe(videoId);
+      expect(favList.some((video) => video.id === videoId)).toBe(true);
+      expect(favoritesListResponseSchema.safeParse({ success: true, data: favList }).success).toBe(true);
 
       // Unfavorite
       demoMockService.removeFavoriteVideo(videoId);

@@ -17,6 +17,7 @@ import { env } from "./config/env";
 import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
+import { closeDrizzleDatabase } from "./config/drizzle";
 import { logger } from "./utils/logger";
 import {
   captureTelemetryEvent,
@@ -25,6 +26,8 @@ import {
   shouldTrackRequestMetrics,
   shutdownTelemetry,
 } from "./utils/telemetry";
+import { eventsService } from "./modules/events/events.service";
+import { multiplayerRemoteWebSocketService } from "./modules/multiplayer-remote/multiplayer-remote.websocket";
 
 type ValidationIssue = {
   instancePath?: string;
@@ -117,6 +120,18 @@ export async function buildServer() {
   });
 
   fastify.addHook("onClose", async () => {
+    schedulerService.stop();
+
+    const { conversionQueue } = await import(
+      "./modules/conversion/conversion.queue"
+    );
+    const { editsQueue } = await import("./modules/edits/edits.queue");
+
+    conversionQueue.stop();
+    editsQueue.stop();
+    eventsService.closeAll("server shutdown");
+    multiplayerRemoteWebSocketService.closeAll("server shutdown");
+    await closeDrizzleDatabase();
     await shutdownTelemetry();
   });
 
@@ -431,6 +446,9 @@ export async function buildServer() {
       const { multiplayerRemoteRoutes } = await import(
         "./modules/multiplayer-remote/multiplayer-remote.routes"
       );
+      const { enrichmentRoutes } = await import(
+        "./modules/enrichment/enrichment.routes"
+      );
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -477,6 +495,7 @@ export async function buildServer() {
       await instance.register(multiplayerRemoteRoutes, {
         prefix: "/multiplayer-remote",
       });
+      await instance.register(enrichmentRoutes, { prefix: "/enrichment" });
     },
     { prefix: API_PREFIX },
   );

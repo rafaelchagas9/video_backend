@@ -41,6 +41,9 @@ export * from "./app-settings.schema";
 // Face Recognition
 export * from "./face-recognition.schema";
 
+// Enrichment (polymorphic suggestions + run log across creator/studio/scene/tag)
+export * from "./enrichment.schema";
+
 // Multiplayer Remote Control
 export * from "./multiplayer-remote.schema";
 

@@ -14,6 +14,23 @@ export interface Creator {
   is_favorite: boolean;
   created_at: string;
   updated_at: string;
+  // Rich external metadata (nullable; filled by enrichment, confirmed by the user).
+  gender?: string | null;
+  birth_date?: string | null;
+  death_date?: string | null;
+  ethnicity?: string | null;
+  country?: string | null;
+  birthplace?: string | null;
+  eye_color?: string | null;
+  hair_color?: string | null;
+  height_cm?: number | null;
+  cup_size?: string | null;
+  band_size?: number | null;
+  waist_size?: number | null;
+  hip_size?: number | null;
+  breast_type?: string | null;
+  career_start_year?: number | null;
+  career_end_year?: number | null;
 }
 
 export interface CreatorGalleryMedia {

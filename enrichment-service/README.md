@@ -9,14 +9,37 @@ and phased rollout.
 
 ## Status
 
-Early scaffold. Currently contains an **API exploration script** used to design the
-metadata-DB source plugins from real request/response shapes.
+Phase 0 — a working FastAPI service exposing `/health` and `/enrich`, with **ThePornDB**
+wired up via the StashBox GraphQL source. The Node backend calls `/enrich` and turns the
+returned candidates into reviewable suggestions.
 
 ## Setup
 
 ```bash
 uv sync
+cp .env.example .env   # then fill in THEPORNDB_API_KEY
 ```
+
+## Run the service
+
+```bash
+./run.sh
+# or
+uv run python -m enrichment_service.main
+```
+
+Then:
+
+```bash
+curl localhost:8200/health
+curl -X POST localhost:8200/enrich \
+  -H 'content-type: application/json' \
+  -d '{"name": "Riley Reid"}'
+```
+
+`/enrich` returns normalized `candidates` (`type`, `value`, `source`, `source_url`,
+`field_key`, `confidence`, `raw`) plus `sources_used` and `errors`. It is **read-only** —
+all writes happen in the Node backend when a suggestion is accepted.
 
 ## Explore the metadata-DB APIs
 

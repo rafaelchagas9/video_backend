@@ -129,6 +129,25 @@ class MultiplayerRemoteWebSocketService {
     logger.info({ sessionId, reason }, "Sent multiplayer session close notification");
   }
 
+  closeAll(reason: string): void {
+    for (const socket of Array.from(this.connections.keys())) {
+      const connection = this.connections.get(socket);
+      if (connection) {
+        clearInterval(connection.heartbeatInterval);
+      }
+
+      try {
+        socket.close(1001, reason.slice(0, 120));
+      } catch {
+        // best-effort during process shutdown
+      }
+    }
+
+    this.connections.clear();
+    this.displayConnections.clear();
+    this.remoteConnections.clear();
+  }
+
   register(fastify: FastifyInstance): void {
     fastify.get(
       "/ws",

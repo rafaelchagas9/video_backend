@@ -202,6 +202,99 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
   );
 
   /**
+   * Extract reference face from an existing gallery image
+   *
+   * Reuses the gallery image already stored on disk (no re-upload) and runs
+   * the same embedding pipeline used for manual uploads / profile pictures.
+   */
+  app.post(
+    "/creators/:id/face-embeddings/from-gallery/:mediaId",
+    {
+      preHandler: authenticateUser,
+      schema: {
+        tags: ["face-recognition"],
+        summary: "Extract reference face from an existing gallery image",
+        params: z.object({
+          id: z.coerce.number().int(),
+          mediaId: z.coerce.number().int(),
+        }),
+        response: {
+          200: z.object({
+            success: z.boolean(),
+            data: z.any(),
+          }),
+          400: z.object({
+            success: z.boolean(),
+            error: z.object({
+              message: z.string(),
+              statusCode: z.number(),
+            }),
+          }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const creatorId = request.params.id;
+      const mediaId = request.params.mediaId;
+
+      // Resolve the stored gallery file (scoped to the creator).
+      const { creatorsSocialService } =
+        await import("@/modules/creators/creators.social.service");
+      const media = await creatorsSocialService.getGalleryMediaById(
+        creatorId,
+        mediaId,
+      );
+
+      if (!media.file_path || !existsSync(media.file_path)) {
+        return reply.code(400).send({
+          success: false,
+          error: {
+            message: "Gallery image file not found on disk",
+            statusCode: 400,
+          },
+        });
+      }
+
+      let embedding;
+      try {
+        embedding = await faceService.addCreatorEmbedding({
+          creatorId,
+          imagePath: media.file_path,
+          sourceType: "gallery_media",
+        });
+      } catch (error) {
+        if (error instanceof Error && /no face detected/i.test(error.message)) {
+          return reply.code(400).send({
+            success: false,
+            error: {
+              message: "No face detected in this image",
+              statusCode: 400,
+            },
+          });
+        }
+        throw error;
+      }
+
+      // Exclude internal fields: thumbnailPath (security) and embedding (not needed by frontend)
+      const {
+        thumbnailPath,
+        embedding: _embedding,
+        ...enrichedEmbedding
+      } = embedding;
+
+      return reply.send({
+        success: true,
+        data: {
+          ...enrichedEmbedding,
+          image_url: thumbnailPath
+            ? `/api/creators/${creatorId}/face-embeddings/${embedding.id}/thumbnail`
+            : null,
+        },
+      });
+    },
+  );
+
+  /**
    * Get reference faces for creator
    */
   app.get(

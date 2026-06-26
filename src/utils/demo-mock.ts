@@ -11,6 +11,7 @@ export class DemoMockService {
 
   // In-memory databases for Demo Mode persistence
   private favoritedVideoIds: Set<number> = new Set();
+  private favoritedVideoAddedAt: Map<number, string> = new Map();
   private favoritedCreatorIds: Set<number> = new Set();
   private playlists: Map<number, any> = new Map();
   private collections: Map<number, any> = new Map();
@@ -18,6 +19,7 @@ export class DemoMockService {
   private nextPlaylistId = 1;
   private nextCollectionId = 1;
   private nextCollectionEntryId = 1;
+  private demoLibrarySeeded = false;
 
   constructor() {
     this.loadData();
@@ -106,6 +108,8 @@ export class DemoMockService {
           label: gm.label || null,
           description: gm.description || null,
           file_path: gm.filePath,
+          is_profile_picture: gm.filePath === c.profilePicturePath,
+          is_main_picture: gm.filePath === c.mainPicturePath,
           url: `/api/creators/${idx + 1}/gallery/${gmIdx + 1}`,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -220,9 +224,163 @@ export class DemoMockService {
           }
         };
       });
+
+      this.seedDemoLibraryData();
     } catch (error) {
       console.error("Error loading demo mode JSON data:", error);
     }
+  }
+
+  private seedDemoLibraryData() {
+    if (this.demoLibrarySeeded || this.videos.length === 0) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const demoUserId = 1;
+    const existingVideoIds = new Set(this.videos.map((video) => video.id));
+
+    const seedPlaylist = (
+      name: string,
+      description: string,
+      videoIds: number[],
+    ) => {
+      const filteredVideoIds = videoIds.filter((id) => existingVideoIds.has(id));
+      if (filteredVideoIds.length === 0) {
+        return;
+      }
+
+      const id = this.nextPlaylistId++;
+      this.playlists.set(id, {
+        id,
+        user_id: demoUserId,
+        name,
+        description,
+        created_at: createdAt,
+        updated_at: createdAt,
+        videoIds: filteredVideoIds,
+      });
+    };
+
+    const seedFavoriteVideo = (videoId: number) => {
+      if (!existingVideoIds.has(videoId)) {
+        return;
+      }
+
+      this.favoritedVideoIds.add(videoId);
+      this.favoritedVideoAddedAt.set(videoId, createdAt);
+    };
+
+    const seedCollection = (
+      title: string,
+      kind: string,
+      description: string,
+      entries: Array<{
+        videoId: number;
+        entryKind: string;
+        sequenceNumber: number;
+        seasonNumber?: number | null;
+        episodeNumber?: number | null;
+      }>,
+      releaseYear: number | null = null,
+    ) => {
+      const filteredEntries = entries.filter((entry) =>
+        existingVideoIds.has(entry.videoId),
+      );
+      if (filteredEntries.length === 0) {
+        return;
+      }
+
+      const collectionId = this.nextCollectionId++;
+      this.collections.set(collectionId, {
+        id: collectionId,
+        title,
+        kind,
+        description,
+        release_year: releaseYear,
+        external_ids_json: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+      });
+
+      for (const entry of filteredEntries) {
+        const id = this.nextCollectionEntryId++;
+        this.collectionEntries.set(id, {
+          id,
+          collectionId,
+          videoId: entry.videoId,
+          entryKind: entry.entryKind,
+          sequenceNumber: entry.sequenceNumber,
+          seasonNumber: entry.seasonNumber ?? null,
+          episodeNumber: entry.episodeNumber ?? null,
+          episodePart: null,
+          absoluteNumber: entry.sequenceNumber,
+          displayTitleOverride: null,
+          created_at: createdAt,
+          updated_at: createdAt,
+        });
+      }
+    };
+
+    seedPlaylist(
+      "Cinematic Showcase",
+      "Demo playlist with action-heavy game cinematics.",
+      [1, 3, 4],
+    );
+    seedPlaylist(
+      "Trailer Queue",
+      "Demo playlist with upcoming movie and animation trailers.",
+      [5, 6, 7, 8],
+    );
+    seedFavoriteVideo(5);
+    seedFavoriteVideo(7);
+    seedFavoriteVideo(8);
+
+    seedCollection(
+      "Overwatch Animated Shorts",
+      "anthology",
+      "Demo anthology of animated shorts.",
+      [
+        {
+          videoId: 2,
+          entryKind: "episode",
+          sequenceNumber: 1,
+          seasonNumber: 1,
+          episodeNumber: 1,
+        },
+        {
+          videoId: 4,
+          entryKind: "episode",
+          sequenceNumber: 2,
+          seasonNumber: 1,
+          episodeNumber: 2,
+        },
+      ],
+    );
+    seedCollection(
+      "Demo Trailer Collection",
+      "movie_series",
+      "Demo collection of related trailer content.",
+      [
+        {
+          videoId: 5,
+          entryKind: "movie",
+          sequenceNumber: 1,
+        },
+        {
+          videoId: 7,
+          entryKind: "movie",
+          sequenceNumber: 2,
+        },
+        {
+          videoId: 8,
+          entryKind: "special",
+          sequenceNumber: 3,
+        },
+      ],
+    );
+
+    this.demoLibrarySeeded = true;
   }
 
   // --- Video Methods ---
@@ -401,11 +559,13 @@ export class DemoMockService {
   addFavoriteVideo(videoId: number) {
     this.loadData();
     this.favoritedVideoIds.add(videoId);
+    this.favoritedVideoAddedAt.set(videoId, new Date().toISOString());
   }
 
   removeFavoriteVideo(videoId: number) {
     this.loadData();
     this.favoritedVideoIds.delete(videoId);
+    this.favoritedVideoAddedAt.delete(videoId);
   }
 
   isFavoriteVideo(videoId: number): boolean {
@@ -417,6 +577,7 @@ export class DemoMockService {
     const list = this.videos.filter((v) => this.favoritedVideoIds.has(v.id)).map((v) => ({
       ...v,
       is_favorite: true,
+      added_at: this.favoritedVideoAddedAt.get(v.id) ?? v.created_at,
       thumbnail_url: v.thumbnail_id
         ? `${API_PREFIX}/thumbnails/${v.thumbnail_id}/image`
         : null,

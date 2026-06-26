@@ -453,6 +453,12 @@ export class VideosService {
 
     // Delete the video database record (CASCADE will handle relationships)
     await db.delete(videosTable).where(eq(videosTable.id, id));
+
+    // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
+    const { enrichmentService } = await import(
+      "@/modules/enrichment/enrichment.service"
+    );
+    await enrichmentService.deleteForEntity("scene", id);
   }
 
   /**

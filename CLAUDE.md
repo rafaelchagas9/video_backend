@@ -1,27 +1,5 @@
 # Agent Guidelines
 
-## Commands
-
-### Dev & Database
-| Command | Description |
-|---|---|
-| `bun dev` | Dev server with auto-reload |
-| `bun start` | Production server |
-| `bun db:generate` | Generate Drizzle migrations |
-| `bun db:migrate` | Apply pending migrations |
-| `bun db:push` | Direct schema sync (dev only; dangerous) |
-| `bun db:studio` | Drizzle Studio GUI |
-| `bun db:introspect` | Introspect DB to schema |
-| `bun db:apply-migration` | Run custom migration script |
-
-### Quality
-| Command | Description |
-|---|---|
-| `bunx eslint .` | Lint |
-| `bunx tsc --noEmit` | Type check |
-
-No test command or CI/CD pipeline configured.
-
 ## Module Pattern
 
 Modules in `src/modules/<name>/` use:
@@ -48,3 +26,7 @@ Modules in `src/modules/<name>/` use:
 - **Validation**: `validateSchema(schema, data)` from `@/utils/validation`.
 - **Logging**: Pino from `@/utils/logger` — no `console.log`.
 - **Auth**: `authenticateUser` for protected routes, `optionalAuth` for guest access. Single-user system — registration auto-disables after first user.
+
+## General
+
+dev server will be running and avaliable to test at https://video.lan.rafaelm.dev/ <- this is points to my local dev server, so any changes will be avaliable there

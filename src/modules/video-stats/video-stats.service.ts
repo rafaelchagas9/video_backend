@@ -1,10 +1,14 @@
 import { db } from "@/config/drizzle";
-import { eq, and, sql } from "drizzle-orm";
-import { videoStatsTable, videosTable } from "@/database/schema";
+import { eq, and, sql, desc, isNotNull } from "drizzle-orm";
+import { videoStatsTable, videosTable, thumbnailsTable } from "@/database/schema";
 import { NotFoundError } from "@/utils/errors";
+import { API_PREFIX } from "@/config/constants";
 import type {
   AggregateVideoStats,
   VideoStats,
+  WatchHistoryEntry,
+  WatchHistoryQuery,
+  WatchHistoryResult,
   WatchUpdateInput,
 } from "./video-stats.types";
 import { settingsService } from "@/modules/settings/settings.service";
@@ -224,6 +228,80 @@ export class VideoStatsService {
     return {
       stats: statsRow,
       aggregate: await this.getAggregateStats(videoId),
+    };
+  }
+
+  async getHistory(
+    userId: number,
+    query: WatchHistoryQuery,
+  ): Promise<WatchHistoryResult> {
+    const page = query.page;
+    const limit = query.limit;
+    const offset = (page - 1) * limit;
+
+    const whereClause = and(
+      eq(videoStatsTable.userId, userId),
+      isNotNull(videoStatsTable.lastWatchAt),
+    );
+
+    const countResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(videoStatsTable)
+      .where(whereClause);
+
+    const total = Number(countResult[0]?.count ?? 0);
+
+    const rows = await db
+      .select({
+        playCount: videoStatsTable.playCount,
+        totalWatchSeconds: videoStatsTable.totalWatchSeconds,
+        lastPositionSeconds: videoStatsTable.lastPositionSeconds,
+        lastPlayedAt: videoStatsTable.lastPlayedAt,
+        lastWatchAt: videoStatsTable.lastWatchAt,
+        videoId: videosTable.id,
+        fileName: videosTable.fileName,
+        title: videosTable.title,
+        durationSeconds: videosTable.durationSeconds,
+        thumbnailId: thumbnailsTable.id,
+      })
+      .from(videoStatsTable)
+      .innerJoin(videosTable, eq(videoStatsTable.videoId, videosTable.id))
+      .leftJoin(thumbnailsTable, eq(videosTable.id, thumbnailsTable.videoId))
+      .where(whereClause)
+      .orderBy(desc(videoStatsTable.lastWatchAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      data: rows.map((row): WatchHistoryEntry => ({
+        video: {
+          id: row.videoId,
+          file_name: row.fileName,
+          title: row.title,
+          duration_seconds: row.durationSeconds,
+          thumbnail_id: row.thumbnailId,
+          thumbnail_url: row.thumbnailId
+            ? `${API_PREFIX}/thumbnails/${row.thumbnailId}/image`
+            : null,
+        },
+        play_count: row.playCount,
+        total_watch_seconds: row.totalWatchSeconds,
+        last_position_seconds: row.lastPositionSeconds,
+        last_played_at:
+          row.lastPlayedAt instanceof Date
+            ? row.lastPlayedAt.toISOString()
+            : row.lastPlayedAt,
+        last_watch_at:
+          row.lastWatchAt instanceof Date
+            ? row.lastWatchAt.toISOString()
+            : String(row.lastWatchAt),
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 

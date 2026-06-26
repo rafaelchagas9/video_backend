@@ -465,6 +465,7 @@ function installExternalServiceMocks(): void {
   mock.module("@/modules/multiplayer-remote/multiplayer-remote.websocket", () => ({
     multiplayerRemoteWebSocketService: {
       register: mock(() => undefined),
+      closeAll: mock(() => undefined),
       notifySessionClosed: mock(() => undefined),
       notifyJoinRequested: mock(() => undefined),
       notifyJoinApproved: mock(() => undefined),
@@ -478,6 +479,7 @@ function installExternalServiceMocks(): void {
         response.write?.("event: ready\ndata: {}\n\n");
         response.end?.();
       }),
+      closeAll: mock(() => undefined),
     },
   }));
 

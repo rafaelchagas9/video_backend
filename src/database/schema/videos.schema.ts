@@ -144,6 +144,30 @@ export const videoRelatedScoresTable = pgTable(
   }),
 );
 
+// External identity per source for scenes (videos) — mirrors creator_external_ids.
+// Lets accepted scene matches be re-fetched / deduped / skip-requeried.
+export const videoExternalIdsTable = pgTable(
+  "video_external_ids",
+  {
+    id: serial("id").primaryKey(),
+    videoId: integer("video_id")
+      .notNull()
+      .references(() => videosTable.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
+    externalUrl: text("external_url"),
+    lastSyncedAt: timestamp("last_synced_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    videoIdx: index("idx_video_external_ids_video").on(table.videoId),
+    uniqueSourceExternal: unique("unique_video_external_id").on(
+      table.source,
+      table.externalId,
+    ),
+  }),
+);
+
 // Inferred types
 export type Video = typeof videosTable.$inferSelect;
 export type NewVideo = typeof videosTable.$inferInsert;
@@ -153,3 +177,5 @@ export type VideoMetadata = typeof videoMetadataTable.$inferSelect;
 export type NewVideoMetadata = typeof videoMetadataTable.$inferInsert;
 export type VideoRelatedScore = typeof videoRelatedScoresTable.$inferSelect;
 export type NewVideoRelatedScore = typeof videoRelatedScoresTable.$inferInsert;
+export type VideoExternalId = typeof videoExternalIdsTable.$inferSelect;
+export type NewVideoExternalId = typeof videoExternalIdsTable.$inferInsert;

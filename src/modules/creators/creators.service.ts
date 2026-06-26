@@ -454,6 +454,12 @@ export class CreatorsService {
     }
 
     await db.delete(creatorsTable).where(eq(creatorsTable.id, id));
+
+    // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
+    const { enrichmentService } = await import(
+      "@/modules/enrichment/enrichment.service"
+    );
+    await enrichmentService.deleteForEntity("creator", id);
   }
 
   async autocomplete(
@@ -708,6 +714,24 @@ export class CreatorsService {
       is_favorite: Boolean(creator.is_favorite),
       created_at: toISOString(creator.createdAt ?? creator.created_at),
       updated_at: toISOString(creator.updatedAt ?? creator.updated_at),
+      // Rich external metadata (snake_case from `c.*`, camelCase from Drizzle).
+      gender: creator.gender ?? null,
+      birth_date: creator.birth_date ?? creator.birthDate ?? null,
+      death_date: creator.death_date ?? creator.deathDate ?? null,
+      ethnicity: creator.ethnicity ?? null,
+      country: creator.country ?? null,
+      birthplace: creator.birthplace ?? null,
+      eye_color: creator.eye_color ?? creator.eyeColor ?? null,
+      hair_color: creator.hair_color ?? creator.hairColor ?? null,
+      height_cm: creator.height_cm ?? creator.heightCm ?? null,
+      cup_size: creator.cup_size ?? creator.cupSize ?? null,
+      band_size: creator.band_size ?? creator.bandSize ?? null,
+      waist_size: creator.waist_size ?? creator.waistSize ?? null,
+      hip_size: creator.hip_size ?? creator.hipSize ?? null,
+      breast_type: creator.breast_type ?? creator.breastType ?? null,
+      career_start_year:
+        creator.career_start_year ?? creator.careerStartYear ?? null,
+      career_end_year: creator.career_end_year ?? creator.careerEndYear ?? null,
       // Pass through any additional fields (for enhanced creators)
       ...(creator.linked_video_count !== undefined && {
         linked_video_count: Number(creator.linked_video_count),

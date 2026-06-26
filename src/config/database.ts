@@ -127,14 +127,3 @@ export async function testConnection(): Promise<boolean> {
     return false;
   }
 }
-
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  await closeDatabase();
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  await closeDatabase();
-  process.exit(0);
-});

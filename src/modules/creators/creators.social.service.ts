@@ -368,6 +368,17 @@ export class CreatorsSocialService {
       .where(eq(creatorGalleryMediaTable.id, mediaId));
   }
 
+  /**
+   * Fetch a single gallery media row (scoped to the creator). Throws
+   * NotFoundError if the media does not belong to the creator.
+   */
+  async getGalleryMediaById(
+    creatorId: number,
+    mediaId: number,
+  ): Promise<CreatorGalleryMedia> {
+    return this.findGalleryMediaById(creatorId, mediaId);
+  }
+
   async updateGalleryMediaRoles(
     creatorId: number,
     mediaId: number,

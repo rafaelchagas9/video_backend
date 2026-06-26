@@ -6,7 +6,7 @@
     "dev": "bun --watch src/index.ts",
     "test": "bun test",
     "test:unit": "bun test tests/*.test.ts",
-    "test:integration": "bun test --max-concurrency=1 tests/integration",
+    "test:integration": "for f in tests/integration/*.integration.test.ts; do echo \"== $f ==\"; bun test --max-concurrency=1 \"$f\" || exit 1; done",
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "start:prod": "NODE_ENV=production NODE_OPTIONS='--enable-source-maps' bun dist/index.js",

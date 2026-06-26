@@ -126,6 +126,16 @@ export const videoCreatorsTable = pgTable(
 );
 
 // Hierarchical tags (self-referencing for parent/child)
+// Tag categories / taxonomy (mirrors the StashBox Tag.category model)
+export const tagCategoriesTable = pgTable("tag_categories", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  group: text("group"),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const tagsTable = pgTable(
   "tags",
   {
@@ -134,6 +144,10 @@ export const tagsTable = pgTable(
     parentId: integer("parent_id").references((): AnyPgColumn => tagsTable.id, {
       onDelete: "cascade",
     }),
+    categoryId: integer("category_id").references(
+      () => tagCategoriesTable.id,
+      { onDelete: "set null" },
+    ),
     description: text("description"),
     color: text("color"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -163,6 +177,48 @@ export const videoTagsTable = pgTable(
     pk: primaryKey({ columns: [table.videoId, table.tagId] }),
     videoIdx: index("idx_video_tags_video").on(table.videoId),
     tagIdx: index("idx_video_tags_tag").on(table.tagId),
+  }),
+);
+
+// Tag aliases (alternate names) — mirrors studio_aliases
+export const tagAliasesTable = pgTable(
+  "tag_aliases",
+  {
+    id: serial("id").primaryKey(),
+    tagId: integer("tag_id")
+      .notNull()
+      .references(() => tagsTable.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    tagIdx: index("idx_tag_aliases_tag").on(table.tagId),
+    nameIdx: index("idx_tag_aliases_name").on(table.name),
+    uniqueTagAlias: unique("unique_tag_alias").on(table.tagId, table.name),
+  }),
+);
+
+// External identity per source for tags — mirrors studio_external_ids
+export const tagExternalIdsTable = pgTable(
+  "tag_external_ids",
+  {
+    id: serial("id").primaryKey(),
+    tagId: integer("tag_id")
+      .notNull()
+      .references(() => tagsTable.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
+    externalUrl: text("external_url"),
+    lastSyncedAt: timestamp("last_synced_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    tagIdx: index("idx_tag_external_ids_tag").on(table.tagId),
+    uniqueSourceExternal: unique("unique_tag_external_id").on(
+      table.source,
+      table.externalId,
+    ),
   }),
 );
 
@@ -415,3 +471,9 @@ export type StudioAlias = typeof studioAliasesTable.$inferSelect;
 export type NewStudioAlias = typeof studioAliasesTable.$inferInsert;
 export type StudioExternalId = typeof studioExternalIdsTable.$inferSelect;
 export type NewStudioExternalId = typeof studioExternalIdsTable.$inferInsert;
+export type TagCategory = typeof tagCategoriesTable.$inferSelect;
+export type NewTagCategory = typeof tagCategoriesTable.$inferInsert;
+export type TagAlias = typeof tagAliasesTable.$inferSelect;
+export type NewTagAlias = typeof tagAliasesTable.$inferInsert;
+export type TagExternalId = typeof tagExternalIdsTable.$inferSelect;
+export type NewTagExternalId = typeof tagExternalIdsTable.$inferInsert;

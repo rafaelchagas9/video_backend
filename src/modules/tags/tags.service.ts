@@ -499,6 +499,12 @@ export class TagsService {
     await this.findById(id); // Ensure exists
     // CASCADE will delete children due to schema constraint
     await db.delete(tagsTable).where(eq(tagsTable.id, id));
+
+    // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
+    const { enrichmentService } = await import(
+      "@/modules/enrichment/enrichment.service"
+    );
+    await enrichmentService.deleteForEntity("tag", id);
   }
 
   async getVideos(tagId: number): Promise<Video[]> {
