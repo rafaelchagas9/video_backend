@@ -49,32 +49,58 @@ Server starts at `http://localhost:3000`. Swagger UI at `http://localhost:3000/d
 
 See `.env.example` for all options. Key variables:
 
-| Variable | Description |
-|---|---|
-| `POSTGRES_*` | Database connection |
-| `SESSION_SECRET` | Min 32 chars — used for cookie signing |
-| `FFMPEG_PATH` / `FFPROBE_PATH` | Paths to FFmpeg binaries |
-| `REDIS_URL` | Redis connection for job queue (optional) |
-| `FACE_SERVICE_URL` | Python face service endpoint (optional) |
+| Variable                       | Description                                            |
+| ------------------------------ | ------------------------------------------------------ |
+| `POSTGRES_*`                   | Database connection                                    |
+| `SESSION_SECRET`               | Min 32 chars — used for cookie signing                 |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | Paths to FFmpeg binaries                               |
+| `REDIS_URL`                    | Redis connection for job queue (optional)              |
+| `FACE_SERVICE_URL`             | Python face service endpoint (optional)                |
+| `DEMO_MODE`                    | Use only isolated demo assets and in-memory demo state |
 
 ## Commands
 
-| Command | Description |
-|---|---|
-| `bun dev` | Dev server with auto-reload |
-| `bun start` | Production server |
-| `bun run build` | Compile TS to JS |
-| `bun run start:prod` | Production from compiled build |
-| `bun run validate:env` | Validate environment variables |
-| `bun run check:deps` | Check PostgreSQL, FFmpeg, directories |
-| `bun db:generate` | Generate Drizzle migrations |
-| `bun db:migrate` | Apply pending migrations |
-| `bun db:push` | Direct schema sync (dev only) |
-| `bun db:studio` | Drizzle Studio GUI |
-| `bun db:introspect` | Introspect DB to schema |
-| `bun db:apply-migration` | Run custom migration script |
-| `bunx eslint .` | Lint |
-| `bunx tsc --noEmit` | Type check |
+| Command                  | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| `bun dev`                | Dev server with auto-reload                                        |
+| `bun start`              | Production server                                                  |
+| `bun run build`          | Compile TS to JS                                                   |
+| `bun run start:prod`     | Production from compiled build                                     |
+| `bun run validate:env`   | Validate environment variables                                     |
+| `bun run check:deps`     | Check PostgreSQL, FFmpeg, directories                              |
+| `bun run demo:download`  | Download the curated trailer, cinematic, and music demo collection |
+| `bun db:generate`        | Generate Drizzle migrations                                        |
+| `bun db:migrate`         | Apply pending migrations                                           |
+| `bun db:push`            | Direct schema sync (dev only)                                      |
+| `bun db:studio`          | Drizzle Studio GUI                                                 |
+| `bun db:introspect`      | Introspect DB to schema                                            |
+| `bun db:apply-migration` | Run custom migration script                                        |
+| `bunx eslint .`          | Lint                                                               |
+| `bunx tsc --noEmit`      | Type check                                                         |
+
+## Demo Mode
+
+Set `DEMO_MODE=true` to expose only the isolated demo library. Demo mode uses
+a generic anonymous user, keeps supported mutations in memory, validates that
+all served asset paths stay inside `demo_mode/`, and disables background scans,
+media queues, telemetry, backups, directory management, uploads, enrichment,
+face recognition, and other personal-library operations. Routes that have not
+been explicitly audited for demo use fail closed with
+`DEMO_MODE_ROUTE_BLOCKED`.
+
+The media itself is intentionally gitignored. Install `yt-dlp`, FFmpeg, and
+FFprobe, then run:
+
+```bash
+bun run demo:download
+```
+
+The importer is idempotent and downloads a curated set of trailers, game
+cinematics, live performances, and music videos at the best available quality
+capped at 1080p. It also builds thumbnails, metadata, creators, studios, tags,
+ratings, bookmarks, and watch statistics for pagination and frontend testing.
+Creator and studio artwork, channels, social links, galleries, hierarchical
+child tags, storyboard sprite sheets, and WebVTT previews are generated locally.
 
 ## Project Structure
 

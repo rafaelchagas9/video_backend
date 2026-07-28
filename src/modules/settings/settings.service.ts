@@ -1,6 +1,7 @@
 import { db } from "@/config/drizzle";
 import { appSettingsTable } from "@/database/schema";
 import type { AppSetting, SettingValue } from "./settings.types";
+import { env } from "@/config/env";
 
 const DEFAULT_SETTINGS: Record<string, SettingValue> = {
   min_watch_seconds: 60,
@@ -14,6 +15,9 @@ const DEFAULT_SETTINGS: Record<string, SettingValue> = {
 export class SettingsService {
   private cache: Map<string, SettingValue> | null = null;
   private initPromise: Promise<void> | null = null;
+  private demoValues = new Map<string, SettingValue>(
+    Object.entries(DEFAULT_SETTINGS),
+  );
 
   private async init(): Promise<void> {
     if (this.initPromise) return this.initPromise;
@@ -60,6 +64,16 @@ export class SettingsService {
   }
 
   async getAll(): Promise<AppSetting[]> {
+    if (env.DEMO_MODE) {
+      return Array.from(this.demoValues.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => ({
+          key,
+          value,
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }));
+    }
+
     await this.init();
     const rows = await db.query.appSettingsTable.findMany({
       orderBy: (settings, { asc }) => [asc(settings.key)],
@@ -73,6 +87,10 @@ export class SettingsService {
   }
 
   async getValue(key: string): Promise<SettingValue> {
+    if (env.DEMO_MODE) {
+      return this.demoValues.get(key) ?? DEFAULT_SETTINGS[key] ?? "";
+    }
+
     await this.init();
 
     if (this.cache!.has(key)) {
@@ -102,6 +120,13 @@ export class SettingsService {
   async updateValues(
     values: Record<string, SettingValue>,
   ): Promise<AppSetting[]> {
+    if (env.DEMO_MODE) {
+      for (const [key, value] of Object.entries(values)) {
+        this.demoValues.set(key, value);
+      }
+      return this.getAll();
+    }
+
     const entries = Object.entries(values);
     if (entries.length === 0) return this.getAll();
 

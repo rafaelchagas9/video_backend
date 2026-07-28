@@ -10,6 +10,7 @@ describe("video route schemas", () => {
     const parsed = listVideosQuerySchema.parse({
       page: "3",
       limit: "25",
+      ids: "8, 3, invalid, 5",
       searchFullPath: "true",
       include_hidden: "false",
       creatorIds: "1, 2, invalid, 3",
@@ -18,11 +19,14 @@ describe("video route schemas", () => {
       include: "collection, creators, tags",
       sort: "file_name",
       order: "asc",
+      createdFrom: "2026-07-28T03:00:00.000Z",
+      createdBefore: "2026-07-29T03:00:00.000Z",
     });
 
     expect(parsed).toMatchObject({
       page: 3,
       limit: 25,
+      ids: [8, 3, 5],
       searchFullPath: true,
       include_hidden: false,
       creatorIds: [1, 2, 3],
@@ -32,7 +36,28 @@ describe("video route schemas", () => {
       sort: "file_name",
       order: "asc",
       matchMode: "any",
+      createdFrom: "2026-07-28T03:00:00.000Z",
+      createdBefore: "2026-07-29T03:00:00.000Z",
     });
+  });
+
+  it("bounds ID-filtered list requests to one page", () => {
+    const tooManyIds = Array.from({ length: 101 }, (_, index) =>
+      String(index + 1),
+    ).join(",");
+
+    expect(listVideosQuerySchema.safeParse({ ids: tooManyIds }).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects inverted added-date ranges in list queries", () => {
+    expect(
+      listVideosQuerySchema.safeParse({
+        createdFrom: "2026-07-29T03:00:00.000Z",
+        createdBefore: "2026-07-28T03:00:00.000Z",
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects inverted numeric ranges in list queries", () => {

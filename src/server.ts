@@ -28,6 +28,7 @@ import {
 } from "./utils/telemetry";
 import { eventsService } from "./modules/events/events.service";
 import { multiplayerRemoteWebSocketService } from "./modules/multiplayer-remote/multiplayer-remote.websocket";
+import { isDemoRequestAllowed } from "./utils/demo-mode-policy";
 
 type ValidationIssue = {
   instancePath?: string;
@@ -96,6 +97,22 @@ export async function buildServer() {
     request.telemetryStartTime = process.hrtime.bigint();
   });
 
+  fastify.addHook("onRequest", async (request, reply) => {
+    if (!env.DEMO_MODE || isDemoRequestAllowed(request.method, request.url)) {
+      return;
+    }
+
+    return reply.status(403).send({
+      success: false,
+      error: {
+        code: "DEMO_MODE_ROUTE_BLOCKED",
+        message:
+          "This feature is disabled in demo mode because it is not isolated from the personal library.",
+        statusCode: 403,
+      },
+    });
+  });
+
   fastify.addHook("onResponse", async (request, reply) => {
     if (!shouldTrackRequestMetrics(request) || !request.telemetryStartTime) {
       return;
@@ -122,13 +139,15 @@ export async function buildServer() {
   fastify.addHook("onClose", async () => {
     schedulerService.stop();
 
-    const { conversionQueue } = await import(
-      "./modules/conversion/conversion.queue"
-    );
-    const { editsQueue } = await import("./modules/edits/edits.queue");
+    if (!env.DEMO_MODE) {
+      const { conversionQueue } = await import(
+        "./modules/conversion/conversion.queue"
+      );
+      const { editsQueue } = await import("./modules/edits/edits.queue");
 
-    conversionQueue.stop();
-    editsQueue.stop();
+      conversionQueue.stop();
+      editsQueue.stop();
+    }
     eventsService.closeAll("server shutdown");
     multiplayerRemoteWebSocketService.closeAll("server shutdown");
     await closeDrizzleDatabase();
@@ -501,7 +520,7 @@ export async function buildServer() {
   );
 
   // Start scheduler for automatic directory scanning
-  if (env.NODE_ENV !== "test") {
+  if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
     schedulerService.start().catch((err) => {
       fastify.log.error(err, "Failed to start scheduler");
     });

@@ -71,6 +71,12 @@ export const listVideosQuerySchema = z
     // Existing pagination and search
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(20),
+    ids: z
+      .preprocess(
+        parseCommaSeparatedIds,
+        z.array(z.number().int().positive()).min(1).max(100).optional(),
+      )
+      .optional(),
     directory_id: z.coerce.number().int().positive().optional(),
     search: z.string().optional(),
     searchFullPath: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
@@ -89,6 +95,8 @@ export const listVideosQuerySchema = z
       .default("created_at"),
     order: z.enum(["asc", "desc"]).default("desc"),
     include_hidden: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
+    createdFrom: z.iso.datetime({ offset: true }).optional(),
+    createdBefore: z.iso.datetime({ offset: true }).optional(),
 
     // Resolution filters
     minWidth: z.coerce.number().int().positive().optional(),
@@ -209,6 +217,14 @@ export const listVideosQuerySchema = z
         data.minRating !== undefined &&
         data.maxRating !== undefined &&
         data.minRating > data.maxRating
+      ) {
+        return false;
+      }
+      if (
+        data.createdFrom !== undefined &&
+        data.createdBefore !== undefined &&
+        new Date(data.createdFrom).getTime() >=
+          new Date(data.createdBefore).getTime()
       ) {
         return false;
       }

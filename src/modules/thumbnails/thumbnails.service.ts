@@ -15,7 +15,7 @@ import type { ExtractedFrame } from "@/modules/frame-extraction";
 export class ThumbnailsService {
   constructor() {
     // Ensure thumbnails directory exists
-    if (!existsSync(env.THUMBNAILS_DIR)) {
+    if (!env.DEMO_MODE && !existsSync(env.THUMBNAILS_DIR)) {
       mkdirSync(env.THUMBNAILS_DIR, { recursive: true });
     }
   }
@@ -24,6 +24,15 @@ export class ThumbnailsService {
     videoId: number,
     input?: GenerateThumbnailInput,
   ): Promise<Thumbnail> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const video = demoMockService.getVideoById(videoId);
+      if (!video.thumbnail) {
+        throw new NotFoundError(`Demo thumbnail not found for video: ${videoId}`);
+      }
+      return video.thumbnail as Thumbnail;
+    }
+
     const video = await videosService.findById(videoId); // Ensure video exists
 
     const existing = await db
@@ -162,6 +171,10 @@ export class ThumbnailsService {
     videoId: number,
     frame: ExtractedFrame,
   ): Promise<Thumbnail> {
+    if (env.DEMO_MODE) {
+      return this.generate(videoId);
+    }
+
     // Delete existing thumbnail if present
     const existing = await db
       .select()
@@ -239,6 +252,7 @@ export class ThumbnailsService {
       if (video && video.thumbnail) {
         return video.thumbnail as Thumbnail;
       }
+      throw new NotFoundError(`Thumbnail not found with id: ${id}`);
     }
     const thumbnail = await db
       .select()
@@ -289,6 +303,11 @@ export class ThumbnailsService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      await this.findById(id);
+      return;
+    }
+
     const thumbnail = await this.findById(id);
 
     // Delete file

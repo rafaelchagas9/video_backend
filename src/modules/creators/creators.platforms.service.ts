@@ -1,5 +1,6 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import {
   creatorPlatformsTable,
   platformsTable,
@@ -106,6 +107,13 @@ export class CreatorsPlatformsService {
   }
 
   async getPlatformProfiles(creatorId: number): Promise<CreatorPlatform[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreatorPlatforms(
+        creatorId,
+      ) as CreatorPlatform[];
+    }
+
     // Verify creator exists
     const creator = await db
       .select({ id: creatorsTable.id })

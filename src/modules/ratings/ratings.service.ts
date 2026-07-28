@@ -8,9 +8,15 @@ import type {
   UpdateRatingInput,
 } from "./ratings.types";
 import { videosService } from "@/modules/videos/videos.service";
+import { env } from "@/config/env";
 
 export class RatingsService {
   async addRating(videoId: number, input: CreateRatingInput): Promise<Rating> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.addRating(videoId, input) as Rating;
+    }
+
     await videosService.findById(videoId); // Ensure video exists
 
     const result = await db
@@ -30,6 +36,15 @@ export class RatingsService {
   }
 
   async findById(id: number): Promise<Rating> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const rating = demoMockService.findRatingById(id);
+      if (!rating) {
+        throw new NotFoundError(`Rating not found with id: ${id}`);
+      }
+      return rating as Rating;
+    }
+
     const ratings = await db
       .select()
       .from(ratingsTable)
@@ -44,6 +59,11 @@ export class RatingsService {
   }
 
   async getRatingsForVideo(videoId: number): Promise<Rating[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getRatingsForVideo(videoId) as Rating[];
+    }
+
     await videosService.findById(videoId); // Ensure video exists
 
     const ratings = await db
@@ -56,6 +76,15 @@ export class RatingsService {
   }
 
   async update(id: number, input: UpdateRatingInput): Promise<Rating> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const rating = demoMockService.updateRating(id, input);
+      if (!rating) {
+        throw new NotFoundError(`Rating not found with id: ${id}`);
+      }
+      return rating as Rating;
+    }
+
     await this.findById(id); // Ensure exists
 
     const updates: any = {};
@@ -78,11 +107,31 @@ export class RatingsService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      if (!demoMockService.deleteRating(id)) {
+        throw new NotFoundError(`Rating not found with id: ${id}`);
+      }
+      return;
+    }
+
     await this.findById(id); // Ensure exists
     await db.delete(ratingsTable).where(eq(ratingsTable.id, id));
   }
 
   async getAverageRating(videoId: number): Promise<number | null> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const ratings = demoMockService.getRatingsForVideo(videoId);
+      if (ratings.length === 0) {
+        return null;
+      }
+      return (
+        ratings.reduce((total: number, rating: any) => total + rating.rating, 0) /
+        ratings.length
+      );
+    }
+
     const result = await db
       .select({ avgRating: sql<number | null>`AVG(${ratingsTable.rating})` })
       .from(ratingsTable)

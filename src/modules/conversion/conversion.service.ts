@@ -26,14 +26,16 @@ import type {
 export class ConversionService {
   constructor() {
     // Ensure converted videos directory exists
-    if (!existsSync(env.CONVERTED_VIDEOS_DIR)) {
+    if (!env.DEMO_MODE && !existsSync(env.CONVERTED_VIDEOS_DIR)) {
       mkdirSync(env.CONVERTED_VIDEOS_DIR, { recursive: true });
     }
 
     // Set up queue processor using the processor service
-    conversionQueue.setProcessor(
-      conversionProcessorService.processJob.bind(conversionProcessorService),
-    );
+    if (!env.DEMO_MODE) {
+      conversionQueue.setProcessor(
+        conversionProcessorService.processJob.bind(conversionProcessorService),
+      );
+    }
   }
 
   /**

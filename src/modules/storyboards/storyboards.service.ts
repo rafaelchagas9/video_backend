@@ -40,7 +40,7 @@ export class StoryboardsService {
 
   constructor() {
     // Ensure storyboards directory exists
-    if (!existsSync(env.STORYBOARDS_DIR)) {
+    if (!env.DEMO_MODE && !existsSync(env.STORYBOARDS_DIR)) {
       mkdirSync(env.STORYBOARDS_DIR, { recursive: true });
     }
   }

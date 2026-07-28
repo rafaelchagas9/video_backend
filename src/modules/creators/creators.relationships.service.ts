@@ -16,6 +16,7 @@ import {
 import type { Video } from "@/modules/videos/videos.types";
 import type { Creator } from "./creators.types";
 import type { Studio } from "@/modules/studios/studios.types";
+import { env } from "@/config/env";
 
 export class CreatorsRelationshipsService {
   // Video Relationship Methods
@@ -112,6 +113,11 @@ export class CreatorsRelationshipsService {
   }
 
   async getCreatorsForVideo(videoId: number): Promise<Creator[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getVideoById(videoId).creators as Creator[];
+    }
+
     const creators = await db
       .select({
         id: creatorsTable.id,
@@ -148,6 +154,21 @@ export class CreatorsRelationshipsService {
     videoIds: number[],
   ): Promise<Map<number, Creator[]>> {
     const grouped = new Map<number, Creator[]>();
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      for (const videoId of videoIds) {
+        try {
+          grouped.set(
+            videoId,
+            demoMockService.getVideoById(videoId).creators as Creator[],
+          );
+        } catch {
+          // Missing demo videos simply do not contribute a relationship.
+        }
+      }
+      return grouped;
+    }
+
     if (videoIds.length === 0) {
       return grouped;
     }

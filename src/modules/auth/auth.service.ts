@@ -11,6 +11,19 @@ import type {
   LoginInput,
   RegisterInput,
 } from "./auth.types";
+import { env } from "@/config/env";
+
+const DEMO_TIMESTAMP = "2026-01-01T00:00:00.000Z";
+const DEMO_USER: AuthUser = {
+  id: 1,
+  name: "Demo User",
+  email: "demo@example.invalid",
+  email_verified: true,
+  image: null,
+  username: "demo",
+  created_at: DEMO_TIMESTAMP,
+  updated_at: DEMO_TIMESTAMP,
+};
 
 type BetterAuthUser = {
   id: string | number;
@@ -76,6 +89,29 @@ function mapBetterAuthError(error: unknown): never {
 }
 
 export class AuthService {
+  getDemoSession(): AuthSessionData {
+    return {
+      user: { ...DEMO_USER },
+      session: {
+        id: "demo-session",
+        token: "demo-session",
+        user_id: DEMO_USER.id,
+        expires_at: "2099-01-01T00:00:00.000Z",
+        created_at: DEMO_TIMESTAMP,
+        updated_at: DEMO_TIMESTAMP,
+        ip_address: null,
+        user_agent: "demo-mode",
+      },
+    };
+  }
+
+  private createDemoResponse(status = 200): Response {
+    return new Response(JSON.stringify({ user: DEMO_USER }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   private async resolveLoginEmail(input: LoginInput): Promise<string> {
     if (input.email) {
       return input.email;
@@ -130,6 +166,13 @@ export class AuthService {
     input: RegisterInput,
     headers: IncomingHttpHeaders | Headers,
   ): Promise<{ user: AuthUser; response: Response }> {
+    if (env.DEMO_MODE) {
+      return {
+        user: { ...DEMO_USER },
+        response: this.createDemoResponse(201),
+      };
+    }
+
     try {
       const response = await auth.api.signUpEmail({
         asResponse: true,
@@ -160,6 +203,13 @@ export class AuthService {
     input: LoginInput,
     headers: IncomingHttpHeaders | Headers,
   ): Promise<{ user: AuthUser; response: Response }> {
+    if (env.DEMO_MODE) {
+      return {
+        user: { ...DEMO_USER },
+        response: this.createDemoResponse(),
+      };
+    }
+
     try {
       const email = await this.resolveLoginEmail(input);
       const response = await auth.api.signInEmail({
@@ -187,6 +237,10 @@ export class AuthService {
   }
 
   async logout(headers: IncomingHttpHeaders | Headers): Promise<Response> {
+    if (env.DEMO_MODE) {
+      return new Response(null, { status: 200 });
+    }
+
     try {
       return await auth.api.signOut({
         asResponse: true,
@@ -200,6 +254,10 @@ export class AuthService {
   async getSession(
     headers: IncomingHttpHeaders | Headers,
   ): Promise<AuthSessionData | null> {
+    if (env.DEMO_MODE) {
+      return this.getDemoSession();
+    }
+
     try {
       const session = await auth.api.getSession({
         headers: toHeaders(headers),
@@ -221,6 +279,10 @@ export class AuthService {
   }
 
   async validateSessionToken(token: string): Promise<boolean> {
+    if (env.DEMO_MODE) {
+      return token === "demo-session";
+    }
+
     const session = await db.query.sessionsTable.findFirst({
       where: (sessions, { and, eq, gt }) =>
         and(eq(sessions.token, token), gt(sessions.expiresAt, new Date())),

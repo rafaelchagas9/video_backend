@@ -24,15 +24,34 @@ export class TagsService {
   async list(options: ListTagsOptions = {}): Promise<PaginatedTags> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      const tags = demoMockService.getTags() as Tag[];
+      const page = options.page ?? 1;
+      const limit = options.limit ?? 20;
+      let tags = demoMockService.getTags() as Tag[];
+
+      if (options.search) {
+        const search = options.search.toLowerCase();
+        tags = tags.filter(
+          (tag) =>
+            tag.name.toLowerCase().includes(search) ||
+            tag.description?.toLowerCase().includes(search),
+        );
+      }
+
+      tags.sort((left, right) => left.name.localeCompare(right.name));
+      if (options.order === "desc") {
+        tags.reverse();
+      }
+
+      const result = options.tree ? this.buildTree(tags) : tags;
+      const total = result.length;
       return {
-        data: tags,
+        data: result.slice((page - 1) * limit, page * limit),
         pagination: {
-          page: 1,
-          limit: 10000,
-          total: tags.length,
-          totalPages: 1
-        }
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
       };
     }
     const {
@@ -168,7 +187,9 @@ export class TagsService {
     const totalPages = Math.ceil(total / limit);
 
     // Fetch all tags once to build tree in-memory
-    const allTags = await this.list({ limit: 10000 }).then((r) => r.data as Tag[]);
+    const allTags = await this.list({ limit: 10000 }).then(
+      (r) => r.data as Tag[],
+    );
 
     // Build tree with children
     const treeWithChildren = await Promise.all(
@@ -186,8 +207,13 @@ export class TagsService {
     };
   }
 
-  private async buildTreeWithDescendants(tagId: number, preFetchedTags?: Tag[]): Promise<TagTreeNode> {
-    const allTags: Tag[] = preFetchedTags ?? (await this.list({ limit: 10000 }).then((r) => (r.data as Tag[]) || []));
+  private async buildTreeWithDescendants(
+    tagId: number,
+    preFetchedTags?: Tag[],
+  ): Promise<TagTreeNode> {
+    const allTags: Tag[] =
+      preFetchedTags ??
+      (await this.list({ limit: 10000 }).then((r) => (r.data as Tag[]) || []));
 
     const tag = allTags.find((t) => t.id === tagId);
     if (!tag) {
@@ -253,7 +279,13 @@ export class TagsService {
   async findByIdWithPath(id: number): Promise<TagWithPath> {
     if (env.DEMO_MODE) {
       const tag = await this.findById(id);
-      return { ...tag, path: tag.name };
+      const ancestors = await this.getAncestors(id);
+      return {
+        ...tag,
+        path: [...ancestors.map((ancestor) => ancestor.name), tag.name].join(
+          " > ",
+        ),
+      };
     }
 
     const tag = await this.findById(id);
@@ -430,8 +462,10 @@ export class TagsService {
       return {
         ...tag,
         name: input.name !== undefined ? input.name : tag.name,
-        parent_id: input.parent_id !== undefined ? input.parent_id : tag.parent_id,
-        description: input.description !== undefined ? input.description : tag.description,
+        parent_id:
+          input.parent_id !== undefined ? input.parent_id : tag.parent_id,
+        description:
+          input.description !== undefined ? input.description : tag.description,
         color: input.color !== undefined ? input.color : tag.color,
       };
     }
@@ -501,9 +535,8 @@ export class TagsService {
     await db.delete(tagsTable).where(eq(tagsTable.id, id));
 
     // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
-    const { enrichmentService } = await import(
-      "@/modules/enrichment/enrichment.service"
-    );
+    const { enrichmentService } =
+      await import("@/modules/enrichment/enrichment.service");
     await enrichmentService.deleteForEntity("tag", id);
   }
 
@@ -521,7 +554,9 @@ export class TagsService {
     const descendants = await this.getDescendants(tagId);
     const tagIds = [tagId, ...descendants.map((d) => d.id)];
 
-    const videos = await db.execute<Record<string, unknown> & { thumbnail_id?: unknown }>(sql`
+    const videos = await db.execute<
+      Record<string, unknown> & { thumbnail_id?: unknown }
+    >(sql`
       SELECT DISTINCT 
         v.*, 
         t.id as thumbnail_id
@@ -536,9 +571,10 @@ export class TagsService {
     return results.map((row) => ({
       ...row,
       thumbnail_id: row.thumbnail_id != null ? Number(row.thumbnail_id) : null,
-      thumbnail_url: row.thumbnail_id != null
-        ? `${API_PREFIX}/thumbnails/${row.thumbnail_id}/image`
-        : null,
+      thumbnail_url:
+        row.thumbnail_id != null
+          ? `${API_PREFIX}/thumbnails/${row.thumbnail_id}/image`
+          : null,
     })) as unknown as Video[];
   }
 

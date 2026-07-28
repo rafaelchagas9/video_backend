@@ -22,7 +22,7 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
 };
 
 const posthogClient =
-  env.POSTHOG_API_KEY.length > 0
+  !env.DEMO_MODE && env.POSTHOG_API_KEY.length > 0
     ? new PostHog(env.POSTHOG_API_KEY, {
         host: env.POSTHOG_HOST,
         flushAt: 1,

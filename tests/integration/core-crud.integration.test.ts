@@ -1239,6 +1239,22 @@ describe("Fastify app integration", () => {
     expect(list.json().data).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: fixture.videoId })]),
     );
+    const listedVideo = list
+      .json()
+      .data.find((video: { id: number }) => video.id === fixture.videoId) as {
+      created_at: string;
+    };
+    const createdAtMs = new Date(listedVideo.created_at).getTime();
+    const dateFilteredList = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos?createdFrom=${encodeURIComponent(new Date(createdAtMs - 1).toISOString())}&createdBefore=${encodeURIComponent(new Date(createdAtMs + 1).toISOString())}`,
+    });
+    expect(dateFilteredList.statusCode).toBe(200);
+    expect(dateFilteredList.json().data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: fixture.videoId }),
+      ]),
+    );
 
     const random = await ctx!.authInject({
       method: "GET",

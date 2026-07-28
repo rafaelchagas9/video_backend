@@ -210,6 +210,13 @@ export class StudiosSocialService {
   }
 
   async getSocialLinks(studioId: number): Promise<StudioSocialLink[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getStudioSocialLinks(
+        studioId,
+      ) as StudioSocialLink[];
+    }
+
     await this.findStudioById(studioId); // Ensure studio exists
 
     const links = await db

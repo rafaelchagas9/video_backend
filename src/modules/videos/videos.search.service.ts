@@ -582,6 +582,40 @@ export class VideosSearchService {
     userId: number,
     options: NextVideoOptions,
   ): Promise<NextVideoResult> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const result = demoMockService.getVideos({ ...options, limit: 10_000 });
+      const currentIndex = result.data.findIndex(
+        (video: Video) => video.id === options.currentId,
+      );
+      if (currentIndex < 0 || result.data.length === 0) {
+        return {
+          video: null,
+          meta: {
+            remaining: 0,
+            total_matching: result.pagination.total,
+            has_wrapped: false,
+          },
+        };
+      }
+
+      const delta = options.direction === "previous" ? -1 : 1;
+      const unwrappedIndex = currentIndex + delta;
+      const hasWrapped =
+        unwrappedIndex < 0 || unwrappedIndex >= result.data.length;
+      const nextIndex =
+        (unwrappedIndex + result.data.length) % result.data.length;
+
+      return {
+        video: result.data[nextIndex] ?? null,
+        meta: {
+          remaining: Math.max(0, result.data.length - 1),
+          total_matching: result.pagination.total,
+          has_wrapped: hasWrapped,
+        },
+      };
+    }
+
     const {
       currentId,
       direction = "next",
@@ -826,6 +860,23 @@ export class VideosSearchService {
     userId: number,
     options: TriageQueueOptions,
   ): Promise<TriageQueueResult> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const queueOffset = options.queueOffset ?? 0;
+      const queueLimit = options.queueLimit ?? 100;
+      const result = demoMockService.getVideos({
+        ...options,
+        page: 1,
+        limit: 10_000,
+      });
+      return {
+        ids: result.data
+          .slice(queueOffset, queueOffset + queueLimit)
+          .map((video: Video) => video.id),
+        total: result.pagination.total,
+      };
+    }
+
     const {
       queueLimit = 100,
       queueOffset = 0,

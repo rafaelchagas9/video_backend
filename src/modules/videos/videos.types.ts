@@ -75,6 +75,8 @@ export interface ListVideosOptions {
   sort?: string;
   order?: "asc" | "desc";
   include_hidden?: boolean;
+  createdFrom?: string;
+  createdBefore?: string;
 
   // Resolution filters
   minWidth?: number;

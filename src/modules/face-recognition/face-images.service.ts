@@ -24,7 +24,7 @@ export class FaceImagesService {
     this.facesDir = env.FACES_DIR || './data/faces';
 
     // Ensure faces directory exists
-    if (!existsSync(this.facesDir)) {
+    if (!env.DEMO_MODE && !existsSync(this.facesDir)) {
       mkdirSync(this.facesDir, { recursive: true });
       logger.info({ facesDir: this.facesDir }, 'Created faces directory');
     }

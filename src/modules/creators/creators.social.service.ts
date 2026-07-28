@@ -101,6 +101,11 @@ export class CreatorsSocialService {
   }
 
   async getSocialLinks(creatorId: number): Promise<SocialLink[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreatorSocialLinks(creatorId) as SocialLink[];
+    }
+
     // Verify creator exists
     const creator = await db
       .select({ id: creatorsTable.id })
@@ -303,6 +308,13 @@ export class CreatorsSocialService {
   }
 
   async listGalleryMedia(creatorId: number): Promise<CreatorGalleryMedia[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreatorGalleryMedia(
+        creatorId,
+      ) as CreatorGalleryMedia[];
+    }
+
     await this.findCreatorById(creatorId);
 
     const media = await db
@@ -522,14 +534,14 @@ export class CreatorsSocialService {
         creator.faceThumbnailPath ?? creator.face_thumbnail_path ?? null,
       profile_picture_url:
         (creator.unified_profile_picture_path ??
-          creator.profilePicturePath ??
-          creator.profile_picture_path)
+        creator.profilePicturePath ??
+        creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
           : undefined,
       main_picture_url:
         (creator.unified_main_picture_path ??
-          creator.mainPicturePath ??
-          creator.main_picture_path)
+        creator.mainPicturePath ??
+        creator.main_picture_path)
           ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:
@@ -588,10 +600,7 @@ export class CreatorsSocialService {
     });
   }
 
-  private async clearImageRole(
-    creatorId: number,
-    role: CreatorPictureVariant,
-  ) {
+  private async clearImageRole(creatorId: number, role: CreatorPictureVariant) {
     await db
       .update(creatorGalleryMediaTable)
       .set({

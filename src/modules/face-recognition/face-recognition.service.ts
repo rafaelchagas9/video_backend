@@ -39,7 +39,7 @@ export class FaceRecognitionService {
     this.creatorFacesDir =
       env.CREATOR_FACE_THUMBNAILS_DIR || "./data/creator-face-thumbnails";
 
-    if (!existsSync(this.creatorFacesDir)) {
+    if (!env.DEMO_MODE && !existsSync(this.creatorFacesDir)) {
       mkdirSync(this.creatorFacesDir, { recursive: true });
       logger.info(
         { creatorFacesDir: this.creatorFacesDir },

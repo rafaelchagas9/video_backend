@@ -1,4 +1,4 @@
-import { SQL, or, eq, gte, lte, sql, ilike, inArray } from "drizzle-orm";
+import { SQL, or, eq, gte, lt, lte, sql, ilike, inArray } from "drizzle-orm";
 import {
   videosTable,
   ratingsTable,
@@ -29,6 +29,8 @@ export function buildVideoFilters(
     searchFullPath = false,
     ids,
     include_hidden = false,
+    createdFrom,
+    createdBefore,
     // Resolution filters
     minWidth,
     maxWidth,
@@ -91,6 +93,14 @@ export function buildVideoFilters(
   // IDs filter
   if (ids && ids.length > 0) {
     conditions.push(inArray(videosTable.id, ids));
+  }
+
+  // Added-date range (inclusive start, exclusive end)
+  if (createdFrom !== undefined) {
+    conditions.push(gte(videosTable.createdAt, new Date(createdFrom)));
+  }
+  if (createdBefore !== undefined) {
+    conditions.push(lt(videosTable.createdAt, new Date(createdBefore)));
   }
 
   // Search filter
