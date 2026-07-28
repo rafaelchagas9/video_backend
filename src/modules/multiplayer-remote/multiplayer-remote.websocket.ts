@@ -269,6 +269,26 @@ class MultiplayerRemoteWebSocketService {
       sessionId: session.id,
     });
 
+    if (role === "remote") {
+      const display = this.displayConnections.get(session.id);
+      if (display) {
+        // Prompt the already-mounted display to publish a fresh snapshot. Its
+        // current playback position/duration can be newer than lastState,
+        // especially when a trusted remote joins after playback has started.
+        this.send(display, {
+          event: "client.connected",
+          payload: {
+            role,
+            clientId,
+            session,
+          },
+          timestamp: new Date().toISOString(),
+          protocolVersion: multiplayerRemoteProtocolVersion,
+          sessionId: session.id,
+        });
+      }
+    }
+
     if (role === "remote" && session.lastState) {
       this.send(socket, {
         event: "session.state",
