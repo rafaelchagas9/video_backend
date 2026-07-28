@@ -19,6 +19,7 @@ export class DemoMockService {
   private nextPlaylistId = 1;
   private nextCollectionId = 1;
   private nextCollectionEntryId = 1;
+  private nextBookmarkId = 1_000_001;
   private demoLibrarySeeded = false;
 
   constructor() {
@@ -216,7 +217,16 @@ export class DemoMockService {
           studios: videoStudios,
           tags: videoTags,
           ratings: v.ratings || [],
-          bookmarks: v.bookmarks || [],
+          bookmarks: (v.bookmarks || []).map((bookmark: any, bookmarkIndex: number) => ({
+            id: videoId * 1_000 + bookmarkIndex + 1,
+            video_id: videoId,
+            user_id: 1,
+            timestamp_seconds: bookmark.timestampSeconds,
+            name: bookmark.name,
+            description: bookmark.description || null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })),
           stats: v.stats || {
             playCount: 0,
             totalWatchSeconds: 0,
@@ -451,6 +461,82 @@ export class DemoMockService {
       collection: this.getCollectionContextByVideoId(video.id),
       collection_neighbors: this.getNeighborsByVideoId(video.id),
     };
+  }
+
+  createBookmark(videoId: number, userId: number, input: any) {
+    this.loadData();
+    const video = this.videos.find((candidate) => candidate.id === videoId);
+    if (!video) return null;
+
+    const now = new Date().toISOString();
+    const bookmark = {
+      id: this.nextBookmarkId++,
+      video_id: videoId,
+      user_id: userId,
+      timestamp_seconds: input.timestamp_seconds,
+      name: input.name,
+      description: input.description || null,
+      created_at: now,
+      updated_at: now,
+    };
+    video.bookmarks.push(bookmark);
+    return { ...bookmark };
+  }
+
+  findBookmarkById(id: number) {
+    this.loadData();
+    for (const video of this.videos) {
+      const bookmark = video.bookmarks.find((candidate: any) => candidate.id === id);
+      if (bookmark) return { ...bookmark };
+    }
+    return null;
+  }
+
+  getBookmarksForVideo(videoId: number, userId: number) {
+    this.loadData();
+    const video = this.videos.find((candidate) => candidate.id === videoId);
+    if (!video) return null;
+    return video.bookmarks
+      .filter((bookmark: any) => bookmark.user_id === userId)
+      .sort(
+        (a: any, b: any) =>
+          a.timestamp_seconds - b.timestamp_seconds,
+      )
+      .map((bookmark: any) => ({ ...bookmark }));
+  }
+
+  updateBookmark(id: number, input: any) {
+    this.loadData();
+    for (const video of this.videos) {
+      const bookmark = video.bookmarks.find((candidate: any) => candidate.id === id);
+      if (!bookmark) continue;
+
+      if (input.timestamp_seconds !== undefined) {
+        bookmark.timestamp_seconds = input.timestamp_seconds;
+      }
+      if (input.name !== undefined) {
+        bookmark.name = input.name;
+      }
+      if (input.description !== undefined) {
+        bookmark.description = input.description;
+      }
+      bookmark.updated_at = new Date().toISOString();
+      return { ...bookmark };
+    }
+    return null;
+  }
+
+  deleteBookmark(id: number) {
+    this.loadData();
+    for (const video of this.videos) {
+      const index = video.bookmarks.findIndex(
+        (candidate: any) => candidate.id === id,
+      );
+      if (index < 0) continue;
+      video.bookmarks.splice(index, 1);
+      return true;
+    }
+    return false;
   }
 
   // --- Creator Methods ---

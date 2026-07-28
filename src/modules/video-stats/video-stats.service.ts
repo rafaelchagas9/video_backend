@@ -12,6 +12,7 @@ import type {
   WatchUpdateInput,
 } from "./video-stats.types";
 import { settingsService } from "@/modules/settings/settings.service";
+import { env } from "@/config/env";
 
 interface RecordWatchResult {
   stats: VideoStats;
@@ -20,6 +21,46 @@ interface RecordWatchResult {
 }
 
 export class VideoStatsService {
+  private async getDemoVideo(videoId: number) {
+    const { demoMockService } = await import("@/utils/demo-mock");
+    return demoMockService.getVideoById(videoId);
+  }
+
+  private mapDemoStats(userId: number, video: any): VideoStats {
+    const now = new Date().toISOString();
+    const stats = video.stats ?? {};
+    const lastPositionSeconds = Number(stats.lastPositionSeconds ?? 0);
+    const lastWatchAt =
+      stats.lastWatchAt ??
+      (lastPositionSeconds > 0
+        ? new Date(Date.now() - video.id * 60_000).toISOString()
+        : null);
+
+    return {
+      user_id: userId,
+      video_id: video.id,
+      play_count: Number(stats.playCount ?? 0),
+      total_watch_seconds: Number(stats.totalWatchSeconds ?? 0),
+      session_watch_seconds: Number(stats.sessionWatchSeconds ?? 0),
+      session_play_counted: Number(stats.sessionPlayCounted ?? 0),
+      last_position_seconds:
+        lastPositionSeconds > 0 ? lastPositionSeconds : null,
+      last_played_at: stats.lastPlayedAt ?? lastWatchAt,
+      last_watch_at: lastWatchAt,
+      created_at: stats.createdAt ?? now,
+      updated_at: stats.updatedAt ?? now,
+    };
+  }
+
+  private mapDemoAggregate(stats: VideoStats): AggregateVideoStats {
+    return {
+      video_id: stats.video_id,
+      total_play_count: stats.play_count,
+      total_watch_seconds: stats.total_watch_seconds,
+      last_played_at: stats.last_played_at,
+    };
+  }
+
   private async getAggregateStats(
     videoId: number,
   ): Promise<AggregateVideoStats> {
@@ -60,6 +101,29 @@ export class VideoStatsService {
     videoId: number,
     input: WatchUpdateInput,
   ): Promise<RecordWatchResult> {
+    if (env.DEMO_MODE) {
+      const video = await this.getDemoVideo(videoId);
+      const now = new Date().toISOString();
+      const stats = video.stats ?? {};
+      stats.totalWatchSeconds =
+        Number(stats.totalWatchSeconds ?? 0) + input.watched_seconds;
+      stats.sessionWatchSeconds =
+        Number(stats.sessionWatchSeconds ?? 0) + input.watched_seconds;
+      if (input.last_position_seconds !== undefined) {
+        stats.lastPositionSeconds = input.last_position_seconds;
+      }
+      stats.lastWatchAt = now;
+      stats.updatedAt = now;
+      video.stats = stats;
+
+      const mappedStats = this.mapDemoStats(userId, video);
+      return {
+        stats: mappedStats,
+        aggregate: this.mapDemoAggregate(mappedStats),
+        play_count_incremented: false,
+      };
+    }
+
     const videos = await db
       .select({ durationSeconds: videosTable.durationSeconds })
       .from(videosTable)
@@ -189,6 +253,17 @@ export class VideoStatsService {
     userId: number,
     videoId: number,
   ): Promise<{ stats: VideoStats; aggregate: AggregateVideoStats }> {
+    if (env.DEMO_MODE) {
+      const stats = this.mapDemoStats(
+        userId,
+        await this.getDemoVideo(videoId),
+      );
+      return {
+        stats,
+        aggregate: this.mapDemoAggregate(stats),
+      };
+    }
+
     const videos = await db
       .select({ id: videosTable.id })
       .from(videosTable)
@@ -238,6 +313,51 @@ export class VideoStatsService {
     const page = query.page;
     const limit = query.limit;
     const offset = (page - 1) * limit;
+
+    // Demo mode is an isolation boundary: never join real watch or video rows.
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const videos = demoMockService.getVideos({ limit: 100 }).data;
+      const entries = videos
+        .map((video: any): WatchHistoryEntry | null => {
+          const stats = this.mapDemoStats(userId, video);
+          if (!stats.last_watch_at) {
+            return null;
+          }
+          return {
+            video: {
+              id: video.id,
+              file_name: video.file_name,
+              title: video.title,
+              duration_seconds: video.duration_seconds,
+              thumbnail_id: video.thumbnail_id,
+              thumbnail_url: video.thumbnail_url,
+            },
+            play_count: stats.play_count,
+            total_watch_seconds: stats.total_watch_seconds,
+            last_position_seconds: stats.last_position_seconds,
+            last_played_at: stats.last_played_at,
+            last_watch_at: stats.last_watch_at,
+          };
+        })
+        .filter((entry: WatchHistoryEntry | null): entry is WatchHistoryEntry =>
+          entry !== null,
+        )
+        .sort((a: WatchHistoryEntry, b: WatchHistoryEntry) =>
+          b.last_watch_at.localeCompare(a.last_watch_at),
+        );
+      const total = entries.length;
+
+      return {
+        data: entries.slice(offset, offset + limit),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    }
 
     const whereClause = and(
       eq(videoStatsTable.userId, userId),

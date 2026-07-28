@@ -8,6 +8,7 @@ import type {
   UpdateBookmarkInput,
 } from "./bookmarks.types";
 import { videosService } from "@/modules/videos/videos.service";
+import { env } from "@/config/env";
 
 export class BookmarksService {
   async create(
@@ -17,6 +18,15 @@ export class BookmarksService {
   ): Promise<Bookmark> {
     // Verify video exists
     await videosService.findById(videoId);
+
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const bookmark = demoMockService.createBookmark(videoId, userId, input);
+      if (!bookmark) {
+        throw new NotFoundError(`Video not found with id: ${videoId}`);
+      }
+      return this.mapToSnakeCase(bookmark);
+    }
 
     const result = await db
       .insert(bookmarksTable)
@@ -37,6 +47,15 @@ export class BookmarksService {
   }
 
   async findById(id: number): Promise<Bookmark> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const bookmark = demoMockService.findBookmarkById(id);
+      if (!bookmark) {
+        throw new NotFoundError(`Bookmark not found with id: ${id}`);
+      }
+      return this.mapToSnakeCase(bookmark);
+    }
+
     const bookmarks = await db
       .select()
       .from(bookmarksTable)
@@ -56,6 +75,15 @@ export class BookmarksService {
   ): Promise<Bookmark[]> {
     // Verify video exists
     await videosService.findById(videoId);
+
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const bookmarks = demoMockService.getBookmarksForVideo(videoId, userId);
+      if (!bookmarks) {
+        throw new NotFoundError(`Video not found with id: ${videoId}`);
+      }
+      return bookmarks.map((bookmark: any) => this.mapToSnakeCase(bookmark));
+    }
 
     const bookmarks = await db
       .select()
@@ -103,6 +131,15 @@ export class BookmarksService {
       return bookmark;
     }
 
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      const updated = demoMockService.updateBookmark(id, input);
+      if (!updated) {
+        throw new NotFoundError(`Bookmark not found with id: ${id}`);
+      }
+      return this.mapToSnakeCase(updated);
+    }
+
     updates.updatedAt = new Date();
 
     await db
@@ -121,6 +158,14 @@ export class BookmarksService {
       throw new ForbiddenError(
         "You do not have permission to delete this bookmark",
       );
+    }
+
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      if (!demoMockService.deleteBookmark(id)) {
+        throw new NotFoundError(`Bookmark not found with id: ${id}`);
+      }
+      return;
     }
 
     await db.delete(bookmarksTable).where(eq(bookmarksTable.id, id));
