@@ -64,6 +64,21 @@ describe("Demo Mock Service Zod Schema Validation", () => {
     expect(filtered.pagination.total).toBe(requestedIds.length);
   });
 
+  it("provides enough paginated videos for queue regression testing", () => {
+    const firstPage = demoMockService.getVideos({ page: 1, limit: 24 });
+    const lastPage = demoMockService.getVideos({ page: 6, limit: 24 });
+
+    expect(firstPage.pagination.total).toBeGreaterThanOrEqual(120);
+    expect(firstPage.pagination.totalPages).toBeGreaterThanOrEqual(5);
+    expect(firstPage.data).toHaveLength(24);
+    expect(lastPage.data.length).toBeGreaterThan(0);
+    expect(
+      new Set(
+        demoMockService.getVideos({ limit: 200 }).data.map((video) => video.id),
+      ).size,
+    ).toBe(firstPage.pagination.total);
+  });
+
   it("validates all getVideos() individual items", () => {
     const list = demoMockService.getVideos({ limit: 100 });
     for (const item of list.data) {

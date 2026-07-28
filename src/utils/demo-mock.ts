@@ -3,6 +3,8 @@ import { join, resolve, sep } from "path";
 import { API_PREFIX } from "@/config/constants";
 import { logger } from "@/utils/logger";
 
+const DEMO_VIDEO_CATALOG_SIZE = 132;
+
 export function isDemoAssetPath(value: unknown, cwd = process.cwd()): boolean {
   if (typeof value !== "string" || value.length === 0) {
     return false;
@@ -359,6 +361,7 @@ export class DemoMockService {
         };
       });
 
+      this.expandVideoCatalog();
       this.seedDemoLibraryData();
     } catch (error) {
       this.data = { tags: [], studios: [], creators: [], videos: [] };
@@ -367,6 +370,65 @@ export class DemoMockService {
       this.creators = [];
       this.videos = [];
       logger.error({ error }, "Error loading demo mode JSON data");
+    }
+  }
+
+  private expandVideoCatalog() {
+    const sourceVideos = [...this.videos];
+    if (
+      sourceVideos.length === 0 ||
+      sourceVideos.length >= DEMO_VIDEO_CATALOG_SIZE
+    ) {
+      return;
+    }
+
+    while (this.videos.length < DEMO_VIDEO_CATALOG_SIZE) {
+      const videoId = this.videos.length + 1;
+      const source = sourceVideos[(videoId - 1) % sourceVideos.length];
+      if (!source) {
+        break;
+      }
+
+      const demoLabel = `Demo ${String(videoId).padStart(3, "0")}`;
+      this.videos.push({
+        ...source,
+        id: videoId,
+        file_name: `${demoLabel} - ${source.file_name}`,
+        file_hash: `${source.file_hash || "demo-video"}-${videoId}`,
+        title: `${source.title || source.file_name} · ${demoLabel}`,
+        thumbnail_id: source.thumbnail ? videoId : null,
+        thumbnail_url: source.thumbnail
+          ? `${API_PREFIX}/thumbnails/${videoId}/image`
+          : null,
+        thumbnail: source.thumbnail
+          ? {
+              ...source.thumbnail,
+              id: videoId,
+              video_id: videoId,
+            }
+          : null,
+        storyboard: source.storyboard
+          ? {
+              ...source.storyboard,
+              id: videoId,
+              video_id: videoId,
+            }
+          : null,
+        creators: [...source.creators],
+        studios: [...source.studios],
+        tags: [...source.tags],
+        ratings: source.ratings.map((rating: any, index: number) => ({
+          ...rating,
+          id: videoId * 1_000 + index + 1,
+          video_id: videoId,
+        })),
+        bookmarks: source.bookmarks.map((bookmark: any, index: number) => ({
+          ...bookmark,
+          id: videoId * 1_000 + index + 1,
+          video_id: videoId,
+        })),
+        stats: { ...source.stats },
+      });
     }
   }
 
