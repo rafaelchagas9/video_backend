@@ -12,6 +12,7 @@ import { env } from "@/config/env";
 import { NotFoundError, InternalServerError } from "@/utils/errors";
 import { videosService } from "@/modules/videos/videos.service";
 import { eventsService } from "@/modules/events/events.service";
+import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
 import { recordPerfStage } from "@/utils/performance-profiler";
 import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
@@ -129,6 +130,9 @@ export class StoryboardsService {
         // Double-check storyboard doesn't exist (may have been created by another process)
         const existing = await this.findByVideoId(videoId);
         if (!existing) {
+          const video = await videosService.findById(videoId);
+          const videoContext = createVideoEventContext(video);
+
           logger.info(
             { videoId, remaining: this.pendingQueue.length },
             "Processing storyboard generation",
@@ -137,8 +141,7 @@ export class StoryboardsService {
           eventsService.broadcastToAuthenticated({
             type: "storyboard:generating",
             message: {
-              videoId,
-              video_id: videoId,
+              ...videoContext,
               message: "Generating storyboard thumbnails...",
               text: "Generating storyboard thumbnails...",
             },
@@ -149,8 +152,7 @@ export class StoryboardsService {
           eventsService.broadcastToAuthenticated({
             type: "storyboard:ready",
             message: {
-              videoId,
-              video_id: videoId,
+              ...videoContext,
               message: "Storyboard thumbnails ready",
               text: "Storyboard thumbnails ready",
             },
@@ -159,11 +161,19 @@ export class StoryboardsService {
       } catch (error) {
         logger.error({ videoId, error }, "Failed to generate storyboard");
 
+        let videoContext = { videoId, video_id: videoId };
+        try {
+          videoContext = createVideoEventContext(
+            await videosService.findById(videoId),
+          );
+        } catch {
+          // Keep the failure event actionable even if video enrichment fails.
+        }
+
         eventsService.broadcastToAuthenticated({
           type: "storyboard:error",
           message: {
-            videoId,
-            video_id: videoId,
+            ...videoContext,
             message: "Failed to generate storyboard",
             text: "Failed to generate storyboard",
             error: error instanceof Error ? error.message : String(error),

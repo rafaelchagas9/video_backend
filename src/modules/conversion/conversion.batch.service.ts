@@ -33,6 +33,7 @@ export class ConversionBatchService {
         jobId: 0,
         videoId: 0,
         preset: "batch",
+        batchId,
         stats: {
           total: stats.total,
           completed: stats.completed,

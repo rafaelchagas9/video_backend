@@ -266,6 +266,7 @@ export class ConversionService {
    * List jobs for a video
    */
   async listByVideoId(videoId: number): Promise<ConversionJob[]> {
+    if (env.DEMO_MODE) return [];
     return conversionJobsService.listByVideoId(videoId);
   }
 
@@ -313,6 +314,13 @@ export class ConversionService {
    * Get queue status
    */
   async getQueueStatus() {
+    if (env.DEMO_MODE) {
+      return {
+        queueLength: 0,
+        activeJobs: 0,
+        isProcessing: false,
+      };
+    }
     return conversionQueue.getStatus();
   }
 
@@ -331,6 +339,7 @@ export class ConversionService {
       created_at: string;
     }[]
   > {
+    if (env.DEMO_MODE) return [];
     return conversionJobsService.getActiveConversions();
   }
 
@@ -340,10 +349,26 @@ export class ConversionService {
     videoId?: number;
     preset?: string;
   }) {
+    if (env.DEMO_MODE) return [];
     return conversionHistoryService.list(options);
   }
 
   async getHistoryOverview(options?: { videoId?: number; preset?: string }) {
+    if (env.DEMO_MODE) {
+      return {
+        total_conversions: 0,
+        total_original_size_bytes: 0,
+        total_output_size_bytes: 0,
+        total_size_delta_bytes: 0,
+        total_saved_bytes: 0,
+        total_increased_bytes: 0,
+        saved_count: 0,
+        increased_count: 0,
+        unchanged_count: 0,
+        avg_size_change_percent: 0,
+        avg_conversion_duration_ms: 0,
+      };
+    }
     return conversionHistoryService.getOverview(options);
   }
 
@@ -381,6 +406,11 @@ export class ConversionService {
           message: {
             jobId: job.id,
             videoId: job.video_id,
+            video_id: job.video_id,
+            videoTitle: job.video_title,
+            video_title: job.video_title,
+            fileName: job.file_name ?? job.video_title,
+            file_name: job.file_name ?? job.video_title,
             preset: job.preset,
             error: "Cancelled - queue cleared",
           },
@@ -398,6 +428,11 @@ export class ConversionService {
           message: {
             jobId: job.id,
             videoId: job.video_id,
+            video_id: job.video_id,
+            videoTitle: job.video_title,
+            video_title: job.video_title,
+            fileName: job.file_name ?? job.video_title,
+            file_name: job.file_name ?? job.video_title,
             preset: job.preset,
             error: "Manually cleared by user",
           },
@@ -426,6 +461,8 @@ export class ConversionService {
    * Returns list of jobs with video info
    */
   async getQueue(_userId: number) {
+    if (env.DEMO_MODE) return [];
+
     // Get all pending/processing jobs with basic info
     const jobs = await conversionJobsService.findByVideoIds([]);
 

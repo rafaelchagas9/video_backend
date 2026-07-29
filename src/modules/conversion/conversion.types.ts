@@ -57,7 +57,13 @@ export interface ConversionEvent {
   message: {
     jobId: number;
     videoId: number;
+    video_id?: number;
+    videoTitle?: string;
+    video_title?: string;
+    fileName?: string;
+    file_name?: string;
     preset: string;
+    batchId?: string;
     progress?: number;
     outputPath?: string;
     error?: string;

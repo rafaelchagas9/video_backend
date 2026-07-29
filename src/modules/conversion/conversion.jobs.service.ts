@@ -4,7 +4,7 @@
  */
 import { sql, eq, and, inArray } from "drizzle-orm";
 import { db } from "@/config/drizzle";
-import { conversionJobsTable } from "@/database/schema";
+import { conversionJobsTable, videosTable } from "@/database/schema";
 import { NotFoundError, BadRequestError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import type { ConversionJob } from "./conversion.types";
@@ -346,20 +346,31 @@ export class ConversionJobsService {
    * Get jobs in pending or processing state for notifications
    */
   async getPendingJobsForNotification(): Promise<
-    { id: number; video_id: number; preset: string }[]
+    {
+      id: number;
+      video_id: number;
+      video_title: string;
+      file_name: string | null;
+      preset: string;
+    }[]
   > {
     const result = await db
       .select({
         id: conversionJobsTable.id,
         video_id: conversionJobsTable.videoId,
+        video_title: sql<string>`COALESCE(${videosTable.title}, ${videosTable.fileName})`,
+        file_name: videosTable.fileName,
         preset: conversionJobsTable.preset,
       })
       .from(conversionJobsTable)
+      .leftJoin(videosTable, eq(videosTable.id, conversionJobsTable.videoId))
       .where(eq(conversionJobsTable.status, "pending"));
 
     return result.map((row) => ({
       id: row.id,
       video_id: row.video_id,
+      video_title: row.video_title,
+      file_name: row.file_name,
       preset: row.preset,
     }));
   }
@@ -368,20 +379,31 @@ export class ConversionJobsService {
    * Get jobs in processing state for notifications
    */
   async getProcessingJobsForNotification(): Promise<
-    { id: number; video_id: number; preset: string }[]
+    {
+      id: number;
+      video_id: number;
+      video_title: string;
+      file_name: string | null;
+      preset: string;
+    }[]
   > {
     const result = await db
       .select({
         id: conversionJobsTable.id,
         video_id: conversionJobsTable.videoId,
+        video_title: sql<string>`COALESCE(${videosTable.title}, ${videosTable.fileName})`,
+        file_name: videosTable.fileName,
         preset: conversionJobsTable.preset,
       })
       .from(conversionJobsTable)
+      .leftJoin(videosTable, eq(videosTable.id, conversionJobsTable.videoId))
       .where(eq(conversionJobsTable.status, "processing"));
 
     return result.map((row) => ({
       id: row.id,
       video_id: row.video_id,
+      video_title: row.video_title,
+      file_name: row.file_name,
       preset: row.preset,
     }));
   }

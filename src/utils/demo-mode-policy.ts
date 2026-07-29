@@ -23,7 +23,13 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard)$`,
+      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard|conversions)$`,
+    ),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(
+      `^${API_PREFIX}/conversions/(?:active|history(?:/overview)?|queue(?:/status)?|presets)$`,
     ),
   },
   {

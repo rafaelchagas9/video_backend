@@ -11,6 +11,7 @@ import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionBatchService } from "./conversion.batch.service";
 import { conversionHistoryService } from "./conversion.history.service";
 import { eventsService } from "@/modules/events/events.service";
+import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
 import type { QueueJobPayload, ConversionEvent } from "./conversion.types";
 
@@ -29,21 +30,13 @@ export class ConversionProcessorService {
       batchId,
     } = payload;
 
+    let videoContext: ReturnType<typeof createVideoEventContext> | null = null;
+
     try {
       const startedAt = new Date();
 
       // Update job status to processing
       await conversionJobsService.markAsProcessing(jobId);
-
-      // Notify via SSE
-      this.emitEvent({
-        type: "conversion:started",
-        message: {
-          jobId,
-          videoId,
-          preset: presetId,
-        },
-      });
 
       const preset = getPreset(presetId);
       if (!preset) {
@@ -52,6 +45,20 @@ export class ConversionProcessorService {
 
       const job = await conversionJobsService.findById(jobId);
       const video = await videosService.findById(videoId);
+      const resolvedVideoContext = createVideoEventContext(video);
+      videoContext = resolvedVideoContext;
+
+      // Notify after resolving the video so clients receive a recognizable title.
+      this.emitEvent({
+        type: "conversion:started",
+        message: {
+          jobId,
+          ...resolvedVideoContext,
+          preset: presetId,
+          ...(batchId ? { batchId } : {}),
+        },
+      });
+
       let originalSizeBytes = video.file_size_bytes;
 
       try {
@@ -80,8 +87,9 @@ export class ConversionProcessorService {
             type: "conversion:progress",
             message: {
               jobId,
-              videoId,
+              ...resolvedVideoContext,
               preset: presetId,
+              ...(batchId ? { batchId } : {}),
               progress,
             },
           });
@@ -124,8 +132,9 @@ export class ConversionProcessorService {
         type: "conversion:completed",
         message: {
           jobId,
-          videoId,
+          ...resolvedVideoContext,
           preset: presetId,
+          ...(batchId ? { batchId } : {}),
           progress: 100,
           outputPath,
         },
@@ -183,7 +192,9 @@ export class ConversionProcessorService {
         message: {
           jobId,
           videoId,
+          ...(videoContext ?? {}),
           preset: presetId,
+          ...(batchId ? { batchId } : {}),
           error: errorMessage,
         },
       });

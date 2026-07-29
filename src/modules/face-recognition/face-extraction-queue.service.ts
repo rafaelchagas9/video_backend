@@ -13,6 +13,8 @@ import { logger } from "@/utils/logger";
 import { getFrameExtractionService } from "@/modules/frame-extraction";
 import { env } from "@/config/env";
 import { eventsService } from "@/modules/events/events.service";
+import { createVideoEventContext } from "@/modules/events/events.types";
+import { videosService } from "@/modules/videos/videos.service";
 import { getFaceRecognitionClient } from "./face-recognition.client";
 import { recordPerfStage } from "@/utils/performance-profiler";
 import type {
@@ -226,6 +228,9 @@ export class FaceExtractionQueueService {
     tempDir?: string,
   ): Promise<void> {
     const totalStart = Date.now();
+    const video = await videosService.findById(videoId);
+    const videoContext = createVideoEventContext(video);
+
     // Update job status to processing
     await db
       .update(faceExtractionJobsTable)
@@ -241,8 +246,7 @@ export class FaceExtractionQueueService {
       type: "face:extraction_started",
       videoId,
       message: {
-        videoId,
-        video_id: videoId,
+        ...videoContext,
         message: "Face extraction started",
       },
     });
@@ -309,10 +313,10 @@ export class FaceExtractionQueueService {
       await this.broadcastEvent({
         type: "face:extraction_complete",
         videoId,
-        message: {
-          videoId,
-          video_id: videoId,
+      message: {
+          ...videoContext,
           message: "Face extraction complete",
+          facesDetected: rawDetections.length,
         },
       });
 
@@ -363,8 +367,7 @@ export class FaceExtractionQueueService {
         type: "face:extraction_error",
         videoId,
         message: {
-          videoId,
-          video_id: videoId,
+          ...videoContext,
           message: errorMessage,
         },
       });
