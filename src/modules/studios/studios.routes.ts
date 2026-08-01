@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { env } from "@/config/env";
+import { resolveDemoAssetPath } from "@/database/demo";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import {
   listVideosQuerySchema,
@@ -72,7 +74,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         ...result,
       });
-    },
+    }
   );
 
   // Get studio by ID
@@ -98,7 +100,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: studio,
       });
-    },
+    }
   );
 
   // Create new studio
@@ -125,7 +127,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: studio,
         message: "Studio created successfully",
       });
-    },
+    }
   );
 
   // Bulk import studios
@@ -159,7 +161,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
           ? `Preview: ${result.summary.will_create} to create, ${result.summary.will_update} to update, ${result.summary.errors} errors`
           : `Imported: ${result.summary.will_create} created, ${result.summary.will_update} updated`,
       });
-    },
+    }
   );
 
   // Update studio
@@ -183,7 +185,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const studio = await studiosService.update(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.send({
@@ -191,7 +193,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: studio,
         message: "Studio updated successfully",
       });
-    },
+    }
   );
 
   // Delete studio
@@ -217,7 +219,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Studio deleted successfully",
       });
-    },
+    }
   );
 
   // Upload profile picture
@@ -250,7 +252,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       const studio = await studiosSocialService.uploadProfilePicture(
         id,
         buffer,
-        data.filename,
+        data.filename
       );
 
       return reply.send({
@@ -258,7 +260,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: studio,
         message: "Profile picture uploaded successfully",
       });
-    },
+    }
   );
 
   // Get profile picture
@@ -296,9 +298,25 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       reply.header("Content-Type", contentType);
-      const buffer = readFileSync(filePath);
+      if (env.DEMO_MODE && !studio.profile_picture_path) {
+        return reply
+          .type("application/json")
+          .status(404)
+          .send({
+            success: false,
+            error: {
+              message: "Demo studio picture not found",
+              statusCode: 404,
+            },
+          });
+      }
+      const safePath =
+        env.DEMO_MODE && studio.profile_picture_path
+          ? resolveDemoAssetPath(filePath, { mustExist: true })
+          : filePath;
+      const buffer = readFileSync(safePath);
       return reply.send(buffer);
-    },
+    }
   );
 
   // Delete profile picture
@@ -319,7 +337,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const studio = await studiosSocialService.deleteProfilePicture(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
@@ -327,7 +345,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: studio,
         message: "Profile picture deleted successfully",
       });
-    },
+    }
   );
 
   // Add social link
@@ -351,7 +369,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const link = await studiosSocialService.addSocialLink(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.status(201).send({
@@ -359,7 +377,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: link,
         message: "Social link added successfully",
       });
-    },
+    }
   );
 
   // Bulk upsert social links
@@ -384,7 +402,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const result = await studiosSocialService.bulkUpsertSocialLinks(
         request.params.id,
-        request.body.items,
+        request.body.items
       );
 
       return reply.send({
@@ -392,7 +410,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: result,
         message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
       });
-    },
+    }
   );
 
   // Set picture from URL
@@ -417,7 +435,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const studio = await studiosSocialService.setPictureFromUrl(
         request.params.id,
-        request.body.url,
+        request.body.url
       );
 
       return reply.send({
@@ -425,7 +443,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: studio,
         message: "Profile picture set from URL successfully",
       });
-    },
+    }
   );
 
   // Get social links
@@ -446,14 +464,14 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const links = await studiosSocialService.getSocialLinks(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: links,
       });
-    },
+    }
   );
 
   // Update social link
@@ -479,6 +497,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       const link = await studiosSocialService.updateSocialLink(
         linkId,
         request.body,
+        Number((request.params as { id: number }).id)
       );
 
       return reply.send({
@@ -486,7 +505,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: link,
         message: "Social link updated successfully",
       });
-    },
+    }
   );
 
   // Delete social link
@@ -507,13 +526,16 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { linkId } = request.params as { linkId: number };
-      await studiosSocialService.deleteSocialLink(linkId);
+      await studiosSocialService.deleteSocialLink(
+        linkId,
+        Number((request.params as { id: number }).id)
+      );
 
       return reply.send({
         success: true,
         message: "Social link deleted successfully",
       });
-    },
+    }
   );
 
   // Bulk update creators for studio
@@ -541,7 +563,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Creators updated successfully",
       });
-    },
+    }
   );
 
   // Link creator to studio
@@ -572,7 +594,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Creator linked to studio successfully",
       });
-    },
+    }
   );
 
   // Get creators for studio
@@ -593,14 +615,14 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const creators = await studiosRelationshipsService.getCreators(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: creators,
       });
-    },
+    }
   );
 
   // Unlink creator from studio
@@ -631,7 +653,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Creator unlinked from studio successfully",
       });
-    },
+    }
   );
 
   // Link video to studio
@@ -659,7 +681,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Video linked to studio successfully",
       });
-    },
+    }
   );
 
   // Get videos for studio
@@ -691,7 +713,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         ...result,
       });
-    },
+    }
   );
 
   // Unlink video from studio
@@ -718,7 +740,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Video unlinked from studio successfully",
       });
-    },
+    }
   );
 
   // Autocomplete studios by name
@@ -746,7 +768,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: studios,
       });
-    },
+    }
   );
 
   // Get recent studios
@@ -774,7 +796,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: studios,
       });
-    },
+    }
   );
 
   // Quick create studio (minimal fields)
@@ -805,6 +827,6 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         data: studio,
         message: "Studio created successfully",
       });
-    },
+    }
   );
 }

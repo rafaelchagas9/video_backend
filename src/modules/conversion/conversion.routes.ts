@@ -7,6 +7,7 @@ import { existsSync, createReadStream, statSync } from "fs";
 import { randomUUID } from "crypto";
 import { NotFoundError } from "@/utils/errors";
 import { markRouteDeprecated } from "@/utils/api-deprecation";
+import { env } from "@/config/env";
 import {
   createConversionJobSchema,
   conversionJobResponseSchema,
@@ -34,7 +35,7 @@ import type {
 
 async function createVideoConversionJob(
   request: FastifyRequest,
-  reply: FastifyReply,
+  reply: FastifyReply
 ) {
   const { id } = request.params as { id: number };
   const { preset, deleteOriginal } = request.body as {
@@ -53,7 +54,7 @@ async function createVideoConversionJob(
 
 async function createBulkConversionJobs(
   request: FastifyRequest,
-  reply: FastifyReply,
+  reply: FastifyReply
 ) {
   const { videoIds, preset, deleteOriginal } = request.body as {
     videoIds: number[];
@@ -103,7 +104,7 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    createVideoConversionJob,
+    createVideoConversionJob
   );
 
   app.post(
@@ -113,8 +114,7 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
         tags: ["conversion"],
         deprecated: true,
         summary: "Start video conversion (deprecated)",
-        description:
-          "Deprecated alias for POST /api/videos/:id/conversions.",
+        description: "Deprecated alias for POST /api/videos/:id/conversions.",
         params: videoIdParamSchema,
         body: createConversionJobSchema,
         response: {
@@ -127,7 +127,7 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
         replacement: "/api/videos/:id/conversions",
       });
       return createVideoConversionJob(request, reply);
-    },
+    }
   );
 
   app.post(
@@ -148,7 +148,7 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       markRouteDeprecated(reply, { replacement: "/api/conversions" });
       return createBulkConversionJobs(request, reply);
-    },
+    }
   );
 
   app.get(
@@ -173,7 +173,7 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
       const userId = request.user!.id;
       const queue = await conversionService.getQueue(userId);
       return reply.send({ success: true, data: queue });
-    },
+    }
   );
 
   /**
@@ -197,7 +197,7 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: number };
       const jobs = await conversionService.listByVideoId(id);
       return reply.send({ success: true, data: jobs });
-    },
+    }
   );
 }
 
@@ -221,7 +221,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    createBulkConversionJobs,
+    createBulkConversionJobs
   );
 
   app.get(
@@ -243,7 +243,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       const userId = request.user!.id;
       const queue = await conversionService.getQueue(userId);
       return reply.send({ success: true, data: queue });
-    },
+    }
   );
 
   /**
@@ -277,7 +277,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
           offset: history.offset,
         },
       });
-    },
+    }
   );
 
   /**
@@ -300,11 +300,11 @@ export async function conversionRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const overview = await conversionService.getHistoryOverview(
-        request.query as ConversionHistoryFilters,
+        request.query as ConversionHistoryFilters
       );
 
       return reply.send({ success: true, data: overview });
-    },
+    }
   );
 
   /**
@@ -328,11 +328,11 @@ export async function conversionRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const insights = await conversionService.getHistoryInsights(
-        request.query as ConversionHistoryFilters,
+        request.query as ConversionHistoryFilters
       );
 
       return reply.send({ success: true, data: insights });
-    },
+    }
   );
 
   /**
@@ -355,7 +355,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
     async (_request, reply) => {
       const facets = await conversionService.getHistoryFacets();
       return reply.send({ success: true, data: facets });
-    },
+    }
   );
 
   app.get(
@@ -375,7 +375,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: number };
       const job = await conversionService.findById(id);
       return reply.send({ success: true, data: job });
-    },
+    }
   );
 
   /**
@@ -401,7 +401,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: number };
       const job = await conversionService.cancel(id);
       return reply.send({ success: true, data: job });
-    },
+    }
   );
 
   app.post(
@@ -427,7 +427,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: number };
       const job = await conversionService.cancel(id);
       return reply.send({ success: true, data: job });
-    },
+    }
   );
 
   /**
@@ -455,7 +455,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: number };
       await conversionService.delete(id);
       return reply.send({ success: true, message: "Job deleted" });
-    },
+    }
   );
 
   /**
@@ -474,11 +474,24 @@ export async function conversionRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const { id } = request.params as { id: number };
+
+      if (env.DEMO_MODE) {
+        const download = conversionService.getDemoDownload(id);
+        return reply
+          .header("Content-Type", "text/plain; charset=utf-8")
+          .header(
+            "Content-Disposition",
+            `attachment; filename="${download.filename}"`
+          )
+          .header("Content-Length", download.content.length)
+          .send(download.content);
+      }
+
       const job = await conversionService.findById(id);
 
       if (job.status !== "completed" || !job.output_path) {
         throw new NotFoundError(
-          "Conversion not completed or output file not available",
+          "Conversion not completed or output file not available"
         );
       }
 
@@ -494,7 +507,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
         .header("Content-Disposition", `attachment; filename="${fileName}"`)
         .header("Content-Length", stats.size)
         .send(createReadStream(job.output_path));
-    },
+    }
   );
 
   /**
@@ -517,7 +530,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
     async (_request, reply) => {
       const conversions = await conversionService.getActiveConversions();
       return reply.send({ success: true, data: conversions });
-    },
+    }
   );
 
   /**
@@ -546,7 +559,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
           message: "Queue cleared successfully",
         },
       });
-    },
+    }
   );
 }
 
@@ -569,7 +582,7 @@ export async function conversionStatusRoutes(fastify: FastifyInstance) {
     async (_request, reply) => {
       const status = await conversionService.getQueueStatus();
       return reply.send({ success: true, data: status });
-    },
+    }
   );
 
   app.get(
@@ -579,8 +592,7 @@ export async function conversionStatusRoutes(fastify: FastifyInstance) {
         tags: ["conversion"],
         deprecated: true,
         summary: "Get queue status (deprecated)",
-        description:
-          "Deprecated alias for GET /api/conversions/queue/status.",
+        description: "Deprecated alias for GET /api/conversions/queue/status.",
         response: {
           200: conversionQueueStatusResponseSchema,
         },
@@ -592,12 +604,12 @@ export async function conversionStatusRoutes(fastify: FastifyInstance) {
       });
       const status = await conversionService.getQueueStatus();
       return reply.send({ success: true, data: status });
-    },
+    }
   );
 }
 
 export async function deprecatedConversionLegacyStatusRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook("preHandler", authenticateUser);
@@ -622,7 +634,7 @@ export async function deprecatedConversionLegacyStatusRoutes(
       });
       const status = await conversionService.getQueueStatus();
       return reply.send({ success: true, data: status });
-    },
+    }
   );
 }
 
@@ -645,12 +657,12 @@ export async function conversionPresetsRoutes(fastify: FastifyInstance) {
     async (_request, reply) => {
       const presets = conversionService.getPresets();
       return reply.send({ success: true, data: presets });
-    },
+    }
   );
 }
 
 export async function deprecatedConversionPresetsRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook("preHandler", authenticateUser);
@@ -662,8 +674,7 @@ export async function deprecatedConversionPresetsRoutes(
         tags: ["conversion"],
         deprecated: true,
         summary: "List available presets (deprecated alias)",
-        description:
-          "Deprecated alias for GET /api/conversions/presets.",
+        description: "Deprecated alias for GET /api/conversions/presets.",
         response: {
           200: listPresetsResponseSchema,
         },
@@ -673,6 +684,6 @@ export async function deprecatedConversionPresetsRoutes(
       markRouteDeprecated(reply, { replacement: "/api/conversions/presets" });
       const presets = conversionService.getPresets();
       return reply.send({ success: true, data: presets });
-    },
+    }
   );
 }

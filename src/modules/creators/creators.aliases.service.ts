@@ -2,7 +2,11 @@ import { eq, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { creatorAliasesTable, creatorsTable } from "@/database/schema";
-import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+} from "@/utils/errors";
 import type {
   Alias,
   CreateAliasInput,
@@ -10,9 +14,11 @@ import type {
   BulkAliasItem,
   BulkOperationResult,
 } from "./creators.types";
+import { creatorsDemoService } from "./creators.demo.service";
 
 export class CreatorsAliasesService {
   async addAlias(creatorId: number, input: CreateAliasInput): Promise<Alias> {
+    if (env.DEMO_MODE) return creatorsDemoService.addAlias(creatorId, input);
     await this.verifyCreatorExists(creatorId);
 
     try {
@@ -38,7 +44,16 @@ export class CreatorsAliasesService {
     }
   }
 
-  async updateAlias(id: number, input: UpdateAliasInput): Promise<Alias> {
+  async updateAlias(
+    id: number,
+    input: UpdateAliasInput,
+    creatorId?: number
+  ): Promise<Alias> {
+    if (env.DEMO_MODE) {
+      if (creatorId === undefined)
+        throw new NotFoundError(`Alias not found with id: ${id}`);
+      return creatorsDemoService.updateAlias(creatorId, id, input);
+    }
     await this.findAliasById(id); // Ensure exists
 
     const updates: any = {};
@@ -70,15 +85,20 @@ export class CreatorsAliasesService {
     }
   }
 
-  async deleteAlias(id: number): Promise<void> {
+  async deleteAlias(id: number, creatorId?: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      if (creatorId === undefined)
+        throw new NotFoundError(`Alias not found with id: ${id}`);
+      creatorsDemoService.deleteAlias(creatorId, id);
+      return;
+    }
     await this.findAliasById(id); // Ensure exists
     await db.delete(creatorAliasesTable).where(eq(creatorAliasesTable.id, id));
   }
 
   async getAliases(creatorId: number): Promise<Alias[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCreatorAliases(creatorId) as Alias[];
+      return creatorsDemoService.getAliases(creatorId);
     }
 
     await this.verifyCreatorExists(creatorId);
@@ -94,8 +114,40 @@ export class CreatorsAliasesService {
 
   async bulkUpsertAliases(
     creatorId: number,
-    items: BulkAliasItem[],
+    items: BulkAliasItem[]
   ): Promise<BulkOperationResult<Alias>> {
+    if (env.DEMO_MODE) {
+      const created: Alias[] = [];
+      const updated: Alias[] = [];
+      const errors: Array<{ index: number; error: string }> = [];
+      const existing = creatorsDemoService.getAliases(creatorId);
+      for (let index = 0; index < items.length; index++) {
+        try {
+          const match = existing.find(
+            (alias) => alias.name === items[index].name
+          );
+          if (match)
+            updated.push(
+              creatorsDemoService.updateAlias(creatorId, match.id, {
+                note: items[index].note ?? null,
+              })
+            );
+          else
+            created.push(
+              creatorsDemoService.addAlias(creatorId, {
+                ...items[index],
+                note: items[index].note ?? undefined,
+              })
+            );
+        } catch (error) {
+          errors.push({
+            index,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+      return { created, updated, errors };
+    }
     await this.verifyCreatorExists(creatorId);
 
     const created: Alias[] = [];
@@ -112,8 +164,8 @@ export class CreatorsAliasesService {
           .where(
             and(
               eq(creatorAliasesTable.creatorId, creatorId),
-              eq(creatorAliasesTable.name, item.name),
-            ),
+              eq(creatorAliasesTable.name, item.name)
+            )
           )
           .limit(1);
 

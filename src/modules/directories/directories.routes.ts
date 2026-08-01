@@ -3,6 +3,8 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { directoriesService } from "./directories.service";
 import { watcherService } from "./watcher.service";
+import { env } from "@/config/env";
+import { directoriesDemoService } from "./directories.demo.service";
 import {
   idParamSchema,
   createDirectorySchema,
@@ -15,7 +17,7 @@ import {
 } from "./directories.schemas";
 
 export async function directoriesRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
@@ -45,14 +47,17 @@ export async function directoriesRoutes(
 
       fastify.log.info(
         { directoryId: directory.id, path: directory.path },
-        "Directory registered, triggering initial scan",
+        "Directory registered, triggering initial scan"
       );
 
       // Trigger initial scan
-      watcherService.scanDirectory(directory.id).catch((error) => {
+      const scan = env.DEMO_MODE
+        ? Promise.resolve(directoriesDemoService.virtualScan(directory.id))
+        : watcherService.scanDirectory(directory.id);
+      scan.catch((error) => {
         fastify.log.error(
           { error, directoryId: directory.id },
-          "Failed to trigger initial directory scan",
+          "Failed to trigger initial directory scan"
         );
       });
 
@@ -61,7 +66,7 @@ export async function directoriesRoutes(
         data: directory,
         message: "Directory registered successfully. Scanning started.",
       });
-    },
+    }
   );
 
   // List all directories
@@ -85,7 +90,7 @@ export async function directoriesRoutes(
         success: true,
         data: directories,
       });
-    },
+    }
   );
 
   // Get directory by ID
@@ -111,7 +116,7 @@ export async function directoriesRoutes(
         success: true,
         data: directory,
       });
-    },
+    }
   );
 
   // Update directory
@@ -135,7 +140,7 @@ export async function directoriesRoutes(
     async (request, reply) => {
       const directory = await directoriesService.update(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.send({
@@ -143,7 +148,7 @@ export async function directoriesRoutes(
         data: directory,
         message: "Directory updated successfully",
       });
-    },
+    }
   );
 
   // Delete directory
@@ -170,7 +175,7 @@ export async function directoriesRoutes(
         success: true,
         message: "Directory removed successfully",
       });
-    },
+    }
   );
 
   // Trigger manual scan
@@ -194,15 +199,22 @@ export async function directoriesRoutes(
       const directory = await directoriesService.findById(request.params.id); // Ensure exists
 
       fastify.log.info(
-        { directoryId: request.params.id, path: directory.path, triggeredBy: "manual" },
-        "Manual scan triggered by user",
+        {
+          directoryId: request.params.id,
+          path: directory.path,
+          triggeredBy: "manual",
+        },
+        "Manual scan triggered by user"
       );
 
       // Trigger scan asynchronously
-      watcherService.scanDirectory(request.params.id).catch((error) => {
+      const scan = env.DEMO_MODE
+        ? Promise.resolve(directoriesDemoService.virtualScan(request.params.id))
+        : watcherService.scanDirectory(request.params.id);
+      scan.catch((error) => {
         fastify.log.error(
           { error, directoryId: request.params.id },
-          "Directory scan failed",
+          "Directory scan failed"
         );
       });
 
@@ -210,7 +222,7 @@ export async function directoriesRoutes(
         success: true,
         message: "Directory scan started",
       });
-    },
+    }
   );
 
   // Get directory stats
@@ -236,6 +248,6 @@ export async function directoriesRoutes(
         success: true,
         data: stats,
       });
-    },
+    }
   );
 }

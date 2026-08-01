@@ -7,6 +7,7 @@ import { videosService } from "./videos.service";
 import { AppError } from "@/utils/errors";
 import { fileExists } from "@/utils/file-utils";
 import { logger } from "@/utils/logger";
+import { resolveDemoAssetPath } from "@/database/demo";
 
 export interface StreamOptions {
   videoId: number;
@@ -36,7 +37,7 @@ interface ParsedRange {
 function parseRangeHeader(
   rangeHeader: string,
   fileSize: number,
-  maxChunkBytes: number,
+  maxChunkBytes: number
 ): ParsedRange | null {
   const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
 
@@ -96,16 +97,19 @@ export class StreamingService {
 
     // Get video details (lightweight query)
     const video = await videosService.findFilePathById(videoId);
+    const filePath = env.DEMO_MODE
+      ? resolveDemoAssetPath(video.file_path, { mustExist: true })
+      : video.file_path;
 
     // Check file availability
-    if (!video.is_available || !fileExists(video.file_path)) {
+    if (!video.is_available || !fileExists(filePath)) {
       throw new AppError(410, "Video file is not available");
     }
 
     // Get file stats
-    const stats = statSync(video.file_path);
+    const stats = statSync(filePath);
     const fileSize = stats.size;
-    const mimeType = getMimeType(video.file_path);
+    const mimeType = getMimeType(filePath);
 
     logger.debug(
       {
@@ -113,7 +117,7 @@ export class StreamingService {
         hasRange: Boolean(rangeHeader),
         fileSize,
       },
-      "Preparing video stream",
+      "Preparing video stream"
     );
 
     // Handle range request
@@ -138,10 +142,10 @@ export class StreamingService {
           contentLength,
           maxChunkBytes,
         },
-        "Streaming byte range",
+        "Streaming byte range"
       );
 
-      const stream = createReadStream(video.file_path, { start, end });
+      const stream = createReadStream(filePath, { start, end });
 
       return {
         stream,
@@ -159,10 +163,10 @@ export class StreamingService {
     if (fileSize > 100 * 1024 * 1024) {
       logger.warn(
         { videoId, fileSize },
-        "Streaming without Range header on large file",
+        "Streaming without Range header on large file"
       );
     }
-    const stream = createReadStream(video.file_path);
+    const stream = createReadStream(filePath);
 
     return {
       stream,

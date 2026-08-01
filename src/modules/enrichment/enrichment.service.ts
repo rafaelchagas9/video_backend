@@ -47,6 +47,7 @@ import { studiosSocialService } from "@/modules/studios/studios.social.service";
 import { tagsService } from "@/modules/tags/tags.service";
 import { platformsService } from "@/modules/platforms/platforms.service";
 import { getEnrichmentClient } from "./enrichment.client";
+import { enrichmentDemoService } from "./enrichment.demo.service";
 import type {
   Candidate,
   EnrichRequest,
@@ -96,7 +97,9 @@ const CREATOR_FIELD_SETTERS: Record<
   band_size: (v) => ({ bandSize: toInt(v, "band_size") }),
   waist_size: (v) => ({ waistSize: toInt(v, "waist_size") }),
   hip_size: (v) => ({ hipSize: toInt(v, "hip_size") }),
-  career_start_year: (v) => ({ careerStartYear: toInt(v, "career_start_year") }),
+  career_start_year: (v) => ({
+    careerStartYear: toInt(v, "career_start_year"),
+  }),
   career_end_year: (v) => ({ careerEndYear: toInt(v, "career_end_year") }),
 };
 
@@ -126,18 +129,13 @@ export class EnrichmentService {
   async runEnrichment(
     entityType: EntityType,
     entityId: number,
-    options: RunEnrichmentOptions = {},
+    options: RunEnrichmentOptions = {}
   ): Promise<RunDTO> {
     // In demo mode the seeded proposals are the whole universe: a scan logs a
     // run and reports what is still awaiting a decision, without reaching the
     // external enrichment service or the database.
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.runEnrichmentScan(
-        entityType,
-        entityId,
-        options.sources ?? [],
-      ) as unknown as RunDTO;
+      return enrichmentDemoService.runEnrichment(entityType, entityId, options);
     }
 
     const request = await this.gatherInputs(entityType, entityId, options);
@@ -163,7 +161,7 @@ export class EnrichmentService {
     let inserted = 0;
     if (result.candidates.length > 0) {
       const rows = result.candidates.map((c) =>
-        this.toSuggestionRow(entityType, entityId, c),
+        this.toSuggestionRow(entityType, entityId, c)
       );
       const insertedRows = await db
         .insert(enrichmentSuggestionsTable)
@@ -194,7 +192,7 @@ export class EnrichmentService {
         inserted,
         sources: result.sources_used,
       },
-      "Enrichment run complete",
+      "Enrichment run complete"
     );
 
     return this.toRunDTO(updated);
@@ -204,12 +202,14 @@ export class EnrichmentService {
   private async gatherInputs(
     entityType: EntityType,
     entityId: number,
-    options: RunEnrichmentOptions = {},
+    options: RunEnrichmentOptions = {}
   ): Promise<EnrichRequest> {
     const applyRunOptions = (request: EnrichRequest): EnrichRequest => ({
       ...request,
       name: options.search_name ?? request.name,
-      ...(options.search_name !== undefined ? { title: options.search_name } : {}),
+      ...(options.search_name !== undefined
+        ? { title: options.search_name }
+        : {}),
       ...(options.sources !== undefined ? { sources: options.sources } : {}),
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
     });
@@ -304,24 +304,21 @@ export class EnrichmentService {
   }
 
   async listSuggestions(
-    filters: ListSuggestionsFilters,
+    filters: ListSuggestionsFilters
   ): Promise<SuggestionDTO[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getEnrichmentSuggestions(
-        filters,
-      ) as unknown as SuggestionDTO[];
+      return enrichmentDemoService.listSuggestions(filters);
     }
 
     const conditions = [];
     if (filters.entity_type) {
       conditions.push(
-        eq(enrichmentSuggestionsTable.entityType, filters.entity_type),
+        eq(enrichmentSuggestionsTable.entityType, filters.entity_type)
       );
     }
     if (filters.entity_id !== undefined) {
       conditions.push(
-        eq(enrichmentSuggestionsTable.entityId, filters.entity_id),
+        eq(enrichmentSuggestionsTable.entityId, filters.entity_id)
       );
     }
     if (filters.status) {
@@ -338,22 +335,15 @@ export class EnrichmentService {
       .orderBy(
         desc(sql`coalesce(${enrichmentSuggestionsTable.faceMatchScore}, 0)`),
         desc(sql`coalesce(${enrichmentSuggestionsTable.confidence}, 0)`),
-        enrichmentSuggestionsTable.id,
+        enrichmentSuggestionsTable.id
       );
 
     return rows.map((r) => this.toSuggestionDTO(r));
   }
 
-  async listRuns(
-    entityType: EntityType,
-    entityId: number,
-  ): Promise<RunDTO[]> {
+  async listRuns(entityType: EntityType, entityId: number): Promise<RunDTO[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getEnrichmentRuns(
-        entityType,
-        entityId,
-      ) as unknown as RunDTO[];
+      return enrichmentDemoService.listRuns(entityType, entityId);
     }
 
     const rows = await db
@@ -362,8 +352,8 @@ export class EnrichmentService {
       .where(
         and(
           eq(enrichmentRunsTable.entityType, entityType),
-          eq(enrichmentRunsTable.entityId, entityId),
-        ),
+          eq(enrichmentRunsTable.entityId, entityId)
+        )
       )
       .orderBy(desc(enrichmentRunsTable.startedAt));
     return rows.map((r) => this.toRunDTO(r));
@@ -375,17 +365,13 @@ export class EnrichmentService {
    */
   async acceptSuggestion(id: number): Promise<SuggestionDTO> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.decideEnrichmentSuggestion(
-        id,
-        "accepted",
-      ) as unknown as SuggestionDTO;
+      return enrichmentDemoService.acceptSuggestion(id);
     }
 
     const suggestion = await this.getSuggestionOrThrow(id);
     if (suggestion.status !== "pending") {
       throw new BadRequestError(
-        `Suggestion ${id} is not pending (status: ${suggestion.status})`,
+        `Suggestion ${id} is not pending (status: ${suggestion.status})`
       );
     }
 
@@ -404,7 +390,7 @@ export class EnrichmentService {
         break;
       default:
         throw new BadRequestError(
-          `Unsupported entity type: ${suggestion.entityType}`,
+          `Unsupported entity type: ${suggestion.entityType}`
         );
     }
 
@@ -421,7 +407,7 @@ export class EnrichmentService {
         entityId: suggestion.entityId,
         type: suggestion.type,
       },
-      "Accepted enrichment suggestion",
+      "Accepted enrichment suggestion"
     );
 
     return this.toSuggestionDTO(updated);
@@ -429,11 +415,7 @@ export class EnrichmentService {
 
   async rejectSuggestion(id: number): Promise<SuggestionDTO> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.decideEnrichmentSuggestion(
-        id,
-        "rejected",
-      ) as unknown as SuggestionDTO;
+      return enrichmentDemoService.rejectSuggestion(id);
     }
 
     await this.getSuggestionOrThrow(id);
@@ -451,23 +433,23 @@ export class EnrichmentService {
    */
   async deleteForEntity(
     entityType: EnrichmentEntityType,
-    entityId: number,
+    entityId: number
   ): Promise<void> {
     await db
       .delete(enrichmentSuggestionsTable)
       .where(
         and(
           eq(enrichmentSuggestionsTable.entityType, entityType),
-          eq(enrichmentSuggestionsTable.entityId, entityId),
-        ),
+          eq(enrichmentSuggestionsTable.entityId, entityId)
+        )
       );
     await db
       .delete(enrichmentRunsTable)
       .where(
         and(
           eq(enrichmentRunsTable.entityType, entityType),
-          eq(enrichmentRunsTable.entityId, entityId),
-        ),
+          eq(enrichmentRunsTable.entityId, entityId)
+        )
       );
   }
 
@@ -480,7 +462,7 @@ export class EnrichmentService {
         await creatorsSocialService.addGalleryMediaFromUrl(
           creatorId,
           s.value,
-          `From ${s.source}`,
+          `From ${s.source}`
         );
         break;
       case "social":
@@ -538,7 +520,7 @@ export class EnrichmentService {
         break;
       default:
         throw new BadRequestError(
-          `Unsupported creator suggestion type: ${s.type}`,
+          `Unsupported creator suggestion type: ${s.type}`
         );
     }
   }
@@ -587,7 +569,7 @@ export class EnrichmentService {
         const parentId = await this.resolveStudioId(
           s.value,
           s.source,
-          raw.external_id,
+          raw.external_id
         );
         if (parentId !== studioId) {
           await db
@@ -599,7 +581,7 @@ export class EnrichmentService {
       }
       default:
         throw new BadRequestError(
-          `Unsupported studio suggestion type: ${s.type}`,
+          `Unsupported studio suggestion type: ${s.type}`
         );
     }
   }
@@ -695,7 +677,7 @@ export class EnrichmentService {
         const creatorId = await this.resolveCreatorId(
           s.value,
           s.source,
-          raw.external_id,
+          raw.external_id
         );
         await db
           .insert(videoCreatorsTable)
@@ -705,7 +687,7 @@ export class EnrichmentService {
           "creator",
           creatorId,
           raw.source ?? s.source,
-          raw.external_id,
+          raw.external_id
         );
         break;
       }
@@ -714,7 +696,7 @@ export class EnrichmentService {
         const studioId = await this.resolveStudioId(
           s.value,
           s.source,
-          raw.external_id,
+          raw.external_id
         );
         await db
           .insert(videoStudiosTable)
@@ -724,7 +706,7 @@ export class EnrichmentService {
           "studio",
           studioId,
           raw.source ?? s.source,
-          raw.external_id,
+          raw.external_id
         );
         break;
       }
@@ -733,7 +715,7 @@ export class EnrichmentService {
         const tagId = await this.resolveTagId(
           s.value,
           raw.source ?? s.source,
-          raw.external_id,
+          raw.external_id
         );
         await db
           .insert(videoTagsTable)
@@ -743,7 +725,7 @@ export class EnrichmentService {
           "tag",
           tagId,
           raw.source ?? s.source,
-          raw.external_id,
+          raw.external_id
         );
         break;
       }
@@ -759,7 +741,7 @@ export class EnrichmentService {
         break;
       default:
         throw new BadRequestError(
-          `Unsupported scene suggestion type: ${s.type}`,
+          `Unsupported scene suggestion type: ${s.type}`
         );
     }
   }
@@ -769,7 +751,7 @@ export class EnrichmentService {
   private async resolveCreatorId(
     name: string,
     source: string,
-    externalId?: string | null,
+    externalId?: string | null
   ): Promise<number> {
     if (externalId) {
       const [ext] = await db
@@ -778,8 +760,8 @@ export class EnrichmentService {
         .where(
           and(
             eq(creatorExternalIdsTable.source, source),
-            eq(creatorExternalIdsTable.externalId, externalId),
-          ),
+            eq(creatorExternalIdsTable.externalId, externalId)
+          )
         )
         .limit(1);
       if (ext) return ext.creatorId;
@@ -795,7 +777,12 @@ export class EnrichmentService {
     if (externalId) {
       await db
         .insert(creatorExternalIdsTable)
-        .values({ creatorId: created.id, source, externalId, lastSyncedAt: new Date() })
+        .values({
+          creatorId: created.id,
+          source,
+          externalId,
+          lastSyncedAt: new Date(),
+        })
         .onConflictDoNothing();
     }
     return created.id;
@@ -804,7 +791,7 @@ export class EnrichmentService {
   private async resolveStudioId(
     name: string,
     source: string,
-    externalId?: string | null,
+    externalId?: string | null
   ): Promise<number> {
     if (externalId) {
       const [ext] = await db
@@ -813,8 +800,8 @@ export class EnrichmentService {
         .where(
           and(
             eq(studioExternalIdsTable.source, source),
-            eq(studioExternalIdsTable.externalId, externalId),
-          ),
+            eq(studioExternalIdsTable.externalId, externalId)
+          )
         )
         .limit(1);
       if (ext) return ext.studioId;
@@ -830,7 +817,12 @@ export class EnrichmentService {
     if (externalId) {
       await db
         .insert(studioExternalIdsTable)
-        .values({ studioId: created.id, source, externalId, lastSyncedAt: new Date() })
+        .values({
+          studioId: created.id,
+          source,
+          externalId,
+          lastSyncedAt: new Date(),
+        })
         .onConflictDoNothing();
     }
     return created.id;
@@ -839,7 +831,7 @@ export class EnrichmentService {
   private async resolveTagId(
     name: string,
     source?: string,
-    externalId?: string | null,
+    externalId?: string | null
   ): Promise<number> {
     if (source && externalId) {
       const [ext] = await db
@@ -848,8 +840,8 @@ export class EnrichmentService {
         .where(
           and(
             eq(tagExternalIdsTable.source, source),
-            eq(tagExternalIdsTable.externalId, externalId),
-          ),
+            eq(tagExternalIdsTable.externalId, externalId)
+          )
         )
         .limit(1);
       if (ext) return ext.tagId;
@@ -894,7 +886,7 @@ export class EnrichmentService {
     entityType: Exclude<EnrichmentEntityType, "scene">,
     entityId: number,
     source?: string | null,
-    externalId?: string | null,
+    externalId?: string | null
   ): Promise<void> {
     if (!source || !externalId) return;
 
@@ -909,19 +901,19 @@ export class EnrichmentService {
     } catch (error) {
       logger.warn(
         { entityType, entityId, source, externalId, error },
-        "Related entity auto-enrichment failed",
+        "Related entity auto-enrichment failed"
       );
       return;
     }
 
     const acceptedTypes = AUTO_ACCEPT_RELATED_TYPES[entityType];
     const candidates = result.candidates.filter((candidate) =>
-      acceptedTypes.has(candidate.type),
+      acceptedTypes.has(candidate.type)
     );
     if (candidates.length === 0) return;
 
     const rows = candidates.map((candidate) =>
-      this.toSuggestionRow(entityType, entityId, candidate),
+      this.toSuggestionRow(entityType, entityId, candidate)
     );
     const dedupHashes = new Set(rows.map((row) => row.dedupHash));
     await db
@@ -936,8 +928,8 @@ export class EnrichmentService {
         and(
           eq(enrichmentSuggestionsTable.entityType, entityType),
           eq(enrichmentSuggestionsTable.entityId, entityId),
-          eq(enrichmentSuggestionsTable.status, "pending"),
-        ),
+          eq(enrichmentSuggestionsTable.status, "pending")
+        )
       );
 
     for (const suggestion of pending) {
@@ -962,7 +954,7 @@ export class EnrichmentService {
             type: suggestion.type,
             error,
           },
-          "Related entity auto-accept failed",
+          "Related entity auto-accept failed"
         );
       }
     }
@@ -975,12 +967,12 @@ export class EnrichmentService {
         externalId,
         candidates: candidates.length,
       },
-      "Auto-enriched related entity from exact external id",
+      "Auto-enriched related entity from exact external id"
     );
   }
 
   private async applyAutoAcceptedRelatedSuggestion(
-    suggestion: EnrichmentSuggestion,
+    suggestion: EnrichmentSuggestion
   ): Promise<void> {
     switch (suggestion.entityType as EnrichmentEntityType) {
       case "creator":
@@ -994,14 +986,14 @@ export class EnrichmentService {
         break;
       default:
         throw new BadRequestError(
-          `Unsupported related entity type: ${suggestion.entityType}`,
+          `Unsupported related entity type: ${suggestion.entityType}`
         );
     }
   }
 
   private async resolveTagCategoryId(
     name: string,
-    group?: string | null,
+    group?: string | null
   ): Promise<number> {
     const [existing] = await db
       .select({ id: tagCategoriesTable.id })
@@ -1027,7 +1019,7 @@ export class EnrichmentService {
   }
 
   private async getSuggestionOrThrow(
-    id: number,
+    id: number
   ): Promise<EnrichmentSuggestion> {
     const [row] = await db
       .select()
@@ -1043,7 +1035,7 @@ export class EnrichmentService {
   private toSuggestionRow(
     entityType: EntityType,
     entityId: number,
-    candidate: Candidate,
+    candidate: Candidate
   ) {
     return {
       entityType,
@@ -1100,7 +1092,7 @@ function dedupHash(candidate: Candidate): string {
   const matchKey = candidateMatchKey(candidate.raw);
   return createHash("sha256")
     .update(
-      `${candidate.type}|${candidate.field_key ?? ""}|${candidate.value}|${matchKey}`,
+      `${candidate.type}|${candidate.field_key ?? ""}|${candidate.value}|${matchKey}`
     )
     .digest("hex");
 }

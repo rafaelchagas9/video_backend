@@ -63,7 +63,7 @@ export const listCreatorsQuerySchema = z
     studioIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     missing: z
@@ -84,7 +84,7 @@ export const listCreatorsQuerySchema = z
     },
     {
       message: "minVideoCount cannot be greater than maxVideoCount",
-    },
+    }
   );
 
 // Completeness schema
@@ -329,7 +329,7 @@ export const galleryMediaRolesSchema = z
     (data) =>
       data.is_profile_picture !== undefined ||
       data.is_main_picture !== undefined,
-    { message: "At least one image role must be provided" },
+    { message: "At least one image role must be provided" }
   );
 
 export const galleryMediaListResponseSchema = z.object({
@@ -352,7 +352,7 @@ export const bulkOperationResponseSchema = z.object({
       z.object({
         index: z.number(),
         error: z.string(),
-      }),
+      })
     ),
   }),
   message: z.string().optional(),
@@ -360,7 +360,14 @@ export const bulkOperationResponseSchema = z.object({
 
 // Bulk Import schemas
 export const bulkImportQuerySchema = z.object({
-  dry_run: z.coerce.boolean().optional().default(false),
+  dry_run: z
+    .preprocess(
+      (value) =>
+        typeof value === "string" ? value.toLowerCase() === "true" : value,
+      z.boolean()
+    )
+    .optional()
+    .default(false),
 });
 
 export const bulkCreatorImportItemSchema = z.object({

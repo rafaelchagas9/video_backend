@@ -16,6 +16,8 @@ import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
 import { NotFoundError } from "@/utils/errors";
 import { demoArtworkService } from "./artwork.demo.service";
+import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
+import { demoRepository } from "@/database/demo";
 import {
   generateArtworkFiles,
   isArtworkTitleEligible,
@@ -114,22 +116,34 @@ class ArtworkService {
       .where(eq(artworkAssetsTable.id, id))
       .limit(1)
       .then((rows) => rows[0] ?? null);
-    if (!asset) throw new NotFoundError(`Artwork asset not found with id: ${id}`);
+    if (!asset)
+      throw new NotFoundError(`Artwork asset not found with id: ${id}`);
     return asset;
   }
 
-  async getSummariesByVideoIds(videoIds: number[]): Promise<Map<number, VideoArtworkSummary>> {
+  async getSummariesByVideoIds(
+    videoIds: number[]
+  ): Promise<Map<number, VideoArtworkSummary>> {
     const summaries = new Map<number, VideoArtworkSummary>();
     if (videoIds.length === 0) return summaries;
     if (env.DEMO_MODE) {
       return demoArtworkService.getSummariesByVideoIds(videoIds);
     }
     const [sets, assets] = await Promise.all([
-      db.select().from(videoArtworkTable).where(inArray(videoArtworkTable.videoId, videoIds)),
-      db.select().from(artworkAssetsTable).where(inArray(artworkAssetsTable.videoId, videoIds)),
+      db
+        .select()
+        .from(videoArtworkTable)
+        .where(inArray(videoArtworkTable.videoId, videoIds)),
+      db
+        .select()
+        .from(artworkAssetsTable)
+        .where(inArray(artworkAssetsTable.videoId, videoIds)),
     ]);
     const palettes = new Map(
-      sets.map((set) => [set.videoId, (set.palette as ArtworkPalette | null | undefined) ?? null]),
+      sets.map((set) => [
+        set.videoId,
+        (set.palette as ArtworkPalette | null | undefined) ?? null,
+      ])
     );
     const grouped = new Map<number, ArtworkAssetRow[]>();
     for (const asset of assets) {
@@ -140,8 +154,10 @@ class ArtworkService {
     for (const videoId of videoIds) {
       const videoAssets = grouped.get(videoId) ?? [];
       if (videoAssets.length === 0 && !palettes.has(videoId)) continue;
-      const card = videoAssets.find((asset) => asset.variant === "card") ?? null;
-      const hero = videoAssets.find((asset) => asset.variant === "hero") ?? null;
+      const card =
+        videoAssets.find((asset) => asset.variant === "card") ?? null;
+      const hero =
+        videoAssets.find((asset) => asset.variant === "hero") ?? null;
       const representative = card ?? hero ?? videoAssets[0] ?? null;
       const urls: VideoArtworkSummary["urls"] = {};
       for (const asset of videoAssets) {
@@ -150,7 +166,9 @@ class ArtworkService {
       summaries.set(videoId, {
         urls,
         palette: palettes.get(videoId) ?? null,
-        focal_point: (representative?.focalPoint as NormalizedPoint | null | undefined) ?? null,
+        focal_point:
+          (representative?.focalPoint as NormalizedPoint | null | undefined) ??
+          null,
         safe_area:
           (hero?.safeArea as NormalizedRect | null | undefined) ??
           (representative?.safeArea as NormalizedRect | null | undefined) ??
@@ -164,8 +182,8 @@ class ArtworkService {
 
   private normalizeRequest(input: GenerateArtworkInput): StoredArtworkRequest {
     const requested = input.variants ?? [...RASTER_ARTWORK_VARIANTS, "title"];
-    const variants = requested.filter(
-      (variant): variant is ArtworkVariant => ARTWORK_VARIANTS.includes(variant),
+    const variants = requested.filter((variant): variant is ArtworkVariant =>
+      ARTWORK_VARIANTS.includes(variant)
     );
     return {
       variants: [...new Set(variants)],
@@ -179,20 +197,27 @@ class ArtworkService {
 
   private requestForVideo(
     request: StoredArtworkRequest,
-    video: { title: string | null; fileName?: string; file_name?: string },
+    video: { title: string | null; fileName?: string; file_name?: string }
   ): StoredArtworkRequest {
     const fileName = video.file_name ?? video.fileName ?? "";
-    const displayTitle = video.title?.trim() || fileName.replace(/\.[^.]+$/, "");
+    const displayTitle =
+      video.title?.trim() || fileName.replace(/\.[^.]+$/, "");
     return {
       ...request,
       variants: request.variants.filter(
-        (variant) => variant !== "title" || isArtworkTitleEligible(displayTitle),
+        (variant) => variant !== "title" || isArtworkTitleEligible(displayTitle)
       ),
     };
   }
 
-  async requestGeneration(videoId: number, input: GenerateArtworkInput): Promise<VideoArtwork> {
-    if (env.DEMO_MODE) return this.getByVideoId(videoId);
+  async requestGeneration(
+    videoId: number,
+    input: GenerateArtworkInput
+  ): Promise<VideoArtwork> {
+    if (env.DEMO_MODE) {
+      demoMediaAssetsService.generateArtwork(videoId, input);
+      return this.getByVideoId(videoId);
+    }
     const video = await videosService.findById(videoId);
     this.cancelledVideos.delete(videoId);
     const request = this.requestForVideo(this.normalizeRequest(input), video);
@@ -204,7 +229,9 @@ class ArtworkService {
       .where(eq(artworkAssetsTable.videoId, videoId));
     const existingVariants = new Set(existing.map((asset) => asset.variant));
     if (!request.force) {
-      request.variants = request.variants.filter((variant) => !existingVariants.has(variant));
+      request.variants = request.variants.filter(
+        (variant) => !existingVariants.has(variant)
+      );
     }
     if (request.variants.length === 0 || this.pendingVideoIds.has(videoId)) {
       return this.getByVideoId(videoId);
@@ -212,51 +239,114 @@ class ArtworkService {
 
     await db
       .insert(videoArtworkTable)
-      .values({ videoId, status: "generating", error: null, request, updatedAt: new Date() })
+      .values({
+        videoId,
+        status: "generating",
+        error: null,
+        request,
+        updatedAt: new Date(),
+      })
       .onConflictDoUpdate({
         target: videoArtworkTable.videoId,
-        set: { status: "generating", error: null, request, updatedAt: new Date() },
+        set: {
+          status: "generating",
+          error: null,
+          request,
+          updatedAt: new Date(),
+        },
       });
     this.enqueue({ videoId, request });
     return this.getByVideoId(videoId);
   }
 
   async requestBatch(input: BatchGenerateArtworkInput): Promise<number[]> {
+    if (env.DEMO_MODE) {
+      let videos = input.video_ids
+        ? input.video_ids.map((id) => demoRepository.getVideoById(id))
+        : demoRepository.getVideos({
+            creatorIds: input.filter?.creator_id
+              ? [input.filter.creator_id]
+              : undefined,
+            limit: 10_000,
+          }).data;
+      if (input.filter?.collection_id)
+        videos = videos.filter(
+          (video: any) => video.collection?.id === input.filter!.collection_id
+        );
+      if (input.filter?.missing_only)
+        videos = videos.filter(
+          (video: any) =>
+            demoArtworkService.getByVideoId(video.id).status === "absent"
+        );
+      for (const video of videos)
+        demoMediaAssetsService.generateArtwork(video.id, input);
+      return videos.map((video: any) => video.id);
+    }
     const request = this.normalizeRequest(input);
     if (request.variants.length === 0) return [];
     let rows: Array<{ id: number; title: string | null; fileName: string }>;
     if (input.video_ids) {
       rows = await db
-        .select({ id: videosTable.id, title: videosTable.title, fileName: videosTable.fileName })
+        .select({
+          id: videosTable.id,
+          title: videosTable.title,
+          fileName: videosTable.fileName,
+        })
         .from(videosTable)
         .where(inArray(videosTable.id, input.video_ids));
     } else if (input.filter?.collection_id) {
       rows = await db
-        .selectDistinct({ id: videosTable.id, title: videosTable.title, fileName: videosTable.fileName })
+        .selectDistinct({
+          id: videosTable.id,
+          title: videosTable.title,
+          fileName: videosTable.fileName,
+        })
         .from(videosTable)
-        .innerJoin(videoCollectionEntriesTable, eq(videoCollectionEntriesTable.videoId, videosTable.id))
-        .where(eq(videoCollectionEntriesTable.collectionId, input.filter.collection_id));
+        .innerJoin(
+          videoCollectionEntriesTable,
+          eq(videoCollectionEntriesTable.videoId, videosTable.id)
+        )
+        .where(
+          eq(
+            videoCollectionEntriesTable.collectionId,
+            input.filter.collection_id
+          )
+        );
     } else if (input.filter?.creator_id) {
       rows = await db
-        .selectDistinct({ id: videosTable.id, title: videosTable.title, fileName: videosTable.fileName })
+        .selectDistinct({
+          id: videosTable.id,
+          title: videosTable.title,
+          fileName: videosTable.fileName,
+        })
         .from(videosTable)
-        .innerJoin(videoCreatorsTable, eq(videoCreatorsTable.videoId, videosTable.id))
+        .innerJoin(
+          videoCreatorsTable,
+          eq(videoCreatorsTable.videoId, videosTable.id)
+        )
         .where(eq(videoCreatorsTable.creatorId, input.filter.creator_id));
     } else {
       rows = await db
-        .select({ id: videosTable.id, title: videosTable.title, fileName: videosTable.fileName })
+        .select({
+          id: videosTable.id,
+          title: videosTable.title,
+          fileName: videosTable.fileName,
+        })
         .from(videosTable);
     }
 
     const requestByVideo = new Map(
-      rows.map((row) => [row.id, this.requestForVideo(request, row)]),
+      rows.map((row) => [row.id, this.requestForVideo(request, row)])
     );
     let videoIds = rows
       .filter((row) => (requestByVideo.get(row.id)?.variants.length ?? 0) > 0)
       .map((row) => row.id);
     if (videoIds.length === 0) return [];
     const existing = await db
-      .select({ videoId: artworkAssetsTable.videoId, variant: artworkAssetsTable.variant })
+      .select({
+        videoId: artworkAssetsTable.videoId,
+        variant: artworkAssetsTable.variant,
+      })
       .from(artworkAssetsTable)
       .where(inArray(artworkAssetsTable.videoId, videoIds));
     const byVideo = new Map<number, Set<string>>();
@@ -267,7 +357,9 @@ class ArtworkService {
     }
     if (input.filter?.missing_only) {
       videoIds = videoIds.filter((id) =>
-        requestByVideo.get(id)?.variants.some((variant) => !byVideo.get(id)?.has(variant)),
+        requestByVideo
+          .get(id)
+          ?.variants.some((variant) => !byVideo.get(id)?.has(variant))
       );
     }
 
@@ -279,7 +371,7 @@ class ArtworkService {
       const variants = request.force
         ? videoRequest.variants
         : videoRequest.variants.filter(
-            (variant) => !byVideo.get(videoId)?.has(variant),
+            (variant) => !byVideo.get(videoId)?.has(variant)
           );
       if (variants.length === 0) continue;
       jobs.push({ videoId, request: { ...videoRequest, variants } });
@@ -314,7 +406,7 @@ class ArtworkService {
 
   async deleteByVideoId(videoId: number): Promise<void> {
     if (env.DEMO_MODE) {
-      await videosService.findFilePathById(videoId);
+      demoMediaAssetsService.deleteArtwork(videoId);
       return;
     }
     await videosService.findFilePathById(videoId);
@@ -324,8 +416,12 @@ class ArtworkService {
       .from(artworkAssetsTable)
       .where(eq(artworkAssetsTable.videoId, videoId));
     await db.transaction(async (tx) => {
-      await tx.delete(artworkAssetsTable).where(eq(artworkAssetsTable.videoId, videoId));
-      await tx.delete(videoArtworkTable).where(eq(videoArtworkTable.videoId, videoId));
+      await tx
+        .delete(artworkAssetsTable)
+        .where(eq(artworkAssetsTable.videoId, videoId));
+      await tx
+        .delete(videoArtworkTable)
+        .where(eq(videoArtworkTable.videoId, videoId));
     });
     await Promise.all(assets.map((asset) => this.removeFile(asset.filePath)));
   }
@@ -333,12 +429,18 @@ class ArtworkService {
   async resumePendingJobs(): Promise<void> {
     if (env.DEMO_MODE) return;
     const pending = await db
-      .select({ videoId: videoArtworkTable.videoId, request: videoArtworkTable.request })
+      .select({
+        videoId: videoArtworkTable.videoId,
+        request: videoArtworkTable.request,
+      })
       .from(videoArtworkTable)
       .where(eq(videoArtworkTable.status, "generating"));
     for (const row of pending) {
       if (row.request && !this.pendingVideoIds.has(row.videoId)) {
-        this.enqueue({ videoId: row.videoId, request: row.request as StoredArtworkRequest });
+        this.enqueue({
+          videoId: row.videoId,
+          request: row.request as StoredArtworkRequest,
+        });
       }
     }
   }
@@ -379,11 +481,18 @@ class ArtworkService {
           ...context,
           variants: job.request.variants,
           ...(job.batch
-            ? { progress: Math.round((job.batch.completed / Math.max(1, job.batch.total)) * 100) }
+            ? {
+                progress: Math.round(
+                  (job.batch.completed / Math.max(1, job.batch.total)) * 100
+                ),
+              }
             : {}),
         },
       });
-      const generated = await generateArtworkFiles({ video, request: job.request });
+      const generated = await generateArtworkFiles({
+        video,
+        request: job.request,
+      });
       newPaths = generated.assets.map((asset) => asset.filePath);
       if (this.cancelledVideos.has(job.videoId)) {
         await Promise.all(newPaths.map((path) => this.removeFile(path)));
@@ -396,8 +505,8 @@ class ArtworkService {
         .where(
           and(
             eq(artworkAssetsTable.videoId, job.videoId),
-            inArray(artworkAssetsTable.variant, job.request.variants),
-          ),
+            inArray(artworkAssetsTable.variant, job.request.variants)
+          )
         );
       const currentSet = await db
         .select({ palette: videoArtworkTable.palette })
@@ -412,8 +521,8 @@ class ArtworkService {
           .where(
             and(
               eq(artworkAssetsTable.videoId, job.videoId),
-              inArray(artworkAssetsTable.variant, job.request.variants),
-            ),
+              inArray(artworkAssetsTable.variant, job.request.variants)
+            )
           );
         if (generated.assets.length > 0) {
           await tx.insert(artworkAssetsTable).values(
@@ -432,7 +541,7 @@ class ArtworkService {
               bottomLuma: asset.bottomLuma,
               thumbhash: asset.thumbhash,
               effects: asset.effects,
-            })),
+            }))
           );
         }
         await tx
@@ -451,7 +560,7 @@ class ArtworkService {
       await Promise.all(
         oldAssets
           .filter((asset) => !retained.has(asset.filePath))
-          .map((asset) => this.removeFile(asset.filePath)),
+          .map((asset) => this.removeFile(asset.filePath))
       );
       if (job.batch) job.batch.completed += 1;
       eventsService.broadcastToAuthenticated({
@@ -460,12 +569,19 @@ class ArtworkService {
           ...context,
           variants: job.request.variants,
           ...(job.batch
-            ? { progress: Math.round((job.batch.completed / Math.max(1, job.batch.total)) * 100) }
+            ? {
+                progress: Math.round(
+                  (job.batch.completed / Math.max(1, job.batch.total)) * 100
+                ),
+              }
             : {}),
         },
       });
     } catch (error) {
-      logger.error({ error, videoId: job.videoId }, "Artwork generation failed");
+      logger.error(
+        { error, videoId: job.videoId },
+        "Artwork generation failed"
+      );
       await Promise.all(newPaths.map((path) => this.removeFile(path)));
       await db
         .update(videoArtworkTable)
@@ -486,7 +602,9 @@ class ArtworkService {
         file_name: "",
       };
       try {
-        context = createVideoEventContext(await videosService.findById(job.videoId));
+        context = createVideoEventContext(
+          await videosService.findById(job.videoId)
+        );
       } catch {
         // The video may have been deleted while the background job was running.
       }
@@ -497,7 +615,11 @@ class ArtworkService {
           variants: job.request.variants,
           error: "Artwork generation failed",
           ...(job.batch
-            ? { progress: Math.round((job.batch.completed / Math.max(1, job.batch.total)) * 100) }
+            ? {
+                progress: Math.round(
+                  (job.batch.completed / Math.max(1, job.batch.total)) * 100
+                ),
+              }
             : {}),
         },
       });

@@ -18,12 +18,14 @@ import type {
   UpdateCreatorPlatformInput,
 } from "@/modules/platforms/platforms.types";
 import type { BulkPlatformItem, BulkOperationResult } from "./creators.types";
+import { creatorsDemoService } from "./creators.demo.service";
 
 export class CreatorsPlatformsService {
   async addPlatformProfile(
     creatorId: number,
-    input: CreateCreatorPlatformInput,
+    input: CreateCreatorPlatformInput
   ): Promise<CreatorPlatform> {
+    if (env.DEMO_MODE) return creatorsDemoService.addPlatform(creatorId, input);
     // Verify creator exists
     const creator = await db
       .select({ id: creatorsTable.id })
@@ -55,7 +57,7 @@ export class CreatorsPlatformsService {
     } catch (error: any) {
       if (isUniqueViolation(error)) {
         throw new ConflictError(
-          "Creator already has a profile on this platform",
+          "Creator already has a profile on this platform"
         );
       }
       if (isForeignKeyViolation(error)) {
@@ -68,7 +70,13 @@ export class CreatorsPlatformsService {
   async updatePlatformProfile(
     id: number,
     input: UpdateCreatorPlatformInput,
+    creatorId?: number
   ): Promise<CreatorPlatform> {
+    if (env.DEMO_MODE) {
+      if (creatorId === undefined)
+        throw new NotFoundError(`Platform profile not found with id: ${id}`);
+      return creatorsDemoService.updatePlatform(creatorId, id, input);
+    }
     await this.findPlatformProfileById(id); // Ensure exists
 
     const updates: any = {};
@@ -99,7 +107,13 @@ export class CreatorsPlatformsService {
     return this.findPlatformProfileById(id);
   }
 
-  async deletePlatformProfile(id: number): Promise<void> {
+  async deletePlatformProfile(id: number, creatorId?: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      if (creatorId === undefined)
+        throw new NotFoundError(`Platform profile not found with id: ${id}`);
+      creatorsDemoService.deletePlatform(creatorId, id);
+      return;
+    }
     await this.findPlatformProfileById(id); // Ensure exists
     await db
       .delete(creatorPlatformsTable)
@@ -108,10 +122,7 @@ export class CreatorsPlatformsService {
 
   async getPlatformProfiles(creatorId: number): Promise<CreatorPlatform[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCreatorPlatforms(
-        creatorId,
-      ) as CreatorPlatform[];
+      return creatorsDemoService.getPlatforms(creatorId);
     }
 
     // Verify creator exists
@@ -140,7 +151,7 @@ export class CreatorsPlatformsService {
       .from(creatorPlatformsTable)
       .leftJoin(
         platformsTable,
-        eq(creatorPlatformsTable.platformId, platformsTable.id),
+        eq(creatorPlatformsTable.platformId, platformsTable.id)
       )
       .where(eq(creatorPlatformsTable.creatorId, creatorId))
       .orderBy(creatorPlatformsTable.isPrimary, platformsTable.name);
@@ -150,8 +161,35 @@ export class CreatorsPlatformsService {
 
   async bulkUpsertPlatforms(
     creatorId: number,
-    items: BulkPlatformItem[],
+    items: BulkPlatformItem[]
   ): Promise<BulkOperationResult<CreatorPlatform>> {
+    if (env.DEMO_MODE) {
+      const created: CreatorPlatform[] = [];
+      const updated: CreatorPlatform[] = [];
+      const errors: Array<{ index: number; error: string }> = [];
+      const existing = creatorsDemoService.getPlatforms(creatorId);
+      for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        try {
+          const match = existing.find(
+            (profile) =>
+              profile.platform_id === item.platform_id &&
+              profile.username === item.username
+          );
+          if (match)
+            updated.push(
+              creatorsDemoService.updatePlatform(creatorId, match.id, item)
+            );
+          else created.push(creatorsDemoService.addPlatform(creatorId, item));
+        } catch (error) {
+          errors.push({
+            index,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+      return { created, updated, errors };
+    }
     // Verify creator exists
     const creator = await db
       .select({ id: creatorsTable.id })
@@ -178,8 +216,8 @@ export class CreatorsPlatformsService {
             and(
               eq(creatorPlatformsTable.creatorId, creatorId),
               eq(creatorPlatformsTable.platformId, item.platform_id),
-              eq(creatorPlatformsTable.username, item.username),
-            ),
+              eq(creatorPlatformsTable.username, item.username)
+            )
           )
           .limit(1);
 
@@ -238,7 +276,7 @@ export class CreatorsPlatformsService {
       .from(creatorPlatformsTable)
       .leftJoin(
         platformsTable,
-        eq(creatorPlatformsTable.platformId, platformsTable.id),
+        eq(creatorPlatformsTable.platformId, platformsTable.id)
       )
       .where(eq(creatorPlatformsTable.id, id))
       .limit(1);

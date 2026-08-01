@@ -15,14 +15,18 @@ import type {
   BulkStudioSocialLinkItem,
   BulkOperationResult,
 } from "./studios.types";
+import { studiosDemoService } from "./studios.demo.service";
+import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 
 export class StudiosSocialService {
   // Profile Picture Methods
   async uploadProfilePicture(
     id: number,
     fileBuffer: Buffer,
-    _filename: string,
+    _filename: string
   ): Promise<Studio> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.uploadStudioPicture(id, fileBuffer);
     const studio = await this.findStudioById(id);
 
     // Ensure directory exists
@@ -66,6 +70,7 @@ export class StudiosSocialService {
   }
 
   async deleteProfilePicture(id: number): Promise<Studio> {
+    if (env.DEMO_MODE) return demoMediaAssetsService.deleteStudioPicture(id);
     const studio = await this.findStudioById(id);
 
     if (
@@ -87,6 +92,8 @@ export class StudiosSocialService {
   }
 
   async setPictureFromUrl(studioId: number, url: string): Promise<Studio> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.setStudioPictureFromUrl(studioId, url);
     const studio = await this.findStudioById(studioId);
 
     // Download image from URL
@@ -94,7 +101,7 @@ export class StudiosSocialService {
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(
-          `Failed to download image: ${response.status} ${response.statusText}`,
+          `Failed to download image: ${response.status} ${response.statusText}`
         );
       }
 
@@ -153,8 +160,9 @@ export class StudiosSocialService {
   // Social Links Methods
   async addSocialLink(
     studioId: number,
-    input: CreateStudioSocialLinkInput,
+    input: CreateStudioSocialLinkInput
   ): Promise<StudioSocialLink> {
+    if (env.DEMO_MODE) return studiosDemoService.addSocialLink(studioId, input);
     await this.findStudioById(studioId); // Ensure studio exists
 
     const result = await db
@@ -177,7 +185,13 @@ export class StudiosSocialService {
   async updateSocialLink(
     id: number,
     input: UpdateStudioSocialLinkInput,
+    studioId?: number
   ): Promise<StudioSocialLink> {
+    if (env.DEMO_MODE) {
+      if (studioId === undefined)
+        throw new NotFoundError(`Studio social link not found with id: ${id}`);
+      return studiosDemoService.updateSocialLink(studioId, id, input);
+    }
     await this.findSocialLinkById(id); // Ensure exists
 
     const updates: any = {};
@@ -202,7 +216,13 @@ export class StudiosSocialService {
     return this.findSocialLinkById(id);
   }
 
-  async deleteSocialLink(id: number): Promise<void> {
+  async deleteSocialLink(id: number, studioId?: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      if (studioId === undefined)
+        throw new NotFoundError(`Studio social link not found with id: ${id}`);
+      studiosDemoService.deleteSocialLink(studioId, id);
+      return;
+    }
     await this.findSocialLinkById(id); // Ensure exists
     await db
       .delete(studioSocialLinksTable)
@@ -211,10 +231,7 @@ export class StudiosSocialService {
 
   async getSocialLinks(studioId: number): Promise<StudioSocialLink[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getStudioSocialLinks(
-        studioId,
-      ) as StudioSocialLink[];
+      return studiosDemoService.listSocialLinks(studioId);
     }
 
     await this.findStudioById(studioId); // Ensure studio exists
@@ -230,8 +247,33 @@ export class StudiosSocialService {
 
   async bulkUpsertSocialLinks(
     studioId: number,
-    items: BulkStudioSocialLinkItem[],
+    items: BulkStudioSocialLinkItem[]
   ): Promise<BulkOperationResult<StudioSocialLink>> {
+    if (env.DEMO_MODE) {
+      const created: StudioSocialLink[] = [];
+      const updated: StudioSocialLink[] = [];
+      const errors: Array<{ index: number; error: string }> = [];
+      const existing = studiosDemoService.listSocialLinks(studioId);
+      for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        try {
+          const match = existing.find(
+            (link) => link.platform_name === item.platform_name
+          );
+          if (match)
+            updated.push(
+              studiosDemoService.updateSocialLink(studioId, match.id, item)
+            );
+          else created.push(studiosDemoService.addSocialLink(studioId, item));
+        } catch (error) {
+          errors.push({
+            index,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+      return { created, updated, errors };
+    }
     await this.findStudioById(studioId); // Ensure studio exists
 
     const created: StudioSocialLink[] = [];
@@ -249,8 +291,8 @@ export class StudiosSocialService {
             and(
               eq(studioSocialLinksTable.studioId, studioId),
               eq(studioSocialLinksTable.platformName, item.platform_name),
-              eq(studioSocialLinksTable.url, item.url),
-            ),
+              eq(studioSocialLinksTable.url, item.url)
+            )
           )
           .limit(1)
           .then((rows) => rows[0] || null);
@@ -266,8 +308,8 @@ export class StudiosSocialService {
             .where(
               and(
                 eq(studioSocialLinksTable.studioId, studioId),
-                eq(studioSocialLinksTable.platformName, item.platform_name),
-              ),
+                eq(studioSocialLinksTable.platformName, item.platform_name)
+              )
             )
             .limit(1)
             .then((rows) => rows[0] || null);

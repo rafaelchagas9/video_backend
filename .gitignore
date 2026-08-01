@@ -37,4 +37,6 @@ Thumbs.db
 .migraphx_cache
 .ruff_cache
 
-demo_mode/
+/demo_mode
+*.sqlite-wal
+*.sqlite-shm

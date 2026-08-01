@@ -1,9 +1,5 @@
 import { join } from "path";
-import {
-  createReadStream,
-  existsSync,
-  mkdirSync,
-} from "fs";
+import { createReadStream, existsSync, mkdirSync } from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import { db } from "@/config/drizzle";
 import { storyboardsTable } from "@/database/schema";
@@ -19,6 +15,8 @@ import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
 import { copyFile, unlink, stat, readFile, writeFile } from "fs/promises";
 import { freemem } from "os";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
+import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
+import { resolveDemoAssetPath } from "@/database/demo";
 
 interface SpriteSheetOptions {
   videoId: number;
@@ -50,7 +48,7 @@ export class StoryboardsService {
    * Map Drizzle result (camelCase) to API format (snake_case)
    */
   private mapToApiFormat(
-    row: typeof storyboardsTable.$inferSelect,
+    row: typeof storyboardsTable.$inferSelect
   ): Storyboard {
     return {
       id: row.id,
@@ -76,11 +74,16 @@ export class StoryboardsService {
    * - Otherwise add to queue and start processing if not already running.
    */
   async queueGenerate(videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      demoMediaAssetsService.generateStoryboard(videoId);
+      return;
+    }
+
     // Skip if this video is currently being processed
     if (this.processingVideoId === videoId) {
       logger.debug(
         { videoId },
-        "Storyboard generation already in progress, skipping",
+        "Storyboard generation already in progress, skipping"
       );
       return;
     }
@@ -89,7 +92,7 @@ export class StoryboardsService {
     if (this.pendingQueue.includes(videoId)) {
       logger.debug(
         { videoId },
-        "Storyboard generation already queued, skipping",
+        "Storyboard generation already queued, skipping"
       );
       return;
     }
@@ -105,7 +108,7 @@ export class StoryboardsService {
     this.pendingQueue.push(videoId);
     logger.info(
       { videoId, queueLength: this.pendingQueue.length },
-      "Storyboard generation queued",
+      "Storyboard generation queued"
     );
 
     // Start processing if not already running
@@ -135,7 +138,7 @@ export class StoryboardsService {
 
           logger.info(
             { videoId, remaining: this.pendingQueue.length },
-            "Processing storyboard generation",
+            "Processing storyboard generation"
           );
 
           eventsService.broadcastToAuthenticated({
@@ -164,7 +167,7 @@ export class StoryboardsService {
         let videoContext = { videoId, video_id: videoId };
         try {
           videoContext = createVideoEventContext(
-            await videosService.findById(videoId),
+            await videosService.findById(videoId)
           );
         } catch {
           // Keep the failure event actionable even if video enrichment fails.
@@ -193,8 +196,10 @@ export class StoryboardsService {
    */
   async generate(
     videoId: number,
-    input?: GenerateStoryboardInput,
+    input?: GenerateStoryboardInput
   ): Promise<Storyboard> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.generateStoryboard(videoId, input);
     const totalStart = Date.now();
     const video = await videosService.findById(videoId);
 
@@ -213,7 +218,7 @@ export class StoryboardsService {
       video.width,
       video.height,
       input?.tileWidth,
-      input?.tileHeight,
+      input?.tileHeight
     );
     const requestedIntervalSeconds =
       input?.intervalSeconds ?? env.STORYBOARD_INTERVAL_SECONDS;
@@ -222,13 +227,13 @@ export class StoryboardsService {
 
     if (!video.duration_seconds || video.duration_seconds <= 0) {
       throw new InternalServerError(
-        "Video duration not available for storyboard generation",
+        "Video duration not available for storyboard generation"
       );
     }
 
     const intervalSeconds = this.getEffectiveIntervalSeconds(
       video.duration_seconds,
-      requestedIntervalSeconds,
+      requestedIntervalSeconds
     );
 
     if (intervalSeconds !== requestedIntervalSeconds) {
@@ -240,7 +245,7 @@ export class StoryboardsService {
           durationSeconds: video.duration_seconds,
           maxTiles: env.STORYBOARD_MAX_TILES,
         },
-        "Adjusted storyboard interval for long video",
+        "Adjusted storyboard interval for long video"
       );
     }
 
@@ -284,7 +289,7 @@ export class StoryboardsService {
         requestedIntervalSeconds,
         cols,
         rows,
-      },
+      }
     );
 
     // Get sprite file size
@@ -302,13 +307,13 @@ export class StoryboardsService {
       tileCount,
       cols,
       video.duration_seconds,
-      storyboardFormat,
+      storyboardFormat
     );
     await recordPerfStage(
       { scenario: "storyboard", videoId, mode: "generate" },
       "vtt_file",
       Date.now() - vttStart,
-      { tileCount, intervalSeconds, cols },
+      { tileCount, intervalSeconds, cols }
     );
 
     // Insert into database
@@ -330,7 +335,7 @@ export class StoryboardsService {
       { scenario: "storyboard", videoId, mode: "generate" },
       "total",
       Date.now() - totalStart,
-      { tileCount, spriteSizeBytes },
+      { tileCount, spriteSizeBytes }
     );
 
     return this.mapToApiFormat(result[0]);
@@ -343,7 +348,7 @@ export class StoryboardsService {
   async assembleFromFrames(
     videoId: number,
     frames: ExtractedFrame[],
-    videoDuration: number,
+    videoDuration: number
   ): Promise<Storyboard> {
     // Delete existing storyboard if present
     const existing = await db
@@ -361,7 +366,7 @@ export class StoryboardsService {
       video.width,
       video.height,
       env.STORYBOARD_TILE_WIDTH,
-      env.STORYBOARD_TILE_HEIGHT,
+      env.STORYBOARD_TILE_HEIGHT
     );
     const storyboardFormat = env.STORYBOARD_FORMAT;
     const storyboardQuality = env.STORYBOARD_QUALITY;
@@ -369,7 +374,7 @@ export class StoryboardsService {
 
     if (tileCount === 0) {
       throw new InternalServerError(
-        "No frames provided for storyboard assembly",
+        "No frames provided for storyboard assembly"
       );
     }
 
@@ -414,7 +419,7 @@ export class StoryboardsService {
       tileCount,
       cols,
       videoDuration,
-      storyboardFormat,
+      storyboardFormat
     );
 
     // Insert into database
@@ -448,7 +453,7 @@ export class StoryboardsService {
       tileHeight: number;
       format: "webp" | "jpg";
       quality: number;
-    },
+    }
   ): Promise<void> {
     const { cols, rows, tileWidth, tileHeight, format, quality } = options;
 
@@ -484,7 +489,7 @@ export class StoryboardsService {
           .on("error", (err) => {
             logger.error(
               { error: err, outputPath },
-              "Failed to assemble sprite sheet",
+              "Failed to assemble sprite sheet"
             );
             reject(err);
           })
@@ -497,7 +502,7 @@ export class StoryboardsService {
       } catch (error) {
         logger.warn(
           { path: inputListPath },
-          "Failed to clean up input list file",
+          "Failed to clean up input list file"
         );
       }
     }
@@ -507,7 +512,7 @@ export class StoryboardsService {
    * Generate sprite sheet image using FFmpeg.
    */
   private async generateSpriteSheet(
-    options: SpriteSheetOptions,
+    options: SpriteSheetOptions
   ): Promise<void> {
     const { inputPath, videoId } = options;
     const decisionStart = Date.now();
@@ -538,7 +543,7 @@ export class StoryboardsService {
         actuallyAvailable: this.formatBytes(availableRam - ramBuffer),
         maxRamCopyBytes: this.formatBytes(maxRamCopyBytes),
       },
-      "Storyboard RAM path decision",
+      "Storyboard RAM path decision"
     );
 
     await recordPerfStage(
@@ -549,7 +554,7 @@ export class StoryboardsService {
         canUseRam,
         fileSizeBytes: fileSize,
         maxRamCopyBytes,
-      },
+      }
     );
 
     if (canUseRam) {
@@ -559,7 +564,7 @@ export class StoryboardsService {
         { scenario: "storyboard", videoId, mode: "sprite_sheet" },
         "process_from_ram",
         Date.now() - ramStart,
-        { fileSizeBytes: fileSize },
+        { fileSizeBytes: fileSize }
       );
     } else {
       const seqStart = Date.now();
@@ -568,7 +573,7 @@ export class StoryboardsService {
         { scenario: "storyboard", videoId, mode: "sprite_sheet" },
         "process_sequential",
         Date.now() - seqStart,
-        { fileSizeBytes: fileSize },
+        { fileSizeBytes: fileSize }
       );
     }
   }
@@ -583,7 +588,9 @@ export class StoryboardsService {
       const { exec } = await import("child_process");
       const { promisify } = await import("util");
       const execAsync = promisify(exec);
-      const { stdout } = await execAsync("df -B1 /dev/shm | tail -1 | awk '{print $4}'");
+      const { stdout } = await execAsync(
+        "df -B1 /dev/shm | tail -1 | awk '{print $4}'"
+      );
       return parseInt(stdout.trim(), 10);
     } catch {
       return 0;
@@ -607,7 +614,7 @@ export class StoryboardsService {
 
   private getQualityOptions(
     format: SpriteSheetOptions["format"],
-    quality: number,
+    quality: number
   ): string[] {
     if (format === "webp") {
       return ["-q:v", quality.toString()];
@@ -625,7 +632,7 @@ export class StoryboardsService {
     width: number | null | undefined,
     height: number | null | undefined,
     overrideWidth?: number,
-    overrideHeight?: number,
+    overrideHeight?: number
   ): { tileWidth: number; tileHeight: number } {
     const baseWidth = overrideWidth ?? env.STORYBOARD_TILE_WIDTH;
     const baseHeight = overrideHeight ?? env.STORYBOARD_TILE_HEIGHT;
@@ -643,7 +650,7 @@ export class StoryboardsService {
 
   private getEffectiveIntervalSeconds(
     durationSeconds: number,
-    requestedIntervalSeconds: number,
+    requestedIntervalSeconds: number
   ): number {
     const maxTiles = Math.max(1, env.STORYBOARD_MAX_TILES);
     const intervalByTileLimit = Math.ceil(durationSeconds / maxTiles);
@@ -672,7 +679,7 @@ export class StoryboardsService {
       await recordPerfStage(
         { scenario: "storyboard", videoId, mode: "process_from_ram" },
         "copy_to_ram",
-        Date.now() - copyStart,
+        Date.now() - copyStart
       );
 
       const ffmpegStart = Date.now();
@@ -704,7 +711,7 @@ export class StoryboardsService {
       await recordPerfStage(
         { scenario: "storyboard", videoId, mode: "process_from_ram" },
         "ffmpeg_from_ram",
-        Date.now() - ffmpegStart,
+        Date.now() - ffmpegStart
       );
     } finally {
       await unlink(ramPath).catch(() => {});
@@ -728,7 +735,7 @@ export class StoryboardsService {
     const qualityOptions = this.getQualityOptions(format, quality);
     logger.debug(
       { inputPath, outputPath, intervalSeconds },
-      "Processing storyboard sequentially (HDD path)",
+      "Processing storyboard sequentially (HDD path)"
     );
 
     const fileSizeBytes = (await stat(inputPath)).size;
@@ -743,14 +750,14 @@ export class StoryboardsService {
         { scenario: "storyboard", videoId, mode: "process_sequential" },
         "prime_page_cache",
         Date.now() - readAheadStart,
-        { fileSizeBytes, readaheadMaxBytes },
+        { fileSizeBytes, readaheadMaxBytes }
       );
     } else {
       await recordPerfStage(
         { scenario: "storyboard", videoId, mode: "process_sequential" },
         "prime_page_cache_skipped",
         0,
-        { fileSizeBytes, readaheadMaxBytes },
+        { fileSizeBytes, readaheadMaxBytes }
       );
     }
 
@@ -783,7 +790,7 @@ export class StoryboardsService {
     await recordPerfStage(
       { scenario: "storyboard", videoId, mode: "process_sequential" },
       "ffmpeg_sequential",
-      Date.now() - ffmpegStart,
+      Date.now() - ffmpegStart
     );
   }
 
@@ -799,7 +806,7 @@ export class StoryboardsService {
     tileCount: number,
     cols: number,
     duration: number,
-    spriteFormat: string,
+    spriteFormat: string
   ): Promise<void> {
     let vttContent = "WEBVTT\n\n";
     const spriteExtension = spriteFormat.startsWith(".")
@@ -844,6 +851,7 @@ export class StoryboardsService {
    * Find storyboard by ID.
    */
   async findById(id: number): Promise<Storyboard> {
+    if (env.DEMO_MODE) return demoMediaAssetsService.storyboard(id);
     const rows = await db
       .select()
       .from(storyboardsTable)
@@ -862,9 +870,12 @@ export class StoryboardsService {
    */
   async findByVideoId(videoId: number): Promise<Storyboard | null> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(videoId);
-      return video && video.storyboard ? video.storyboard as Storyboard : null;
+      try {
+        return demoMediaAssetsService.storyboard(videoId);
+      } catch (error) {
+        if (error instanceof NotFoundError) return null;
+        throw error;
+      }
     }
     const rows = await db
       .select()
@@ -880,12 +891,11 @@ export class StoryboardsService {
    */
   async getVttContent(videoId: number): Promise<string> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(videoId);
-      if (video && video.storyboard && video.storyboard.vtt_path) {
-        return readFile(video.storyboard.vtt_path, "utf-8");
-      }
-      throw new NotFoundError(`VTT file not found for demo video: ${videoId}`);
+      const storyboard = demoMediaAssetsService.storyboard(videoId);
+      return readFile(
+        resolveDemoAssetPath(storyboard.vtt_path, { mustExist: true }),
+        "utf-8"
+      );
     }
     const storyboard = await this.findByVideoId(videoId);
 
@@ -904,18 +914,23 @@ export class StoryboardsService {
    * Get sprite image buffer and content type for a video.
    */
   async getSpriteAsset(
-    videoId: number,
+    videoId: number
   ): Promise<{ buffer: Buffer; contentType: string }> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(videoId);
-      if (video && video.storyboard && video.storyboard.sprite_path) {
-        const spritePath = video.storyboard.sprite_path;
-        const extension = spritePath.split(".").pop()?.toLowerCase();
-        const contentType = extension === "webp" ? "image/webp" : "image/jpeg";
-        return { buffer: await readFile(spritePath), contentType };
-      }
-      throw new NotFoundError(`Sprite asset not found for demo video: ${videoId}`);
+      const storyboard = demoMediaAssetsService.storyboard(videoId);
+      const spritePath = resolveDemoAssetPath(storyboard.sprite_path, {
+        mustExist: true,
+      });
+      const extension = spritePath.split(".").pop()?.toLowerCase();
+      return {
+        buffer: await readFile(spritePath),
+        contentType:
+          extension === "png"
+            ? "image/png"
+            : extension === "webp"
+              ? "image/webp"
+              : "image/jpeg",
+      };
     }
     const storyboard = await this.findByVideoId(videoId);
 
@@ -925,7 +940,7 @@ export class StoryboardsService {
 
     if (!existsSync(storyboard.sprite_path)) {
       throw new NotFoundError(
-        `Sprite file not found: ${storyboard.sprite_path}`,
+        `Sprite file not found: ${storyboard.sprite_path}`
       );
     }
 
@@ -947,6 +962,10 @@ export class StoryboardsService {
    * Delete storyboard for a video.
    */
   async delete(videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      demoMediaAssetsService.deleteStoryboard(videoId);
+      return;
+    }
     const storyboard = await this.findByVideoId(videoId);
 
     if (!storyboard) {
@@ -956,13 +975,17 @@ export class StoryboardsService {
     // Delete files
     try {
       await Promise.all([
-        existsSync(storyboard.sprite_path) ? unlink(storyboard.sprite_path) : Promise.resolve(),
-        existsSync(storyboard.vtt_path) ? unlink(storyboard.vtt_path) : Promise.resolve(),
+        existsSync(storyboard.sprite_path)
+          ? unlink(storyboard.sprite_path)
+          : Promise.resolve(),
+        existsSync(storyboard.vtt_path)
+          ? unlink(storyboard.vtt_path)
+          : Promise.resolve(),
       ]);
     } catch (error) {
       logger.error(
         { videoId, error },
-        `Failed to delete storyboard files for video ${videoId}`,
+        `Failed to delete storyboard files for video ${videoId}`
       );
     }
 

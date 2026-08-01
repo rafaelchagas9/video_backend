@@ -1,6 +1,15 @@
 import { mkdir, readFile, rename, stat, writeFile } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, relative, resolve } from "path";
+
+process.env.DEMO_SQLITE_TOOL = "true";
+
+const DEMO_ROOT = resolve(
+  process.cwd(),
+  process.env.DEMO_ASSETS_DIR || "./demo_mode"
+);
+const storedDemoPath = (...segments: string[]): string =>
+  relative(process.cwd(), join(DEMO_ROOT, ...segments));
 
 type DemoDownload = {
   id: string;
@@ -642,17 +651,17 @@ async function probeVideo(filePath: string) {
       "json",
       filePath,
     ],
-    true,
+    true
   );
   const probe = JSON.parse(output);
   const videoStream = probe.streams.find(
-    (stream: any) => stream.codec_type === "video",
+    (stream: any) => stream.codec_type === "video"
   );
   const audioStream = probe.streams.find(
-    (stream: any) => stream.codec_type === "audio",
+    (stream: any) => stream.codec_type === "audio"
   );
   const [fpsNumerator, fpsDenominator] = String(
-    videoStream?.r_frame_rate || "0/1",
+    videoStream?.r_frame_rate || "0/1"
   )
     .split("/")
     .map(Number);
@@ -680,7 +689,7 @@ async function getBestAvailableHeight(youtubeId: string): Promise<number> {
       "%(height)s",
       `https://www.youtube.com/watch?v=${youtubeId}`,
     ],
-    true,
+    true
   );
   const heights = output
     .trim()
@@ -733,7 +742,7 @@ function formatVttTime(seconds: number): string {
 async function ensureImageVariant(
   inputPath: string,
   outputPath: string,
-  filter: string,
+  filter: string
 ) {
   if (existsSync(outputPath)) {
     return;
@@ -759,19 +768,21 @@ async function ensureImageVariant(
 async function ensureStoryboard(video: any, videoId: number) {
   const sourcePath = join(process.cwd(), video.filePath);
   const baseName = slugify(video.fileName.replace(/\.[^.]+$/, ""));
-  const relativeSpritePath = `demo_mode/storyboard/${baseName}_sprite.jpg`;
-  const relativeVttPath = `demo_mode/storyboard/${baseName}.vtt`;
-  const spritePath = join(process.cwd(), relativeSpritePath);
-  const vttPath = join(process.cwd(), relativeVttPath);
+  const relativeSpritePath = storedDemoPath(
+    "storyboard",
+    `${baseName}_sprite.jpg`
+  );
+  const relativeVttPath = storedDemoPath("storyboard", `${baseName}.vtt`);
+  const spritePath = resolve(process.cwd(), relativeSpritePath);
+  const vttPath = resolve(process.cwd(), relativeVttPath);
   const temporarySpritePath = join(
-    process.cwd(),
-    "demo_mode",
+    DEMO_ROOT,
     ".downloads",
-    `${baseName}_sprite.jpg`,
+    `${baseName}_sprite.jpg`
   );
   const intervalSeconds = Math.max(
     5,
-    Math.ceil(Number(video.durationSeconds) / 40),
+    Math.ceil(Number(video.durationSeconds) / 40)
   );
   const tileCount = Math.ceil(Number(video.durationSeconds) / intervalSeconds);
   const cols = 8;
@@ -806,7 +817,7 @@ async function ensureStoryboard(video: any, videoId: number) {
       const startTime = index * intervalSeconds;
       const endTime = Math.min(
         (index + 1) * intervalSeconds,
-        Number(video.durationSeconds),
+        Number(video.durationSeconds)
       );
       const x = (index % cols) * tileWidth;
       const y = Math.floor(index / cols) * tileHeight;
@@ -835,7 +846,7 @@ function addChildTagsToVideo(video: any) {
   if (has("Concert")) additions.add("Intimate Concert");
   if (
     video.studios.some((studio: string) =>
-      ["NPR Music", "Tiny Desk Brasil"].includes(studio),
+      ["NPR Music", "Tiny Desk Brasil"].includes(studio)
     )
   ) {
     additions.add("Tiny Desk");
@@ -848,9 +859,7 @@ function addChildTagsToVideo(video: any) {
   if (has("Trailer")) additions.add("Official Trailer");
   if (has("Horror")) {
     additions.add(
-      video.title.includes("Substance")
-        ? "Body Horror"
-        : "Psychological Horror",
+      video.title.includes("Substance") ? "Body Horror" : "Psychological Horror"
     );
   }
   if (has("Gaming")) additions.add("Game Cinematic");
@@ -867,7 +876,7 @@ function addChildTagsToVideo(video: any) {
 }
 
 async function main() {
-  const demoRoot = join(process.cwd(), "demo_mode");
+  const demoRoot = DEMO_ROOT;
   const videoDir = join(demoRoot, "video");
   const thumbnailDir = join(demoRoot, "thumbnail");
   const downloadDir = join(demoRoot, ".downloads");
@@ -875,7 +884,6 @@ async function main() {
   const creatorGalleryDir = join(creatorDir, "gallery");
   const studioDir = join(demoRoot, "studio");
   const storyboardDir = join(demoRoot, "storyboard");
-  const jsonPath = join(demoRoot, "demo_mode.json");
   await mkdir(videoDir, { recursive: true });
   await mkdir(thumbnailDir, { recursive: true });
   await mkdir(downloadDir, { recursive: true });
@@ -883,7 +891,15 @@ async function main() {
   await mkdir(studioDir, { recursive: true });
   await mkdir(storyboardDir, { recursive: true });
 
-  const data = JSON.parse(await readFile(jsonPath, "utf8"));
+  const {
+    createDemoBaselineSnapshot,
+    exportDemoSeedDocument,
+    hasDemoSeed,
+    importDemoSeedDocument,
+  } = await import("@/database/demo");
+  const data = hasDemoSeed()
+    ? exportDemoSeedDocument()
+    : { tags: [], studios: [], creators: [], videos: [] };
   for (const [name, description, color] of EXTRA_TAGS) {
     if (!data.tags.some((tag: any) => tag.name === name)) {
       data.tags.push({ name, parentName: null, description, color });
@@ -910,15 +926,45 @@ async function main() {
     }
   }
 
+  for (const entry of DOWNLOADS) {
+    for (const tag of entry.tags) {
+      if (!data.tags.some((candidate: any) => candidate.name === tag)) {
+        data.tags.push({
+          name: tag,
+          parentName: null,
+          description: `Demo ${tag.toLowerCase()} content.`,
+          color: null,
+        });
+      }
+    }
+    for (const studio of entry.studios) {
+      if (!data.studios.some((candidate: any) => candidate.name === studio)) {
+        data.studios.push({
+          name: studio,
+          description: `Demo studio fixture for ${studio}.`,
+          profilePicturePath: null,
+          socialLinks: [],
+        });
+      }
+    }
+    for (const creator of entry.creators) {
+      if (!data.creators.some((candidate: any) => candidate.name === creator)) {
+        data.creators.push(
+          createCreator(creator, `Demo creator fixture for ${creator}.`)
+        );
+      }
+    }
+  }
+
   for (const [index, entry] of DOWNLOADS.entries()) {
-    const relativeVideoPath = `demo_mode/video/${entry.id}.webm`;
-    const videoPath = join(process.cwd(), relativeVideoPath);
+    const relativeVideoPath = storedDemoPath("video", `${entry.id}.webm`);
+    const videoPath = resolve(process.cwd(), relativeVideoPath);
     const downloadedThumbnailPath = join(videoDir, `${entry.id}.jpg`);
     const thumbnailPath = join(thumbnailDir, `${entry.id}.jpg`);
     const temporaryVideoPath = join(downloadDir, `${entry.id}.webm`);
     const temporaryThumbnailPath = join(downloadDir, `${entry.id}.jpg`);
     const existingVideo = (data.videos || []).find(
-      (video: any) => video.filePath === relativeVideoPath,
+      (video: any) => video.filePath === relativeVideoPath
     );
     let currentProbe = existsSync(videoPath)
       ? await probeVideo(videoPath)
@@ -951,7 +997,7 @@ async function main() {
           "-f",
           HD_FORMAT,
           "-o",
-          `demo_mode/.downloads/${entry.id}.%(ext)s`,
+          join(downloadDir, `${entry.id}.%(ext)s`),
           `https://www.youtube.com/watch?v=${entry.id}`,
         ]);
       } catch (error) {
@@ -970,13 +1016,13 @@ async function main() {
               "--merge-output-format",
               "webm",
               "-o",
-              `demo_mode/.downloads/${entry.id}.%(ext)s`,
+              join(downloadDir, `${entry.id}.%(ext)s`),
               `https://www.youtube.com/watch?v=${entry.id}`,
             ]);
           } catch (fallbackError) {
             console.warn(
               `Could not download or upgrade ${entry.id}`,
-              fallbackError,
+              fallbackError
             );
           }
         }
@@ -1012,7 +1058,7 @@ async function main() {
       .digest("hex");
     const thumbnail = existsSync(thumbnailPath)
       ? {
-          filePath: `demo_mode/thumbnail/${entry.id}.jpg`,
+          filePath: storedDemoPath("thumbnail", `${entry.id}.jpg`),
           timestampSeconds: Math.max(1, probe.durationSeconds * 0.25),
           width: 480,
           height: 360,
@@ -1085,20 +1131,26 @@ async function main() {
     const spritePath = join(process.cwd(), linkedVideo.storyboard.spritePath);
 
     if (!creator.profilePicturePath) {
-      creator.profilePicturePath = `demo_mode/creator/${creatorSlug}_profile.jpg`;
+      creator.profilePicturePath = storedDemoPath(
+        "creator",
+        `${creatorSlug}_profile.jpg`
+      );
       await ensureImageVariant(
         thumbnailPath,
         join(process.cwd(), creator.profilePicturePath),
-        "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+        "scale=512:512:force_original_aspect_ratio=increase,crop=512:512"
       );
     }
 
     if (!creator.mainPicturePath) {
-      creator.mainPicturePath = `demo_mode/creator/${creatorSlug}_main.jpg`;
+      creator.mainPicturePath = storedDemoPath(
+        "creator",
+        `${creatorSlug}_main.jpg`
+      );
       await ensureImageVariant(
         thumbnailPath,
         join(process.cwd(), creator.mainPicturePath),
-        "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
+        "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"
       );
     }
 
@@ -1125,7 +1177,7 @@ async function main() {
         {
           platformName: "Wikipedia",
           url: wikipediaSearchUrl(creator.name),
-        },
+        }
       );
     }
 
@@ -1136,15 +1188,19 @@ async function main() {
     ) {
       const tileIndex = Math.min(
         linkedVideo.storyboard.tileCount - 1,
-        5 + galleryIndex * 9,
+        5 + galleryIndex * 9
       );
       const x = (tileIndex % 8) * linkedVideo.storyboard.tileWidth;
       const y = Math.floor(tileIndex / 8) * linkedVideo.storyboard.tileHeight;
-      const galleryPath = `demo_mode/creator/gallery/${creatorSlug}_gallery_${galleryIndex + 1}.jpg`;
+      const galleryPath = storedDemoPath(
+        "creator",
+        "gallery",
+        `${creatorSlug}_gallery_${galleryIndex + 1}.jpg`
+      );
       await ensureImageVariant(
         spritePath,
         join(process.cwd(), galleryPath),
-        `crop=${linkedVideo.storyboard.tileWidth}:${linkedVideo.storyboard.tileHeight}:${x}:${y},scale=960:540:force_original_aspect_ratio=decrease,pad=960:540:(ow-iw)/2:(oh-ih)/2`,
+        `crop=${linkedVideo.storyboard.tileWidth}:${linkedVideo.storyboard.tileHeight}:${x}:${y},scale=960:540:force_original_aspect_ratio=decrease,pad=960:540:(ow-iw)/2:(oh-ih)/2`
       );
       creator.galleryMedia.push({
         label: `Demo still ${galleryIndex + 1}`,
@@ -1162,11 +1218,11 @@ async function main() {
     const thumbnailPath = join(process.cwd(), linkedVideo.thumbnail.filePath);
 
     if (!studio.profilePicturePath) {
-      studio.profilePicturePath = `demo_mode/studio/${studioSlug}.jpg`;
+      studio.profilePicturePath = storedDemoPath("studio", `${studioSlug}.jpg`);
       await ensureImageVariant(
         thumbnailPath,
         join(process.cwd(), studio.profilePicturePath),
-        "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+        "scale=512:512:force_original_aspect_ratio=increase,crop=512:512"
       );
     }
 
@@ -1180,14 +1236,18 @@ async function main() {
         {
           platformName: "Wikipedia",
           url: wikipediaSearchUrl(studio.name),
-        },
+        }
       );
     }
   }
 
-  await writeFile(jsonPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  importDemoSeedDocument(data, {
+    reset: true,
+    source: "scripts/download-demo-media.ts",
+  });
+  const baselinePath = createDemoBaselineSnapshot();
   console.log(
-    `Demo library now contains ${data.videos.length} videos, ${data.creators.length} creators, ${data.studios.length} studios, and ${data.tags.length} tags.`,
+    `Demo library now contains ${data.videos.length} videos, ${data.creators.length} creators, ${data.studios.length} studios, and ${data.tags.length} tags. Baseline refreshed at ${baselinePath}.`
   );
 }
 

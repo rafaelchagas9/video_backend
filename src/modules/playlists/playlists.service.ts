@@ -10,12 +10,12 @@ import type {
 } from "./playlists.types";
 import { videosService } from "@/modules/videos/videos.service";
 import { env } from "@/config/env";
+import { playlistsDemoService } from "./playlists.demo.service";
 
 export class PlaylistsService {
   async create(userId: number, input: CreatePlaylistInput): Promise<Playlist> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.createPlaylist(userId, input);
+      return playlistsDemoService.create(userId, input);
     }
 
     const result = await db
@@ -36,8 +36,7 @@ export class PlaylistsService {
 
   async findById(id: number): Promise<Playlist> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getPlaylistById(id);
+      return playlistsDemoService.findById(id);
     }
 
     const playlists = await db
@@ -65,8 +64,7 @@ export class PlaylistsService {
 
   async list(userId: number): Promise<Playlist[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.listPlaylists(userId);
+      return playlistsDemoService.list(userId);
     }
 
     // Use raw SQL for complex subquery
@@ -106,11 +104,10 @@ export class PlaylistsService {
   async update(
     id: number,
     userId: number,
-    input: UpdatePlaylistInput,
+    input: UpdatePlaylistInput
   ): Promise<Playlist> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.updatePlaylist(id, userId, input);
+      return playlistsDemoService.update(id, userId, input);
     }
 
     const playlist = await this.findById(id);
@@ -118,7 +115,7 @@ export class PlaylistsService {
     // Verify ownership
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to update this playlist",
+        "You do not have permission to update this playlist"
       );
     }
 
@@ -148,8 +145,7 @@ export class PlaylistsService {
 
   async delete(id: number, userId: number): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      demoMockService.deletePlaylist(id, userId);
+      playlistsDemoService.delete(id, userId);
       return;
     }
 
@@ -158,7 +154,7 @@ export class PlaylistsService {
     // Verify ownership
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to delete this playlist",
+        "You do not have permission to delete this playlist"
       );
     }
 
@@ -169,11 +165,10 @@ export class PlaylistsService {
     playlistId: number,
     userId: number,
     videoId: number,
-    position?: number,
+    position?: number
   ): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      await demoMockService.addVideoToPlaylist(playlistId, userId, videoId);
+      playlistsDemoService.addVideo(playlistId, userId, videoId, position);
       return;
     }
 
@@ -182,7 +177,7 @@ export class PlaylistsService {
     // Verify ownership
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to modify this playlist",
+        "You do not have permission to modify this playlist"
       );
     }
 
@@ -196,8 +191,8 @@ export class PlaylistsService {
       .where(
         and(
           eq(playlistVideosTable.playlistId, playlistId),
-          eq(playlistVideosTable.videoId, videoId),
-        ),
+          eq(playlistVideosTable.videoId, videoId)
+        )
       )
       .limit(1);
 
@@ -228,11 +223,10 @@ export class PlaylistsService {
   async removeVideo(
     playlistId: number,
     userId: number,
-    videoId: number,
+    videoId: number
   ): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      demoMockService.removeVideoFromPlaylist(playlistId, userId, videoId);
+      playlistsDemoService.removeVideo(playlistId, userId, videoId);
       return;
     }
 
@@ -241,7 +235,7 @@ export class PlaylistsService {
     // Verify ownership
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to modify this playlist",
+        "You do not have permission to modify this playlist"
       );
     }
 
@@ -250,8 +244,8 @@ export class PlaylistsService {
       .where(
         and(
           eq(playlistVideosTable.playlistId, playlistId),
-          eq(playlistVideosTable.videoId, videoId),
-        ),
+          eq(playlistVideosTable.videoId, videoId)
+        )
       );
 
     // Drizzle doesn't return rowCount, so we'll just proceed
@@ -260,8 +254,7 @@ export class PlaylistsService {
 
   async getVideos(playlistId: number, userId: number) {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getPlaylistVideos(playlistId, userId);
+      return playlistsDemoService.getVideos(playlistId, userId);
     }
 
     const playlist = await this.findById(playlistId);
@@ -269,7 +262,7 @@ export class PlaylistsService {
     // Verify ownership
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to view this playlist",
+        "You do not have permission to view this playlist"
       );
     }
 
@@ -303,11 +296,10 @@ export class PlaylistsService {
   async reorderVideos(
     playlistId: number,
     userId: number,
-    positions: { video_id: number; position: number }[],
+    positions: { video_id: number; position: number }[]
   ): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      demoMockService.reorderPlaylistVideos(playlistId, userId, positions);
+      playlistsDemoService.reorderVideos(playlistId, userId, positions);
       return;
     }
 
@@ -316,7 +308,7 @@ export class PlaylistsService {
     // Verify ownership
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to modify this playlist",
+        "You do not have permission to modify this playlist"
       );
     }
 
@@ -342,11 +334,10 @@ export class PlaylistsService {
   async bulkUpdateVideos(
     playlistId: number,
     userId: number,
-    input: { videoIds: number[]; action: "add" | "remove" },
+    input: { videoIds: number[]; action: "add" | "remove" }
   ): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      demoMockService.bulkUpdatePlaylistVideos(playlistId, userId, input);
+      playlistsDemoService.bulkUpdateVideos(playlistId, userId, input);
       return;
     }
 
@@ -356,7 +347,7 @@ export class PlaylistsService {
     const playlist = await this.findById(playlistId);
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
-        "You do not have permission to modify this playlist",
+        "You do not have permission to modify this playlist"
       );
     }
 
@@ -377,8 +368,8 @@ export class PlaylistsService {
         .where(
           and(
             eq(playlistVideosTable.playlistId, playlistId),
-            inArray(playlistVideosTable.videoId, videoIds),
-          ),
+            inArray(playlistVideosTable.videoId, videoIds)
+          )
         );
 
       const existingIds = new Set(existingRows.map((r) => r.videoId));
@@ -403,8 +394,8 @@ export class PlaylistsService {
         .where(
           and(
             eq(playlistVideosTable.playlistId, playlistId),
-            inArray(playlistVideosTable.videoId, videoIds),
-          ),
+            inArray(playlistVideosTable.videoId, videoIds)
+          )
         );
     }
   }
@@ -423,7 +414,8 @@ export class PlaylistsService {
         playlist.updatedAt instanceof Date
           ? playlist.updatedAt.toISOString()
           : playlist.updated_at,
-      video_count: playlist.video_count !== undefined ? Number(playlist.video_count) : 0,
+      video_count:
+        playlist.video_count !== undefined ? Number(playlist.video_count) : 0,
     };
   }
 }

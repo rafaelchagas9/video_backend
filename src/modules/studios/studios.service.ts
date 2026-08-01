@@ -2,7 +2,11 @@ import { eq, sql, like, desc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { studiosTable } from "@/database/schema";
-import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+} from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { existsSync, unlinkSync } from "fs";
 import type {
@@ -12,6 +16,7 @@ import type {
   ListStudiosOptions,
   PaginatedStudios,
 } from "./studios.types";
+import { studiosDemoService } from "./studios.demo.service";
 
 export class StudiosService {
   // Basic CRUD Operations
@@ -48,7 +53,7 @@ export class StudiosService {
           break;
         case "linked":
           whereConditions.push(
-            sql`(COALESCE(vc.video_count, 0) = 0 AND COALESCE(cc.creator_count, 0) = 0)`,
+            sql`(COALESCE(vc.video_count, 0) = 0 AND COALESCE(cc.creator_count, 0) = 0)`
           );
           break;
         case "any":
@@ -216,8 +221,7 @@ export class StudiosService {
 
   async findById(id: number): Promise<Studio> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getStudioById(id);
+      return studiosDemoService.findById(id);
     }
     const studio = await db
       .select()
@@ -235,14 +239,7 @@ export class StudiosService {
 
   async create(input: CreateStudioInput): Promise<Studio> {
     if (env.DEMO_MODE) {
-      return {
-        id: 9999,
-        name: input.name,
-        description: input.description || null,
-        profile_picture_path: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      return studiosDemoService.create(input);
     }
 
     try {
@@ -264,7 +261,7 @@ export class StudiosService {
       if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError(
-          `Studio with name "${input.name}" already exists`,
+          `Studio with name "${input.name}" already exists`
         );
       }
       throw error;
@@ -273,12 +270,7 @@ export class StudiosService {
 
   async update(id: number, input: UpdateStudioInput): Promise<Studio> {
     if (env.DEMO_MODE) {
-      const studio = await this.findById(id);
-      return {
-        ...studio,
-        name: input.name !== undefined ? input.name : studio.name,
-        description: input.description !== undefined ? input.description : studio.description,
-      };
+      return studiosDemoService.update(id, input);
     }
 
     await this.findById(id); // Ensure exists
@@ -307,7 +299,7 @@ export class StudiosService {
       if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
         throw new ConflictError(
-          `Studio with name "${input.name}" already exists`,
+          `Studio with name "${input.name}" already exists`
         );
       }
       throw error;
@@ -316,6 +308,7 @@ export class StudiosService {
 
   async delete(id: number): Promise<void> {
     if (env.DEMO_MODE) {
+      studiosDemoService.delete(id);
       return;
     }
 
@@ -330,7 +323,7 @@ export class StudiosService {
       } catch (error) {
         logger.warn(
           { error, path: studio.profile_picture_path },
-          "Failed to delete studio profile picture file",
+          "Failed to delete studio profile picture file"
         );
         // Continue with database deletion even if file deletion fails
       }
@@ -339,9 +332,8 @@ export class StudiosService {
     await db.delete(studiosTable).where(eq(studiosTable.id, id));
 
     // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
-    const { enrichmentService } = await import(
-      "@/modules/enrichment/enrichment.service"
-    );
+    const { enrichmentService } =
+      await import("@/modules/enrichment/enrichment.service");
     await enrichmentService.deleteForEntity("studio", id);
   }
 

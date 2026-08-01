@@ -15,6 +15,14 @@ import {
 import { logger } from "@/utils/logger";
 import type { ListVideosOptions } from "./videos.types";
 import { buildVideoFilters } from "./videos.query-builder";
+import { env } from "@/config/env";
+import { videosDemoService } from "./videos.demo.service";
+import {
+  demoRepository,
+  demoSchema,
+  getDemoDatabase,
+  withDemoTransaction,
+} from "@/database/demo";
 
 /**
  * Service for bulk video operations
@@ -27,6 +35,10 @@ export class VideosBulkService {
    */
   async bulkDelete(ids: number[]): Promise<void> {
     if (ids.length === 0) return;
+    if (env.DEMO_MODE) {
+      for (const id of ids) videosDemoService.delete(id);
+      return;
+    }
 
     try {
       // 1. Fetch source file paths for the videos being deleted
@@ -45,7 +57,10 @@ export class VideosBulkService {
           try {
             fs.unlinkSync(video.filePath);
           } catch (error) {
-            logger.warn({ error, path: video.filePath }, "Failed to delete video file in bulk operation");
+            logger.warn(
+              { error, path: video.filePath },
+              "Failed to delete video file in bulk operation"
+            );
           }
         }
       }
@@ -68,32 +83,34 @@ export class VideosBulkService {
    */
   async deleteVideoArtifactFiles(videoIds: number[]): Promise<void> {
     if (videoIds.length === 0) return;
+    if (env.DEMO_MODE) return;
 
-    const [thumbnails, storyboards, faceImages, artworkAssets] = await Promise.all([
-      db
-        .select({ filePath: thumbnailsTable.filePath })
-        .from(thumbnailsTable)
-        .where(inArray(thumbnailsTable.videoId, videoIds)),
-      db
-        .select({
-          spritePath: storyboardsTable.spritePath,
-          vttPath: storyboardsTable.vttPath,
-        })
-        .from(storyboardsTable)
-        .where(inArray(storyboardsTable.videoId, videoIds)),
-      db
-        .select({ filePath: faceImagesTable.filePath })
-        .from(faceImagesTable)
-        .innerJoin(
-          videoFaceDetectionsTable,
-          eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id),
-        )
-        .where(inArray(videoFaceDetectionsTable.videoId, videoIds)),
-      db
-        .select({ filePath: artworkAssetsTable.filePath })
-        .from(artworkAssetsTable)
-        .where(inArray(artworkAssetsTable.videoId, videoIds)),
-    ]);
+    const [thumbnails, storyboards, faceImages, artworkAssets] =
+      await Promise.all([
+        db
+          .select({ filePath: thumbnailsTable.filePath })
+          .from(thumbnailsTable)
+          .where(inArray(thumbnailsTable.videoId, videoIds)),
+        db
+          .select({
+            spritePath: storyboardsTable.spritePath,
+            vttPath: storyboardsTable.vttPath,
+          })
+          .from(storyboardsTable)
+          .where(inArray(storyboardsTable.videoId, videoIds)),
+        db
+          .select({ filePath: faceImagesTable.filePath })
+          .from(faceImagesTable)
+          .innerJoin(
+            videoFaceDetectionsTable,
+            eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id)
+          )
+          .where(inArray(videoFaceDetectionsTable.videoId, videoIds)),
+        db
+          .select({ filePath: artworkAssetsTable.filePath })
+          .from(artworkAssetsTable)
+          .where(inArray(artworkAssetsTable.videoId, videoIds)),
+      ]);
 
     const paths: string[] = [];
     for (const thumbnail of thumbnails) {
@@ -132,6 +149,15 @@ export class VideosBulkService {
   }): Promise<void> {
     const { videoIds, creatorIds, action } = input;
     if (videoIds.length === 0 || creatorIds.length === 0) return;
+    if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships(
+        videoIds,
+        "creators",
+        creatorIds,
+        action
+      );
+      return;
+    }
 
     await db.transaction(async (tx) => {
       if (action === "add") {
@@ -140,7 +166,7 @@ export class VideosBulkService {
           creatorIds.map((creatorId) => ({
             videoId,
             creatorId,
-          })),
+          }))
         );
 
         // Bulk insert with conflict handling
@@ -155,8 +181,8 @@ export class VideosBulkService {
           .where(
             and(
               inArray(videoCreatorsTable.videoId, videoIds),
-              inArray(videoCreatorsTable.creatorId, creatorIds),
-            ),
+              inArray(videoCreatorsTable.creatorId, creatorIds)
+            )
           );
       }
     });
@@ -172,6 +198,10 @@ export class VideosBulkService {
   }): Promise<void> {
     const { videoIds, tagIds, action } = input;
     if (videoIds.length === 0 || tagIds.length === 0) return;
+    if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships(videoIds, "tags", tagIds, action);
+      return;
+    }
 
     await db.transaction(async (tx) => {
       if (action === "add") {
@@ -180,7 +210,7 @@ export class VideosBulkService {
           tagIds.map((tagId) => ({
             videoId,
             tagId,
-          })),
+          }))
         );
 
         // Bulk insert with conflict handling
@@ -192,8 +222,8 @@ export class VideosBulkService {
           .where(
             and(
               inArray(videoTagsTable.videoId, videoIds),
-              inArray(videoTagsTable.tagId, tagIds),
-            ),
+              inArray(videoTagsTable.tagId, tagIds)
+            )
           );
       }
     });
@@ -209,6 +239,15 @@ export class VideosBulkService {
   }): Promise<void> {
     const { videoIds, studioIds, action } = input;
     if (videoIds.length === 0 || studioIds.length === 0) return;
+    if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships(
+        videoIds,
+        "studios",
+        studioIds,
+        action
+      );
+      return;
+    }
 
     await db.transaction(async (tx) => {
       if (action === "add") {
@@ -217,7 +256,7 @@ export class VideosBulkService {
           studioIds.map((studioId) => ({
             videoId,
             studioId,
-          })),
+          }))
         );
 
         // Bulk insert with conflict handling
@@ -229,8 +268,8 @@ export class VideosBulkService {
           .where(
             and(
               inArray(videoStudiosTable.videoId, videoIds),
-              inArray(videoStudiosTable.studioId, studioIds),
-            ),
+              inArray(videoStudiosTable.studioId, studioIds)
+            )
           );
       }
     });
@@ -241,10 +280,18 @@ export class VideosBulkService {
    */
   async bulkUpdateFavorites(
     userId: number,
-    input: { videoIds: number[]; isFavorite: boolean },
+    input: { videoIds: number[]; isFavorite: boolean }
   ): Promise<void> {
     const { videoIds, isFavorite } = input;
     if (videoIds.length === 0) return;
+    if (env.DEMO_MODE) {
+      videosDemoService.bulkUpdateFavorites(
+        userId,
+        videoIds,
+        isFavorite ? "add" : "remove"
+      );
+      return;
+    }
 
     await db.transaction(async (tx) => {
       if (isFavorite) {
@@ -262,8 +309,8 @@ export class VideosBulkService {
           .where(
             and(
               eq(favoritesTable.userId, userId),
-              inArray(favoritesTable.videoId, videoIds),
-            ),
+              inArray(favoritesTable.videoId, videoIds)
+            )
           );
       }
     });
@@ -286,6 +333,7 @@ export class VideosBulkService {
       }>;
     }[]
   > {
+    if (env.DEMO_MODE) return videosDemoService.getDuplicates();
     // Find all file_hash values that appear more than once
     const duplicateHashes = await db
       .select({
@@ -295,7 +343,7 @@ export class VideosBulkService {
       })
       .from(videosTable)
       .where(
-        sql`${videosTable.fileHash} IS NOT NULL AND ${videosTable.fileHash} != ''`,
+        sql`${videosTable.fileHash} IS NOT NULL AND ${videosTable.fileHash} != ''`
       )
       .groupBy(videosTable.fileHash)
       .having(sql`COUNT(*) > 1`)
@@ -358,7 +406,7 @@ export class VideosBulkService {
       removeTagIds?: number[];
       addStudioIds?: number[];
       removeStudioIds?: number[];
-    },
+    }
   ): Promise<{
     matched: number;
     affected: number;
@@ -372,6 +420,46 @@ export class VideosBulkService {
       studios_removed: number;
     };
   }> {
+    if (env.DEMO_MODE) {
+      const videoIds = demoRepository
+        .getVideos({ ...filter, limit: 10_000 })
+        .data.map((video: { id: number }) => video.id);
+      const counts = {
+        creators_added: 0,
+        creators_removed: 0,
+        tags_added: 0,
+        tags_removed: 0,
+        studios_added: 0,
+        studios_removed: 0,
+      };
+      const apply = (
+        kind: "creators" | "tags" | "studios",
+        ids: number[] | undefined,
+        action: "add" | "remove"
+      ) => {
+        if (!ids?.length || !videoIds.length) return;
+        const before = this.countDemoRelationships(kind, videoIds, ids);
+        videosDemoService.updateRelationships(videoIds, kind, ids, action);
+        const after = this.countDemoRelationships(kind, videoIds, ids);
+        const key =
+          `${kind}_${action === "add" ? "added" : "removed"}` as keyof typeof counts;
+        counts[key] = Math.abs(after - before);
+      };
+      withDemoTransaction(() => {
+        apply("creators", actions.addCreatorIds, "add");
+        apply("creators", actions.removeCreatorIds, "remove");
+        apply("tags", actions.addTagIds, "add");
+        apply("tags", actions.removeTagIds, "remove");
+        apply("studios", actions.addStudioIds, "add");
+        apply("studios", actions.removeStudioIds, "remove");
+      });
+      return {
+        matched: videoIds.length,
+        affected: videoIds.length,
+        errors: 0,
+        details: counts,
+      };
+    }
     // Build filter conditions
     const { conditions } = buildVideoFilters(userId, filter);
 
@@ -416,7 +504,7 @@ export class VideosBulkService {
             actions.addCreatorIds!.map((creatorId) => ({
               videoId,
               creatorId,
-            })),
+            }))
           );
 
           const result = await tx
@@ -435,8 +523,8 @@ export class VideosBulkService {
             .where(
               and(
                 inArray(videoCreatorsTable.videoId, videoIds),
-                inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds),
-              ),
+                inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds)
+              )
             )
             .returning({ videoId: videoCreatorsTable.videoId });
 
@@ -449,7 +537,7 @@ export class VideosBulkService {
             actions.addTagIds!.map((tagId) => ({
               videoId,
               tagId,
-            })),
+            }))
           );
 
           const result = await tx
@@ -468,8 +556,8 @@ export class VideosBulkService {
             .where(
               and(
                 inArray(videoTagsTable.videoId, videoIds),
-                inArray(videoTagsTable.tagId, actions.removeTagIds),
-              ),
+                inArray(videoTagsTable.tagId, actions.removeTagIds)
+              )
             )
             .returning({ videoId: videoTagsTable.videoId });
 
@@ -482,7 +570,7 @@ export class VideosBulkService {
             actions.addStudioIds!.map((studioId) => ({
               videoId,
               studioId,
-            })),
+            }))
           );
 
           const result = await tx
@@ -501,8 +589,8 @@ export class VideosBulkService {
             .where(
               and(
                 inArray(videoStudiosTable.videoId, videoIds),
-                inArray(videoStudiosTable.studioId, actions.removeStudioIds),
-              ),
+                inArray(videoStudiosTable.studioId, actions.removeStudioIds)
+              )
             )
             .returning({ videoId: videoStudiosTable.videoId });
 
@@ -528,6 +616,45 @@ export class VideosBulkService {
         studios_removed: studiosRemoved,
       },
     };
+  }
+
+  private countDemoRelationships(
+    kind: "creators" | "tags" | "studios",
+    videoIds: number[],
+    targetIds: number[]
+  ): number {
+    if (kind === "creators")
+      return getDemoDatabase()
+        .select()
+        .from(demoSchema.demoVideoCreatorsTable)
+        .where(
+          and(
+            inArray(demoSchema.demoVideoCreatorsTable.videoId, videoIds),
+            inArray(demoSchema.demoVideoCreatorsTable.creatorId, targetIds)
+          )
+        )
+        .all().length;
+    if (kind === "tags")
+      return getDemoDatabase()
+        .select()
+        .from(demoSchema.demoVideoTagsTable)
+        .where(
+          and(
+            inArray(demoSchema.demoVideoTagsTable.videoId, videoIds),
+            inArray(demoSchema.demoVideoTagsTable.tagId, targetIds)
+          )
+        )
+        .all().length;
+    return getDemoDatabase()
+      .select()
+      .from(demoSchema.demoVideoStudiosTable)
+      .where(
+        and(
+          inArray(demoSchema.demoVideoStudiosTable.videoId, videoIds),
+          inArray(demoSchema.demoVideoStudiosTable.studioId, targetIds)
+        )
+      )
+      .all().length;
   }
 }
 

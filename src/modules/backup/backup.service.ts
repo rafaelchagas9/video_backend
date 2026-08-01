@@ -17,6 +17,7 @@ import { env } from "@/config/env";
 import { NotFoundError, ValidationError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import type { BackupInfo, ExportData } from "./backup.types";
+import { backupDemoService } from "./backup.demo.service";
 
 const BACKUP_DIR = resolve(process.cwd(), "./data/backups");
 
@@ -34,6 +35,7 @@ export class BackupService {
    * Create a new database backup using pg_dump
    */
   async createBackup(): Promise<BackupInfo> {
+    if (env.DEMO_MODE) return backupDemoService.createBackup();
     this.ensureBackupDir();
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -53,7 +55,7 @@ export class BackupService {
 
       logger.info(
         { filename, sizeBytes: stats.size },
-        "Database backup created",
+        "Database backup created"
       );
 
       return {
@@ -65,7 +67,7 @@ export class BackupService {
     } catch (error) {
       logger.error({ error }, "Failed to create backup");
       throw new ValidationError(
-        "Failed to create database backup. Ensure pg_dump is available.",
+        "Failed to create database backup. Ensure pg_dump is available."
       );
     }
   }
@@ -74,10 +76,11 @@ export class BackupService {
    * List all available backups
    */
   listBackups(): BackupInfo[] {
+    if (env.DEMO_MODE) return backupDemoService.listBackups();
     this.ensureBackupDir();
 
     const files = readdirSync(BACKUP_DIR).filter(
-      (f) => f.endsWith(".sql") || f.endsWith(".db"),
+      (f) => f.endsWith(".sql") || f.endsWith(".db")
     );
 
     return files
@@ -94,7 +97,7 @@ export class BackupService {
       })
       .sort(
         (a, b) =>
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
   }
 
@@ -102,6 +105,7 @@ export class BackupService {
    * Restore from a backup file using psql
    */
   async restoreBackup(filename: string): Promise<void> {
+    if (env.DEMO_MODE) return backupDemoService.restoreBackup(filename);
     const backupPath = join(BACKUP_DIR, filename);
 
     if (!existsSync(backupPath)) {
@@ -121,7 +125,7 @@ export class BackupService {
     } catch (error) {
       logger.error({ error, filename }, "Failed to restore backup");
       throw new ValidationError(
-        "Failed to restore database from backup. Ensure psql is available.",
+        "Failed to restore database from backup. Ensure psql is available."
       );
     }
   }
@@ -130,6 +134,7 @@ export class BackupService {
    * Delete a backup file
    */
   deleteBackup(filename: string): void {
+    if (env.DEMO_MODE) return backupDemoService.deleteBackup(filename);
     const backupPath = join(BACKUP_DIR, filename);
 
     if (!existsSync(backupPath)) {
@@ -144,6 +149,7 @@ export class BackupService {
    * Export entire database as JSON
    */
   async exportToJson(): Promise<ExportData> {
+    if (env.DEMO_MODE) return backupDemoService.exportToJson();
     // Use Drizzle to export data
     const [
       users,

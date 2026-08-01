@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "fs/promises";
-import { join, relative } from "path";
+import { mkdir, rm, stat, writeFile } from "fs/promises";
+import { join, relative, resolve } from "path";
 import sharp from "sharp";
 import {
   calculateArtworkCrop,
@@ -15,9 +15,13 @@ import type {
   NormalizedPoint,
   NormalizedRect,
 } from "../src/modules/artwork/artwork.types";
+import { commitStagedDemoArtwork } from "./demo-artwork-commit";
 
-const OUTPUT_ROOT = join(process.cwd(), "demo_mode", "artwork");
-const MANIFEST_PATH = join(OUTPUT_ROOT, "manifest.json");
+const DEMO_ROOT = resolve(
+  process.cwd(),
+  process.env.DEMO_ASSETS_DIR || "./demo_mode"
+);
+const OUTPUT_ROOT = join(DEMO_ROOT, "artwork");
 const GENERATED_AT = "2026-07-31T00:00:00.000Z";
 const FOCAL_POINT: NormalizedPoint = { x: 0.5, y: 0.42 };
 
@@ -63,13 +67,13 @@ interface ManifestEntry {
 
 function scrimSvg(width: number, height: number): Buffer {
   return Buffer.from(
-    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="52%" stop-color="#000" stop-opacity="0"/><stop offset="78%" stop-color="#000" stop-opacity="0.18"/><stop offset="100%" stop-color="#000" stop-opacity="0.58"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/></svg>`,
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="52%" stop-color="#000" stop-opacity="0"/><stop offset="78%" stop-color="#000" stop-opacity="0.18"/><stop offset="100%" stop-color="#000" stop-opacity="0.58"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/></svg>`
   );
 }
 
 function vignetteSvg(width: number, height: number): Buffer {
   return Buffer.from(
-    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="v"><stop offset="68%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.22"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#v)"/></svg>`,
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="v"><stop offset="68%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.22"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#v)"/></svg>`
   );
 }
 
@@ -94,7 +98,10 @@ function grainLayer(width: number, height: number, seed: string) {
   };
 }
 
-function mapPointToCrop(point: NormalizedPoint, crop: NormalizedRect): NormalizedPoint {
+function mapPointToCrop(
+  point: NormalizedPoint,
+  crop: NormalizedRect
+): NormalizedPoint {
   return {
     x: Math.min(1, Math.max(0, (point.x - crop.x) / crop.width)),
     y: Math.min(1, Math.max(0, (point.y - crop.y) / crop.height)),
@@ -123,28 +130,33 @@ async function bottomLuma(buffer: Buffer): Promise<number> {
 }
 
 async function writeAsset(
+  writeRoot: string,
   sourceKey: string,
   variant: ArtworkVariant,
-  buffer: Buffer,
+  buffer: Buffer
 ): Promise<{ path: string; hash: string; size: number }> {
   const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 16);
   const extension = variant === "title" ? "png" : "webp";
-  const directory = join(OUTPUT_ROOT, sourceKey);
+  const directory = join(writeRoot, sourceKey);
   await mkdir(directory, { recursive: true });
   const path = join(directory, `${variant}-${hash}.${extension}`);
   await writeFile(path, buffer);
   return {
-    path: relative(process.cwd(), path),
+    path: relative(
+      process.cwd(),
+      join(OUTPUT_ROOT, sourceKey, `${variant}-${hash}.${extension}`)
+    ),
     hash,
     size: (await stat(path)).size,
   };
 }
 
 async function renderRaster(
+  writeRoot: string,
   sourcePath: string,
   sourceKey: string,
   variant: Exclude<ArtworkVariant, "title">,
-  timestamp: number,
+  timestamp: number
 ): Promise<{ asset: ManifestAsset; buffer: Buffer }> {
   const spec = VARIANTS[variant];
   const metadata = await sharp(sourcePath).metadata();
@@ -154,7 +166,11 @@ async function renderRaster(
   // The demo catalogue is built from YouTube thumbnails, most of which are 4:3
   // frames with the 16:9 (or 2.39:1) image padded into them — so this pass
   // matters more here than it does on real extracted frames.
-  const content = await detectContentBox(sourcePath, metadata.width, metadata.height);
+  const content = await detectContentBox(
+    sourcePath,
+    metadata.width,
+    metadata.height
+  );
   const contentRect: NormalizedRect = {
     x: content.left / metadata.width,
     y: content.top / metadata.height,
@@ -180,7 +196,7 @@ async function renderRaster(
   const scale = Math.min(
     1,
     spec.width / crop.pixels.width,
-    spec.height / crop.pixels.height,
+    spec.height / crop.pixels.height
   );
   const width = Math.max(1, Math.round(crop.pixels.width * scale));
   const height = Math.max(1, Math.round(crop.pixels.height * scale));
@@ -196,11 +212,16 @@ async function renderRaster(
     overlays.push(grainLayer(width, height, `${sourceKey}:${variant}`));
   }
   if (spec.effects.includes("vignette")) {
-    overlays.push({ input: vignetteSvg(width, height), blend: "over" as const });
+    overlays.push({
+      input: vignetteSvg(width, height),
+      blend: "over" as const,
+    });
   }
   if (overlays.length > 0) pipeline = pipeline.composite(overlays);
-  const buffer = await pipeline.webp({ quality: 84, smartSubsample: true }).toBuffer();
-  const stored = await writeAsset(sourceKey, variant, buffer);
+  const buffer = await pipeline
+    .webp({ quality: 84, smartSubsample: true })
+    .toBuffer();
+  const stored = await writeAsset(writeRoot, sourceKey, variant, buffer);
   return {
     buffer,
     asset: {
@@ -225,64 +246,95 @@ async function renderRaster(
 }
 
 async function main(): Promise<void> {
-  const catalog = JSON.parse(
-    await readFile(join(process.cwd(), "demo_mode", "demo_mode.json"), "utf8"),
-  ) as { videos: DemoVideoSource[] };
-  await rm(OUTPUT_ROOT, { recursive: true, force: true });
-  await mkdir(OUTPUT_ROOT, { recursive: true });
+  process.env.DEMO_SQLITE_TOOL = "true";
+  const {
+    captureDemoArtworkDatabaseSnapshot,
+    createDemoBaselineSnapshot,
+    exportDemoSeedDocument,
+    replaceDemoArtworkCatalog,
+    restoreDemoArtworkDatabaseSnapshot,
+  } = await import("@/database/demo");
+  const catalog = exportDemoSeedDocument() as { videos: DemoVideoSource[] };
+  const runId = `${process.pid}-${Date.now()}`;
+  const stagingRoot = join(DEMO_ROOT, `.artwork-staging-${runId}`);
+  const backupRoot = join(DEMO_ROOT, `.artwork-backup-${runId}`);
+  await rm(stagingRoot, { recursive: true, force: true });
+  await mkdir(stagingRoot, { recursive: true });
 
-  const entries: Record<string, ManifestEntry> = {};
-  for (const [index, video] of catalog.videos.entries()) {
-    if (!video.thumbnail) continue;
-    const sourcePath = join(process.cwd(), video.thumbnail.filePath);
-    const sourceKey = String(index + 1).padStart(3, "0");
-    const assets: Partial<Record<ArtworkVariant, ManifestAsset>> = {};
-    let cardBuffer: Buffer | null = null;
-    for (const variant of Object.keys(VARIANTS) as Array<Exclude<ArtworkVariant, "title">>) {
-      const rendered = await renderRaster(
-        sourcePath,
-        sourceKey,
-        variant,
-        video.thumbnail.timestampSeconds,
-      );
-      assets[variant] = rendered.asset;
-      if (variant === "card") cardBuffer = rendered.buffer;
-    }
+  try {
+    const entries: Record<string, ManifestEntry> = {};
+    for (const [index, video] of catalog.videos.entries()) {
+      if (!video.thumbnail) continue;
+      const sourcePath = resolve(process.cwd(), video.thumbnail.filePath);
+      const sourceKey = String(index + 1).padStart(3, "0");
+      const assets: Partial<Record<ArtworkVariant, ManifestAsset>> = {};
+      let cardBuffer: Buffer | null = null;
+      for (const variant of Object.keys(VARIANTS) as Array<
+        Exclude<ArtworkVariant, "title">
+      >) {
+        const rendered = await renderRaster(
+          stagingRoot,
+          sourcePath,
+          sourceKey,
+          variant,
+          video.thumbnail.timestampSeconds
+        );
+        assets[variant] = rendered.asset;
+        if (variant === "card") cardBuffer = rendered.buffer;
+      }
 
-    const title = await renderArtworkTitle(video.title);
-    if (title) {
-      const stored = await writeAsset(sourceKey, "title", title.buffer);
-      assets.title = {
-        variant: "title",
-        content_hash: stored.hash,
-        file_path: stored.path,
-        file_size_bytes: stored.size,
-        width: title.width,
-        height: title.height,
-        source_timestamp_seconds: null,
-        crop: null,
-        focal_point: null,
-        safe_area: null,
-        bottom_luma: null,
-        thumbhash: null,
-        effects: ["title"],
+      const title = await renderArtworkTitle(video.title);
+      if (title) {
+        const stored = await writeAsset(
+          stagingRoot,
+          sourceKey,
+          "title",
+          title.buffer
+        );
+        assets.title = {
+          variant: "title",
+          content_hash: stored.hash,
+          file_path: stored.path,
+          file_size_bytes: stored.size,
+          width: title.width,
+          height: title.height,
+          source_timestamp_seconds: null,
+          crop: null,
+          focal_point: null,
+          safe_area: null,
+          bottom_luma: null,
+          thumbhash: null,
+          effects: ["title"],
+        };
+      }
+
+      if (!cardBuffer)
+        throw new Error(`Card artwork was not generated for ${video.title}`);
+      entries[video.thumbnail.filePath] = {
+        title: video.title,
+        palette: await extractArtworkPalette(cardBuffer),
+        assets,
       };
+      process.stdout.write(
+        `Generated demo artwork ${index + 1}/${catalog.videos.length}\r`
+      );
     }
 
-    if (!cardBuffer) throw new Error(`Card artwork was not generated for ${video.title}`);
-    entries[video.thumbnail.filePath] = {
-      title: video.title,
-      palette: await extractArtworkPalette(cardBuffer),
-      assets,
-    };
-    process.stdout.write(`Generated demo artwork ${index + 1}/${catalog.videos.length}\r`);
+    const baselinePath = await commitStagedDemoArtwork({
+      outputRoot: OUTPUT_ROOT,
+      stagingRoot,
+      backupRoot,
+      captureDatabaseSnapshot: captureDemoArtworkDatabaseSnapshot,
+      replaceDatabase: () => replaceDemoArtworkCatalog(entries, GENERATED_AT),
+      restoreDatabaseSnapshot: restoreDemoArtworkDatabaseSnapshot,
+      createBaselineSnapshot: createDemoBaselineSnapshot,
+    });
+    process.stdout.write(
+      `Generated ${Object.keys(entries).length} demo artwork sets and refreshed ${baselinePath}.\n`
+    );
+  } finally {
+    await rm(stagingRoot, { recursive: true, force: true });
   }
-
-  await writeFile(
-    MANIFEST_PATH,
-    `${JSON.stringify({ version: 1, generated_at: GENERATED_AT, entries }, null, 2)}\n`,
-  );
-  process.stdout.write(`Generated ${Object.keys(entries).length} demo artwork sets.\n`);
 }
 
-await main();
+if (import.meta.main) await main();

@@ -2,7 +2,6 @@ import { fromNodeHeaders } from "better-auth/node";
 import { isAPIError } from "better-auth/api";
 import type { IncomingHttpHeaders } from "http";
 import { db } from "@/config/drizzle";
-import { auth } from "@/lib/auth";
 import { AppError, UnauthorizedError } from "@/utils/errors";
 import type {
   AuthSession,
@@ -174,6 +173,7 @@ export class AuthService {
     }
 
     try {
+      const { auth } = await import("@/lib/auth");
       const response = await auth.api.signUpEmail({
         asResponse: true,
         headers: toHeaders(headers),
@@ -212,6 +212,7 @@ export class AuthService {
 
     try {
       const email = await this.resolveLoginEmail(input);
+      const { auth } = await import("@/lib/auth");
       const response = await auth.api.signInEmail({
         asResponse: true,
         headers: toHeaders(headers),
@@ -242,6 +243,7 @@ export class AuthService {
     }
 
     try {
+      const { auth } = await import("@/lib/auth");
       return await auth.api.signOut({
         asResponse: true,
         headers: toHeaders(headers),
@@ -259,6 +261,7 @@ export class AuthService {
     }
 
     try {
+      const { auth } = await import("@/lib/auth");
       const session = await auth.api.getSession({
         headers: toHeaders(headers),
       });

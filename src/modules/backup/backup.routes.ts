@@ -39,7 +39,7 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
         data: backup,
         message: "Backup created successfully",
       });
-    },
+    }
   );
 
   // List all backups
@@ -63,7 +63,7 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: backups,
       });
-    },
+    }
   );
 
   // Export database as JSON (uses fastify directly for binary response)
@@ -77,16 +77,16 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const exportData = backupService.exportToJson();
+      const exportData = await backupService.exportToJson();
 
       return reply
         .header("Content-Type", "application/json")
         .header(
           "Content-Disposition",
-          `attachment; filename="export-${new Date().toISOString().split("T")[0]}.json"`,
+          `attachment; filename="export-${new Date().toISOString().split("T")[0]}.json"`
         )
         .send(exportData);
-    },
+    }
   );
 
   // Restore from backup
@@ -112,7 +112,7 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Database restored successfully",
       });
-    },
+    }
   );
 
   // Delete a backup
@@ -138,6 +138,6 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Backup deleted successfully",
       });
-    },
+    }
   );
 }

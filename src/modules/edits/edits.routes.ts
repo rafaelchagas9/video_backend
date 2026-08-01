@@ -14,6 +14,8 @@ import {
   editJobStatusSchema,
 } from "./edits.schemas";
 import { z } from "zod";
+import { env } from "@/config/env";
+import { editsDemoService } from "./edits.demo.service";
 
 export async function videoEditsRoutes(fastify: FastifyInstance) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -34,6 +36,14 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
     },
     async (request) => {
       const { id } = request.params;
+
+      if (env.DEMO_MODE) {
+        return {
+          success: true,
+          data: await editsDemoService.editingMetadata(id),
+        };
+      }
+
       const video = await videosService.findById(id);
 
       // Get audio metadata via ffprobe
@@ -81,7 +91,7 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
           storyboard_vtt: storyboardVtt,
         },
       };
-    },
+    }
   );
 
   // 3. Create Render Job
@@ -119,7 +129,7 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
         },
         message: "Render job queued",
       };
-    },
+    }
   );
 }
 
@@ -176,7 +186,7 @@ export async function editsRoutes(fastify: FastifyInstance) {
               : undefined,
         },
       };
-    },
+    }
   );
 
   // 5. Cancel Render Job
@@ -210,6 +220,6 @@ export async function editsRoutes(fastify: FastifyInstance) {
           status: job.status,
         },
       };
-    },
+    }
   );
 }

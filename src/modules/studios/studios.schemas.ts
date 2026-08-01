@@ -192,7 +192,7 @@ export const bulkOperationResponseSchema = z.object({
       z.object({
         index: z.number(),
         error: z.string(),
-      }),
+      })
     ),
   }),
   message: z.string().optional(),
@@ -200,7 +200,14 @@ export const bulkOperationResponseSchema = z.object({
 
 // Bulk Import schemas
 export const bulkImportQuerySchema = z.object({
-  dry_run: z.coerce.boolean().optional().default(false),
+  dry_run: z
+    .preprocess(
+      (value) =>
+        typeof value === "string" ? value.toLowerCase() === "true" : value,
+      z.boolean()
+    )
+    .optional()
+    .default(false),
 });
 
 export const bulkStudioImportItemSchema = z.object({

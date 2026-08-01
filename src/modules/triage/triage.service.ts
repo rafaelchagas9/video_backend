@@ -14,12 +14,15 @@ import type {
   TriageBulkActionsInput,
   TriageBulkActionsResult,
 } from "./triage.types";
+import { env } from "@/config/env";
+import { triageDemoService } from "./triage.demo.service";
 
 export class TriageService {
   async saveProgress(
     userId: number,
-    input: SaveTriageProgressInput,
+    input: SaveTriageProgressInput
   ): Promise<void> {
+    if (env.DEMO_MODE) return triageDemoService.saveProgress(userId, input);
     const { filterKey, lastVideoId, processedCount, totalCount } = input;
 
     await db
@@ -45,8 +48,9 @@ export class TriageService {
 
   async getProgress(
     userId: number,
-    input: GetTriageProgressInput,
+    input: GetTriageProgressInput
   ): Promise<TriageProgress | null> {
+    if (env.DEMO_MODE) return triageDemoService.getProgress(userId, input);
     const { filterKey } = input;
 
     const results = await db
@@ -55,8 +59,8 @@ export class TriageService {
       .where(
         and(
           eq(triageProgressTable.userId, userId),
-          eq(triageProgressTable.filterKey, filterKey),
-        ),
+          eq(triageProgressTable.filterKey, filterKey)
+        )
       );
 
     if (results.length === 0) return null;
@@ -66,17 +70,20 @@ export class TriageService {
   }
 
   async deleteProgress(userId: number, filterKey: string): Promise<void> {
+    if (env.DEMO_MODE)
+      return triageDemoService.deleteProgress(userId, filterKey);
     await db
       .delete(triageProgressTable)
       .where(
         and(
           eq(triageProgressTable.userId, userId),
-          eq(triageProgressTable.filterKey, filterKey),
-        ),
+          eq(triageProgressTable.filterKey, filterKey)
+        )
       );
   }
 
   async listProgress(userId: number): Promise<TriageProgress[]> {
+    if (env.DEMO_MODE) return triageDemoService.listProgress(userId);
     const results = await db
       .select()
       .from(triageProgressTable)
@@ -87,18 +94,19 @@ export class TriageService {
   }
 
   async getStatistics(): Promise<TriageStatistics> {
+    if (env.DEMO_MODE) return triageDemoService.getStatistics();
     // Total videos count
     const totalVideosResult = await db.execute(
-      sql`SELECT COUNT(*) as count FROM videos WHERE is_available = true`,
+      sql`SELECT COUNT(*) as count FROM videos WHERE is_available = true`
     );
     const totalVideos = Number((totalVideosResult[0] as any).count || 0);
 
     // Videos with creators count
     const videosWithCreatorsResult = await db.execute(
-      sql`SELECT COUNT(DISTINCT video_id) as count FROM video_creators`,
+      sql`SELECT COUNT(DISTINCT video_id) as count FROM video_creators`
     );
     const videosWithCreators = Number(
-      (videosWithCreatorsResult[0] as any).count || 0,
+      (videosWithCreatorsResult[0] as any).count || 0
     );
 
     const taggedPercentage =
@@ -142,7 +150,7 @@ export class TriageService {
         total: Number(row.total),
         processed_count: Number(row.processed_count),
         percentage: Number(row.percentage),
-      }),
+      })
     );
 
     // Top directories with untagged videos
@@ -177,8 +185,9 @@ export class TriageService {
   }
 
   async applyBulkActions(
-    input: TriageBulkActionsInput,
+    input: TriageBulkActionsInput
   ): Promise<TriageBulkActionsResult> {
+    if (env.DEMO_MODE) return triageDemoService.applyBulkActions(input);
     const { videoIds, actions } = input;
 
     if (videoIds.length === 0) {
@@ -213,7 +222,7 @@ export class TriageService {
             actions.addCreatorIds!.map((creatorId) => ({
               videoId,
               creatorId,
-            })),
+            }))
           );
 
           const result = await tx
@@ -232,8 +241,8 @@ export class TriageService {
             .where(
               and(
                 inArray(videoCreatorsTable.videoId, videoIds),
-                inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds),
-              ),
+                inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds)
+              )
             )
             .returning({ videoId: videoCreatorsTable.videoId });
 
@@ -246,7 +255,7 @@ export class TriageService {
             actions.addTagIds!.map((tagId) => ({
               videoId,
               tagId,
-            })),
+            }))
           );
 
           const result = await tx
@@ -265,8 +274,8 @@ export class TriageService {
             .where(
               and(
                 inArray(videoTagsTable.videoId, videoIds),
-                inArray(videoTagsTable.tagId, actions.removeTagIds),
-              ),
+                inArray(videoTagsTable.tagId, actions.removeTagIds)
+              )
             )
             .returning({ videoId: videoTagsTable.videoId });
 
@@ -279,7 +288,7 @@ export class TriageService {
             actions.addStudioIds!.map((studioId) => ({
               videoId,
               studioId,
-            })),
+            }))
           );
 
           const result = await tx
@@ -298,8 +307,8 @@ export class TriageService {
             .where(
               and(
                 inArray(videoStudiosTable.videoId, videoIds),
-                inArray(videoStudiosTable.studioId, actions.removeStudioIds),
-              ),
+                inArray(videoStudiosTable.studioId, actions.removeStudioIds)
+              )
             )
             .returning({ videoId: videoStudiosTable.videoId });
 

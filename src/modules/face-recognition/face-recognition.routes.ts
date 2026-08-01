@@ -16,6 +16,7 @@ import { and, eq } from "drizzle-orm";
 import { creatorFaceEmbeddingsTable } from "@/database/schema";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
+import { faceRecognitionDemoService } from "./face-recognition.demo.service";
 
 export async function faceRecognitionRoutes(server: FastifyInstance) {
   const app = server.withTypeProvider<ZodTypeProvider>();
@@ -52,7 +53,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: health,
       });
-    },
+    }
   );
 
   /**
@@ -138,7 +139,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }
         throw error;
       }
-    },
+    }
   );
 
   /**
@@ -199,7 +200,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }
         throw error;
       }
-    },
+    }
   );
 
   /**
@@ -243,7 +244,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         await import("@/modules/creators/creators.social.service");
       const media = await creatorsSocialService.getGalleryMediaById(
         creatorId,
-        mediaId,
+        mediaId
       );
 
       if (!media.file_path || !existsSync(media.file_path)) {
@@ -292,7 +293,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
             : null,
         },
       });
-    },
+    }
   );
 
   /**
@@ -340,7 +341,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: enriched,
       });
-    },
+    }
   );
 
   /**
@@ -376,7 +377,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: { message: "Primary embedding updated" },
       });
-    },
+    }
   );
 
   /**
@@ -410,7 +411,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: { message: "Face embedding deleted" },
       });
-    },
+    }
   );
 
   /**
@@ -446,10 +447,9 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       };
 
       if (env.DEMO_MODE) {
-        const { demoMockService } = await import("@/utils/demo-mock");
-        const demoPath = demoMockService.getCreatorFaceEmbeddingPath(
+        const demoPath = faceRecognitionDemoService.getEmbeddingThumbnailPath(
           Number(creatorId),
-          Number(embeddingId),
+          Number(embeddingId)
         );
 
         if (!demoPath || !existsSync(demoPath)) {
@@ -470,8 +470,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         .where(
           and(
             eq(creatorFaceEmbeddingsTable.id, Number(embeddingId)),
-            eq(creatorFaceEmbeddingsTable.creatorId, Number(creatorId)),
-          ),
+            eq(creatorFaceEmbeddingsTable.creatorId, Number(creatorId))
+          )
         )
         .limit(1)
         .then((rows) => rows[0]);
@@ -493,7 +493,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       reply.header("Content-Type", "image/webp");
       const buffer = readFileSync(embedding.thumbnailPath);
       return reply.send(buffer);
-    },
+    }
   );
 
   /**
@@ -535,7 +535,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
           if (detection.matchedCreatorId) {
             try {
               const creator = await creatorsService.findById(
-                detection.matchedCreatorId,
+                detection.matchedCreatorId
               );
               matchedCreator = {
                 id: creator.id,
@@ -567,14 +567,14 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
             createdAt: detection.createdAt.toISOString(),
             updatedAt: detection.updatedAt.toISOString(),
           };
-        }),
+        })
       );
 
       return reply.send({
         success: true,
         data: enriched,
       });
-    },
+    }
   );
 
   /**
@@ -608,7 +608,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       reply.header("Content-Type", mimeType);
       const buffer = readFileSync(faceImage.filePath);
       return reply.send(buffer);
-    },
+    }
   );
 
   /**
@@ -667,7 +667,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         .catch((error) => {
           logger.error(
             { videoId, error },
-            "Face extraction failed in background",
+            "Face extraction failed in background"
           );
         });
 
@@ -675,7 +675,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: { message: "Face extraction started" },
       });
-    },
+    }
   );
 
   /**
@@ -713,7 +713,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: { message: "Face match confirmed" },
       });
-    },
+    }
   );
 
   /**
@@ -748,7 +748,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: { message: "Face match rejected" },
       });
-    },
+    }
   );
 
   /**
@@ -779,14 +779,14 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
 
       const videos = await faceService.findVideosWithCreator(
         creatorId,
-        minConfidence,
+        minConfidence
       );
 
       return reply.send({
         success: true,
         data: videos,
       });
-    },
+    }
   );
 
   /**
@@ -853,7 +853,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         const matches = await faceService.findSimilarCreators(
           face.embedding,
           limit,
-          threshold,
+          threshold
         );
 
         // Clean up temp file
@@ -872,7 +872,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }
         throw error;
       }
-    },
+    }
   );
 
   /**
@@ -921,7 +921,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
           },
         });
       }
-    },
+    }
   );
 
   /**
@@ -951,6 +951,6 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         success: true,
         data: { message: "Face extraction queue cleared" },
       });
-    },
+    }
   );
 }

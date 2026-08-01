@@ -11,6 +11,7 @@ import { videosService } from "@/modules/videos/videos.service";
 import { logger } from "@/utils/logger";
 import type { Thumbnail, GenerateThumbnailInput } from "./thumbnails.types";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
+import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 
 export class ThumbnailsService {
   constructor() {
@@ -22,15 +23,10 @@ export class ThumbnailsService {
 
   async generate(
     videoId: number,
-    input?: GenerateThumbnailInput,
+    input?: GenerateThumbnailInput
   ): Promise<Thumbnail> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(videoId);
-      if (!video.thumbnail) {
-        throw new NotFoundError(`Demo thumbnail not found for video: ${videoId}`);
-      }
-      return video.thumbnail as Thumbnail;
+      return demoMediaAssetsService.generateThumbnail(videoId, input);
     }
 
     const video = await videosService.findById(videoId); // Ensure video exists
@@ -62,7 +58,7 @@ export class ThumbnailsService {
       // User provided percentage (0-100)
       if (!video.duration_seconds) {
         throw new Error(
-          "Video duration not available for percentage calculation",
+          "Video duration not available for percentage calculation"
         );
       }
       timestamp = video.duration_seconds * (input.positionPercent / 100);
@@ -155,7 +151,7 @@ export class ThumbnailsService {
           const error = new Error(`FFmpeg thumbnail error: ${message}`);
           logger.error(
             { videoId, stderrOutput, originalError: err?.message },
-            "ffmpeg thumbnail failed",
+            "ffmpeg thumbnail failed"
           );
           reject(error);
         })
@@ -169,7 +165,7 @@ export class ThumbnailsService {
    */
   async saveFromFrame(
     videoId: number,
-    frame: ExtractedFrame,
+    frame: ExtractedFrame
   ): Promise<Thumbnail> {
     if (env.DEMO_MODE) {
       return this.generate(videoId);
@@ -197,7 +193,7 @@ export class ThumbnailsService {
     const outputOptions = this.getQualityOptions(format, env.THUMBNAIL_QUALITY);
     outputOptions.unshift(
       "-vf",
-      `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+      `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`
     );
 
     await new Promise<void>((resolve, reject) => {
@@ -206,7 +202,7 @@ export class ThumbnailsService {
         .output(outputPath)
         .on("end", () => resolve())
         .on("error", (err) =>
-          reject(err instanceof Error ? err : new Error(String(err))),
+          reject(err instanceof Error ? err : new Error(String(err)))
         )
         .run();
     });
@@ -247,12 +243,7 @@ export class ThumbnailsService {
 
   async findById(id: number): Promise<Thumbnail> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(id);
-      if (video && video.thumbnail) {
-        return video.thumbnail as Thumbnail;
-      }
-      throw new NotFoundError(`Thumbnail not found with id: ${id}`);
+      return demoMediaAssetsService.thumbnail(id);
     }
     const thumbnail = await db
       .select()
@@ -280,9 +271,12 @@ export class ThumbnailsService {
 
   async getByVideoId(videoId: number): Promise<Thumbnail[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(videoId);
-      return video && video.thumbnail ? [video.thumbnail as Thumbnail] : [];
+      try {
+        return [demoMediaAssetsService.thumbnail(videoId)];
+      } catch (error) {
+        if (error instanceof NotFoundError) return [];
+        throw error;
+      }
     }
     const thumbnails = await db
       .select()
@@ -304,7 +298,7 @@ export class ThumbnailsService {
 
   async delete(id: number): Promise<void> {
     if (env.DEMO_MODE) {
-      await this.findById(id);
+      demoMediaAssetsService.deleteThumbnail(id);
       return;
     }
 
@@ -322,7 +316,7 @@ export class ThumbnailsService {
     } catch (error) {
       console.error(
         `Failed to delete thumbnail file: ${thumbnail.file_path}`,
-        error,
+        error
       );
       // Continue to delete record even if file deletion fails
     }

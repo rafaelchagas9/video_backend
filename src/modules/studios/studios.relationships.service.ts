@@ -15,10 +15,17 @@ import { API_PREFIX } from "@/config/constants";
 import type { Studio } from "./studios.types";
 import type { Creator } from "@/modules/creators/creators.types";
 import type { Video } from "@/modules/videos/videos.types";
+import { env } from "@/config/env";
+import { demoRepository } from "@/database/demo";
+import { studiosDemoService } from "./studios.demo.service";
 
 export class StudiosRelationshipsService {
   // Creator Relationship Methods
   async linkCreator(studioId: number, creatorId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      studiosDemoService.linkCreator(studioId, creatorId);
+      return;
+    }
     await this.findStudioById(studioId); // Ensure studio exists
 
     // Check if association already exists
@@ -28,8 +35,8 @@ export class StudiosRelationshipsService {
       .where(
         and(
           eq(creatorStudiosTable.creatorId, creatorId),
-          eq(creatorStudiosTable.studioId, studioId),
-        ),
+          eq(creatorStudiosTable.studioId, studioId)
+        )
       )
       .limit(1);
 
@@ -56,10 +63,14 @@ export class StudiosRelationshipsService {
   }
 
   async unlinkCreator(studioId: number, creatorId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      studiosDemoService.unlinkCreator(studioId, creatorId);
+      return;
+    }
     await db
       .delete(creatorStudiosTable)
       .where(
-        sql`${creatorStudiosTable.creatorId} = ${creatorId} AND ${creatorStudiosTable.studioId} = ${studioId}`,
+        sql`${creatorStudiosTable.creatorId} = ${creatorId} AND ${creatorStudiosTable.studioId} = ${studioId}`
       );
 
     // Note: Drizzle postgres-js doesn't return rowCount, so we can't verify if deletion happened
@@ -67,6 +78,7 @@ export class StudiosRelationshipsService {
   }
 
   async getCreators(studioId: number): Promise<Creator[]> {
+    if (env.DEMO_MODE) return studiosDemoService.getCreators(studioId);
     await this.findStudioById(studioId); // Ensure studio exists
 
     const creators = await db.execute<{
@@ -107,14 +119,17 @@ export class StudiosRelationshipsService {
       description: c.description,
       profile_picture_path:
         c.unified_profile_picture_path ?? c.profile_picture_path,
-      main_picture_path: c.unified_main_picture_path ?? c.main_picture_path ?? null,
+      main_picture_path:
+        c.unified_main_picture_path ?? c.main_picture_path ?? null,
       face_thumbnail_path: c.face_thumbnail_path,
-      profile_picture_url: (c.unified_profile_picture_path ?? c.profile_picture_path)
-        ? `/api/creators/${c.id}/picture`
-        : undefined,
-      main_picture_url: (c.unified_main_picture_path ?? c.main_picture_path)
-        ? `/api/creators/${c.id}/picture?variant=main`
-        : undefined,
+      profile_picture_url:
+        (c.unified_profile_picture_path ?? c.profile_picture_path)
+          ? `/api/creators/${c.id}/picture`
+          : undefined,
+      main_picture_url:
+        (c.unified_main_picture_path ?? c.main_picture_path)
+          ? `/api/creators/${c.id}/picture?variant=main`
+          : undefined,
       face_thumbnail_url: c.face_thumbnail_path
         ? `/api/creators/${c.id}/picture?type=face`
         : undefined,
@@ -126,6 +141,10 @@ export class StudiosRelationshipsService {
 
   // Video Relationship Methods
   async linkVideo(studioId: number, videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      studiosDemoService.linkVideo(studioId, videoId);
+      return;
+    }
     await this.findStudioById(studioId); // Ensure studio exists
 
     // Check if association already exists
@@ -135,8 +154,8 @@ export class StudiosRelationshipsService {
       .where(
         and(
           eq(videoStudiosTable.videoId, videoId),
-          eq(videoStudiosTable.studioId, studioId),
-        ),
+          eq(videoStudiosTable.studioId, studioId)
+        )
       )
       .limit(1);
 
@@ -163,10 +182,14 @@ export class StudiosRelationshipsService {
   }
 
   async unlinkVideo(studioId: number, videoId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      studiosDemoService.unlinkVideo(studioId, videoId);
+      return;
+    }
     await db
       .delete(videoStudiosTable)
       .where(
-        sql`${videoStudiosTable.videoId} = ${videoId} AND ${videoStudiosTable.studioId} = ${studioId}`,
+        sql`${videoStudiosTable.videoId} = ${videoId} AND ${videoStudiosTable.studioId} = ${studioId}`
       );
 
     // Note: Drizzle postgres-js doesn't return rowCount, so we can't verify if deletion happened
@@ -174,6 +197,10 @@ export class StudiosRelationshipsService {
   }
 
   async getVideos(studioId: number): Promise<Video[]> {
+    if (env.DEMO_MODE)
+      return studiosDemoService
+        .getVideoIds(studioId)
+        .map((id) => demoRepository.getVideoById(id) as Video);
     await this.findStudioById(studioId); // Ensure studio exists
 
     const videos = await db.execute<any>(sql`
@@ -223,7 +250,7 @@ export class StudiosRelationshipsService {
   }
 
   async getStudiosForVideos(
-    videoIds: number[],
+    videoIds: number[]
   ): Promise<Map<number, Studio[]>> {
     const grouped = new Map<number, Studio[]>();
     if (videoIds.length === 0) {
@@ -274,8 +301,12 @@ export class StudiosRelationshipsService {
   // Bulk Update Creators
   async bulkUpdateCreators(
     studioId: number,
-    input: { creatorIds: number[]; action: "add" | "remove" },
+    input: { creatorIds: number[]; action: "add" | "remove" }
   ): Promise<void> {
+    if (env.DEMO_MODE) {
+      studiosDemoService.bulkUpdateCreators(studioId, input);
+      return;
+    }
     const { creatorIds, action } = input;
     if (creatorIds.length === 0) return;
 
@@ -301,8 +332,8 @@ export class StudiosRelationshipsService {
       await db.delete(creatorStudiosTable).where(
         sql`${creatorStudiosTable.studioId} = ${studioId} AND ${creatorStudiosTable.creatorId} IN (${sql.join(
           creatorIds.map((id) => sql`${id}`),
-          sql`, `,
-        )})`,
+          sql`, `
+        )})`
       );
     }
   }

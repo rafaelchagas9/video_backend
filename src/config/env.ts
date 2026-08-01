@@ -191,12 +191,15 @@ const envSchema = z.object({
   OLLAMA_URL: z.string().default("http://localhost:11434"),
   OLLAMA_MODEL: z.string().default("gemma3n:e2b"),
   OLLAMA_TIMEOUT_MS: z.string().default("60000").transform(Number),
-  
+
   // Demo Mode
   DEMO_MODE: z
     .string()
     .default("false")
     .transform((value) => value.toLowerCase() === "true"),
+  DEMO_DATABASE_PATH: z.string().default("./demo_mode/demo.sqlite"),
+  DEMO_ASSETS_DIR: z.string().default("./demo_mode"),
+  DEMO_RESET_MODE: z.enum(["on-start", "manual"]).default("on-start"),
 });
 
 function loadEnv() {

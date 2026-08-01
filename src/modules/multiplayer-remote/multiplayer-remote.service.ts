@@ -18,6 +18,8 @@ import {
   NotFoundError,
 } from "@/utils/errors";
 import { logger } from "@/utils/logger";
+import { env } from "@/config/env";
+import { multiplayerRemoteDemoService } from "./multiplayer-remote.demo.service";
 import {
   multiplayerRemoteProtocolVersion,
   type MultiplayerRemoteClientRole,
@@ -103,13 +105,14 @@ export interface MultiplayerRemoteDisplayDeviceDto {
   updatedAt: string;
 }
 
-export interface MultiplayerRemoteTrustedSessionDiscoveryDto
-  extends MultiplayerRemoteSessionDto {
+export interface MultiplayerRemoteTrustedSessionDiscoveryDto extends MultiplayerRemoteSessionDto {
   displayDevice: MultiplayerRemoteDisplayDeviceDto | null;
 }
 
 class MultiplayerRemoteService {
-  async createSession(ownerUserId: number): Promise<MultiplayerRemoteSessionDto> {
+  async createSession(
+    ownerUserId: number
+  ): Promise<MultiplayerRemoteSessionDto> {
     const pairingCode = await this.generateUniquePairingCode();
     const pairingCodeExpiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
 
@@ -127,13 +130,16 @@ class MultiplayerRemoteService {
       throw new Error("Failed to create multiplayer remote session");
     }
 
-    logger.info({ sessionId: session.id, ownerUserId }, "Multiplayer session created");
+    logger.info(
+      { sessionId: session.id, ownerUserId },
+      "Multiplayer session created"
+    );
     return this.mapSession(session, null);
   }
 
   async getSession(
     sessionId: number,
-    userId: number,
+    userId: number
   ): Promise<MultiplayerRemoteSessionDto> {
     await this.expireStaleJoinRequests(sessionId);
     const session = await this.getOwnedSession(sessionId, userId);
@@ -143,7 +149,7 @@ class MultiplayerRemoteService {
 
   async getPendingJoinRequestForDisplay(
     sessionId: number,
-    userId: number,
+    userId: number
   ): Promise<MultiplayerRemoteJoinRequestDto | null> {
     await this.expireStaleJoinRequests(sessionId);
     await this.getOwnedSession(sessionId, userId);
@@ -157,7 +163,7 @@ class MultiplayerRemoteService {
       userId: number;
       authSessionId: string | null;
       userAgent: string | null;
-    },
+    }
   ): Promise<{
     sessionId: number;
     joinRequest: MultiplayerRemoteJoinRequestDto;
@@ -240,7 +246,7 @@ class MultiplayerRemoteService {
 
     logger.info(
       { sessionId: session.id, joinRequestId: joinRequest.id },
-      "Multiplayer join request created",
+      "Multiplayer join request created"
     );
 
     return {
@@ -252,7 +258,7 @@ class MultiplayerRemoteService {
   async approveJoinRequest(
     sessionId: number,
     requestId: number,
-    userId: number,
+    userId: number
   ): Promise<MultiplayerRemoteSessionDto> {
     const session = await this.getOwnedSession(sessionId, userId);
     const joinRequest = await this.getJoinRequest(sessionId, requestId);
@@ -323,16 +329,19 @@ class MultiplayerRemoteService {
     input: TrustedDeviceBody,
     params: {
       userAgent: string | null;
-    },
+    }
   ): Promise<{
     trustedDevice: MultiplayerRemoteTrustedDeviceDto;
     sessions: MultiplayerRemoteTrustedSessionDiscoveryDto[];
   }> {
-    const trustedDevice = await this.getTrustedDevice(userId, input.remoteDeviceKey);
+    const trustedDevice = await this.getTrustedDevice(
+      userId,
+      input.remoteDeviceKey
+    );
     const touchedTrustedDevice = await this.touchTrustedDevice(
       trustedDevice,
       input,
-      params.userAgent,
+      params.userAgent
     );
 
     const sessions = await db
@@ -345,9 +354,9 @@ class MultiplayerRemoteService {
           isNull(multiplayerRemoteSessionsTable.remoteClientId),
           or(
             eq(multiplayerRemoteSessionsTable.status, "waiting_for_remote"),
-            eq(multiplayerRemoteSessionsTable.status, "pending_approval"),
-          ),
-        ),
+            eq(multiplayerRemoteSessionsTable.status, "pending_approval")
+          )
+        )
       )
       .orderBy(desc(multiplayerRemoteSessionsTable.displayLastSeenAt))
       .limit(20);
@@ -356,10 +365,11 @@ class MultiplayerRemoteService {
       new Set(
         sessions
           .map((session) => session.displayDeviceId)
-          .filter((value): value is number => value !== null),
-      ),
+          .filter((value): value is number => value !== null)
+      )
     );
-    const displayDevicesById = await this.getDisplayDevicesByIds(displayDeviceIds);
+    const displayDevicesById =
+      await this.getDisplayDevicesByIds(displayDeviceIds);
 
     return {
       trustedDevice: this.mapTrustedDevice(touchedTrustedDevice),
@@ -378,14 +388,15 @@ class MultiplayerRemoteService {
   async registerDisplayDevice(
     userId: number,
     input: RegisterDisplayDeviceBody,
-    userAgent: string | null,
+    userAgent: string | null
   ): Promise<{
     displayDevice: MultiplayerRemoteDisplayDeviceDto;
     deviceSecret: string;
   }> {
     const now = new Date();
     const devicePublicId = randomUUID();
-    const deviceSecret = randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+    const deviceSecret =
+      randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
 
     const [displayDevice] = await db
       .insert(multiplayerRemoteDisplayDevicesTable)
@@ -417,13 +428,16 @@ class MultiplayerRemoteService {
     input: TrustedDeviceBody,
     params: {
       userAgent: string | null;
-    },
+    }
   ): Promise<{
     session: MultiplayerRemoteSessionDto;
     trustedDevice: MultiplayerRemoteTrustedDeviceDto;
   }> {
     const session = await this.getOwnedSession(sessionId, userId);
-    const trustedDevice = await this.getTrustedDevice(userId, input.remoteDeviceKey);
+    const trustedDevice = await this.getTrustedDevice(
+      userId,
+      input.remoteDeviceKey
+    );
     const now = new Date();
 
     if (session.status === "closed" || session.closedAt) {
@@ -438,43 +452,45 @@ class MultiplayerRemoteService {
       throw new ConflictError("Session already has an active remote");
     }
 
-    const [updatedSession, updatedTrustedDevice] = await db.transaction(async (tx) => {
-      await tx
-        .update(multiplayerRemoteJoinRequestsTable)
-        .set({ status: "cancelled", resolvedAt: now, updatedAt: now })
-        .where(
-          and(
-            eq(multiplayerRemoteJoinRequestsTable.sessionId, session.id),
-            eq(multiplayerRemoteJoinRequestsTable.status, "pending"),
-          ),
-        );
+    const [updatedSession, updatedTrustedDevice] = await db.transaction(
+      async (tx) => {
+        await tx
+          .update(multiplayerRemoteJoinRequestsTable)
+          .set({ status: "cancelled", resolvedAt: now, updatedAt: now })
+          .where(
+            and(
+              eq(multiplayerRemoteJoinRequestsTable.sessionId, session.id),
+              eq(multiplayerRemoteJoinRequestsTable.status, "pending")
+            )
+          );
 
-      const [device] = await tx
-        .update(multiplayerRemoteTrustedDevicesTable)
-        .set({
-          deviceName: input.remoteDeviceName ?? trustedDevice.deviceName,
-          deviceType: input.remoteDeviceType ?? trustedDevice.deviceType,
-          userAgent: params.userAgent ?? trustedDevice.userAgent,
-          lastSeenAt: now,
-          updatedAt: now,
-        })
-        .where(eq(multiplayerRemoteTrustedDevicesTable.id, trustedDevice.id))
-        .returning();
+        const [device] = await tx
+          .update(multiplayerRemoteTrustedDevicesTable)
+          .set({
+            deviceName: input.remoteDeviceName ?? trustedDevice.deviceName,
+            deviceType: input.remoteDeviceType ?? trustedDevice.deviceType,
+            userAgent: params.userAgent ?? trustedDevice.userAgent,
+            lastSeenAt: now,
+            updatedAt: now,
+          })
+          .where(eq(multiplayerRemoteTrustedDevicesTable.id, trustedDevice.id))
+          .returning();
 
-      const [updated] = await tx
-        .update(multiplayerRemoteSessionsTable)
-        .set({
-          status: "active",
-          pairingCode: null,
-          pairingCodeExpiresAt: null,
-          approvedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(multiplayerRemoteSessionsTable.id, session.id))
-        .returning();
+        const [updated] = await tx
+          .update(multiplayerRemoteSessionsTable)
+          .set({
+            status: "active",
+            pairingCode: null,
+            pairingCodeExpiresAt: null,
+            approvedAt: now,
+            updatedAt: now,
+          })
+          .where(eq(multiplayerRemoteSessionsTable.id, session.id))
+          .returning();
 
-      return [updated, device];
-    });
+        return [updated, device];
+      }
+    );
 
     if (!updatedSession || !updatedTrustedDevice) {
       throw new Error("Failed to connect trusted remote device");
@@ -482,7 +498,7 @@ class MultiplayerRemoteService {
 
     logger.info(
       { sessionId, trustedDeviceId: trustedDevice.id },
-      "Trusted multiplayer remote device connected",
+      "Trusted multiplayer remote device connected"
     );
 
     return {
@@ -494,7 +510,7 @@ class MultiplayerRemoteService {
   async rejectJoinRequest(
     sessionId: number,
     requestId: number,
-    userId: number,
+    userId: number
   ): Promise<MultiplayerRemoteSessionDto> {
     const session = await this.getOwnedSession(sessionId, userId);
     const joinRequest = await this.getJoinRequest(sessionId, requestId);
@@ -528,10 +544,13 @@ class MultiplayerRemoteService {
   async closeSession(
     sessionId: number,
     userId: number,
-    input: CloseSessionBody = {},
+    input: CloseSessionBody = {}
   ): Promise<void> {
     await this.getOwnedSession(sessionId, userId);
-    await this.closeSessionInternal(sessionId, input.reason ?? "closed_by_user");
+    await this.closeSessionInternal(
+      sessionId,
+      input.reason ?? "closed_by_user"
+    );
   }
 
   async updateSessionState(params: {
@@ -550,7 +569,9 @@ class MultiplayerRemoteService {
     }
 
     if (session.displayClientId !== params.clientId) {
-      throw new ForbiddenError("Only the bound display can update session state");
+      throw new ForbiddenError(
+        "Only the bound display can update session state"
+      );
     }
 
     const now = new Date();
@@ -568,7 +589,10 @@ class MultiplayerRemoteService {
       throw new Error("Failed to update multiplayer session state");
     }
 
-    return this.mapSession(updated, await this.getPendingJoinRequest(params.sessionId));
+    return this.mapSession(
+      updated,
+      await this.getPendingJoinRequest(params.sessionId)
+    );
   }
 
   async getBoundSession(params: {
@@ -591,7 +615,10 @@ class MultiplayerRemoteService {
       throw new ForbiddenError("Client is not bound to this session");
     }
 
-    return this.mapSession(session, await this.getPendingJoinRequest(session.id));
+    return this.mapSession(
+      session,
+      await this.getPendingJoinRequest(session.id)
+    );
   }
 
   async isSessionClosed(sessionId: number): Promise<boolean> {
@@ -634,7 +661,10 @@ class MultiplayerRemoteService {
         .where(eq(multiplayerRemoteSessionsTable.id, session.id))
         .returning();
 
-      return this.mapSession(updated ?? session, await this.getPendingJoinRequest(session.id));
+      return this.mapSession(
+        updated ?? session,
+        await this.getPendingJoinRequest(session.id)
+      );
     }
 
     if (session.status !== "active" || !session.approvedAt) {
@@ -669,7 +699,7 @@ class MultiplayerRemoteService {
   }): Promise<MultiplayerRemoteSessionDto> {
     const displayDevice = await this.authenticateDisplayDevice(
       params.deviceId,
-      params.deviceSecret,
+      params.deviceSecret
     );
     const now = new Date();
     const clientId = params.clientId ?? randomUUID();
@@ -691,20 +721,21 @@ class MultiplayerRemoteService {
         throw new Error("Failed to update multiplayer display device");
       }
 
-      const reusableSession = await tx.query.multiplayerRemoteSessionsTable.findFirst({
-        where: (sessions, { and, eq, isNull, or }) =>
-          and(
-            eq(sessions.ownerUserId, displayDevice.ownerUserId),
-            eq(sessions.displayDeviceId, displayDevice.id),
-            isNull(sessions.closedAt),
-            or(
-              eq(sessions.status, "waiting_for_remote"),
-              eq(sessions.status, "pending_approval"),
-              eq(sessions.status, "active"),
+      const reusableSession =
+        await tx.query.multiplayerRemoteSessionsTable.findFirst({
+          where: (sessions, { and, eq, isNull, or }) =>
+            and(
+              eq(sessions.ownerUserId, displayDevice.ownerUserId),
+              eq(sessions.displayDeviceId, displayDevice.id),
+              isNull(sessions.closedAt),
+              or(
+                eq(sessions.status, "waiting_for_remote"),
+                eq(sessions.status, "pending_approval"),
+                eq(sessions.status, "active")
+              )
             ),
-          ),
-        orderBy: (sessions, { desc }) => [desc(sessions.updatedAt)],
-      });
+          orderBy: (sessions, { desc }) => [desc(sessions.updatedAt)],
+        });
 
       if (reusableSession) {
         const [updated] = await tx
@@ -742,7 +773,7 @@ class MultiplayerRemoteService {
 
     return this.mapSession(
       updatedSession,
-      await this.getPendingJoinRequest(updatedSession.id),
+      await this.getPendingJoinRequest(updatedSession.id)
     );
   }
 
@@ -763,7 +794,10 @@ class MultiplayerRemoteService {
     }
 
     const now = new Date();
-    if (params.role === "display" && session.displayClientId === params.clientId) {
+    if (
+      params.role === "display" &&
+      session.displayClientId === params.clientId
+    ) {
       if (session.displayDeviceId !== null) {
         // Persistent display: keep the session alive so it can be reclaimed on reconnect.
         await db
@@ -780,7 +814,10 @@ class MultiplayerRemoteService {
       return true;
     }
 
-    if (params.role === "remote" && session.remoteClientId === params.clientId) {
+    if (
+      params.role === "remote" &&
+      session.remoteClientId === params.clientId
+    ) {
       await db
         .update(multiplayerRemoteSessionsTable)
         .set({
@@ -828,7 +865,9 @@ class MultiplayerRemoteService {
         lastHeartbeatAt: now,
         updatedAt: now,
       })
-      .where(eq(multiplayerRemoteDisplayDevicesTable.id, session.displayDeviceId));
+      .where(
+        eq(multiplayerRemoteDisplayDevicesTable.id, session.displayDeviceId)
+      );
   }
 
   async closeSessionInternal(sessionId: number, reason: string): Promise<void> {
@@ -840,8 +879,8 @@ class MultiplayerRemoteService {
         .where(
           and(
             eq(multiplayerRemoteJoinRequestsTable.sessionId, sessionId),
-            eq(multiplayerRemoteJoinRequestsTable.status, "pending"),
-          ),
+            eq(multiplayerRemoteJoinRequestsTable.status, "pending")
+          )
         );
 
       await tx
@@ -864,7 +903,7 @@ class MultiplayerRemoteService {
 
   private async getOwnedSession(
     sessionId: number,
-    userId: number,
+    userId: number
   ): Promise<MultiplayerRemoteSessionRecord> {
     const [session] = await db
       .select()
@@ -872,13 +911,15 @@ class MultiplayerRemoteService {
       .where(
         and(
           eq(multiplayerRemoteSessionsTable.id, sessionId),
-          eq(multiplayerRemoteSessionsTable.ownerUserId, userId),
-        ),
+          eq(multiplayerRemoteSessionsTable.ownerUserId, userId)
+        )
       )
       .limit(1);
 
     if (!session) {
-      throw new NotFoundError(`Multiplayer session not found with id: ${sessionId}`);
+      throw new NotFoundError(
+        `Multiplayer session not found with id: ${sessionId}`
+      );
     }
 
     return session;
@@ -886,7 +927,7 @@ class MultiplayerRemoteService {
 
   private async getJoinRequest(
     sessionId: number,
-    requestId: number,
+    requestId: number
   ): Promise<MultiplayerRemoteJoinRequestRecord> {
     const [joinRequest] = await db
       .select()
@@ -894,8 +935,8 @@ class MultiplayerRemoteService {
       .where(
         and(
           eq(multiplayerRemoteJoinRequestsTable.id, requestId),
-          eq(multiplayerRemoteJoinRequestsTable.sessionId, sessionId),
-        ),
+          eq(multiplayerRemoteJoinRequestsTable.sessionId, sessionId)
+        )
       )
       .limit(1);
 
@@ -907,7 +948,7 @@ class MultiplayerRemoteService {
   }
 
   private async getPendingJoinRequest(
-    sessionId: number,
+    sessionId: number
   ): Promise<MultiplayerRemoteJoinRequestRecord | null> {
     const [joinRequest] = await db
       .select()
@@ -916,8 +957,8 @@ class MultiplayerRemoteService {
         and(
           eq(multiplayerRemoteJoinRequestsTable.sessionId, sessionId),
           eq(multiplayerRemoteJoinRequestsTable.status, "pending"),
-          gt(multiplayerRemoteJoinRequestsTable.expiresAt, new Date()),
-        ),
+          gt(multiplayerRemoteJoinRequestsTable.expiresAt, new Date())
+        )
       )
       .limit(1);
 
@@ -926,7 +967,7 @@ class MultiplayerRemoteService {
 
   private async assertPendingJoinRequest(
     joinRequest: MultiplayerRemoteJoinRequestRecord,
-    now: Date,
+    now: Date
   ): Promise<void> {
     if (joinRequest.status !== "pending") {
       throw new ConflictError("Join request has already been resolved");
@@ -940,7 +981,7 @@ class MultiplayerRemoteService {
 
   private async expireStaleJoinRequests(
     sessionId: number,
-    now = new Date(),
+    now = new Date()
   ): Promise<void> {
     const expiredRequests = await db
       .update(multiplayerRemoteJoinRequestsTable)
@@ -949,8 +990,8 @@ class MultiplayerRemoteService {
         and(
           eq(multiplayerRemoteJoinRequestsTable.sessionId, sessionId),
           eq(multiplayerRemoteJoinRequestsTable.status, "pending"),
-          lte(multiplayerRemoteJoinRequestsTable.expiresAt, now),
-        ),
+          lte(multiplayerRemoteJoinRequestsTable.expiresAt, now)
+        )
       )
       .returning({ id: multiplayerRemoteJoinRequestsTable.id });
 
@@ -979,7 +1020,7 @@ class MultiplayerRemoteService {
         sessionId,
         expiredJoinRequestIds: expiredRequests.map((request) => request.id),
       },
-      "Expired stale multiplayer join requests",
+      "Expired stale multiplayer join requests"
     );
   }
 
@@ -995,8 +1036,8 @@ class MultiplayerRemoteService {
       .where(
         and(
           eq(multiplayerRemoteSessionsTable.id, sessionId),
-          ne(multiplayerRemoteSessionsTable.status, "closed"),
-        ),
+          ne(multiplayerRemoteSessionsTable.status, "closed")
+        )
       );
   }
 
@@ -1009,8 +1050,8 @@ class MultiplayerRemoteService {
         .where(
           and(
             eq(multiplayerRemoteSessionsTable.pairingCode, code),
-            isNull(multiplayerRemoteSessionsTable.closedAt),
-          ),
+            isNull(multiplayerRemoteSessionsTable.closedAt)
+          )
         )
         .limit(1);
 
@@ -1024,12 +1065,15 @@ class MultiplayerRemoteService {
 
   private generatePairingCode(): string {
     const bytes = randomBytes(6);
-    return Array.from(bytes, (byte) => PAIRING_CODE_ALPHABET[byte % PAIRING_CODE_ALPHABET.length]).join("");
+    return Array.from(
+      bytes,
+      (byte) => PAIRING_CODE_ALPHABET[byte % PAIRING_CODE_ALPHABET.length]
+    ).join("");
   }
 
   private mapSession(
     session: MultiplayerRemoteSessionRecord,
-    pendingJoinRequest: MultiplayerRemoteJoinRequestRecord | null,
+    pendingJoinRequest: MultiplayerRemoteJoinRequestRecord | null
   ): MultiplayerRemoteSessionDto {
     return {
       id: session.id,
@@ -1057,7 +1101,7 @@ class MultiplayerRemoteService {
   }
 
   private mapJoinRequest(
-    joinRequest: MultiplayerRemoteJoinRequestRecord,
+    joinRequest: MultiplayerRemoteJoinRequestRecord
   ): MultiplayerRemoteJoinRequestDto {
     return {
       id: joinRequest.id,
@@ -1068,9 +1112,8 @@ class MultiplayerRemoteService {
       requestedCode: joinRequest.requestedCode,
       canTrustDevice: Boolean(joinRequest.remoteDeviceKeyHash),
       remoteDeviceName: joinRequest.remoteDeviceName,
-      remoteDeviceType: joinRequest.remoteDeviceType as
-        | MultiplayerRemoteDeviceType
-        | null,
+      remoteDeviceType:
+        joinRequest.remoteDeviceType as MultiplayerRemoteDeviceType | null,
       remoteUserAgent: joinRequest.remoteUserAgent,
       expiresAt: joinRequest.expiresAt.toISOString(),
       resolvedAt: this.dateToIso(joinRequest.resolvedAt),
@@ -1085,7 +1128,7 @@ class MultiplayerRemoteService {
 
   private async getTrustedDevice(
     userId: number,
-    remoteDeviceKey: string,
+    remoteDeviceKey: string
   ): Promise<MultiplayerRemoteTrustedDeviceRecord> {
     const [trustedDevice] = await db
       .select()
@@ -1095,10 +1138,10 @@ class MultiplayerRemoteService {
           eq(multiplayerRemoteTrustedDevicesTable.ownerUserId, userId),
           eq(
             multiplayerRemoteTrustedDevicesTable.deviceKeyHash,
-            this.hashDeviceKey(remoteDeviceKey),
+            this.hashDeviceKey(remoteDeviceKey)
           ),
-          isNull(multiplayerRemoteTrustedDevicesTable.revokedAt),
-        ),
+          isNull(multiplayerRemoteTrustedDevicesTable.revokedAt)
+        )
       )
       .limit(1);
 
@@ -1111,7 +1154,7 @@ class MultiplayerRemoteService {
 
   private async authenticateDisplayDevice(
     deviceId: string,
-    deviceSecret: string,
+    deviceSecret: string
   ): Promise<MultiplayerRemoteDisplayDeviceRecord> {
     const [displayDevice] = await db
       .select()
@@ -1121,10 +1164,10 @@ class MultiplayerRemoteService {
           eq(multiplayerRemoteDisplayDevicesTable.publicId, deviceId),
           eq(
             multiplayerRemoteDisplayDevicesTable.authTokenHash,
-            this.hashDeviceKey(deviceSecret),
+            this.hashDeviceKey(deviceSecret)
           ),
-          isNull(multiplayerRemoteDisplayDevicesTable.revokedAt),
-        ),
+          isNull(multiplayerRemoteDisplayDevicesTable.revokedAt)
+        )
       )
       .limit(1);
 
@@ -1136,29 +1179,33 @@ class MultiplayerRemoteService {
   }
 
   private async getDisplayDevicesByIds(
-    displayDeviceIds: number[],
+    displayDeviceIds: number[]
   ): Promise<Map<number, MultiplayerRemoteDisplayDeviceDto>> {
     if (displayDeviceIds.length === 0) {
       return new Map();
     }
 
-    const displayDevices = await db.query.multiplayerRemoteDisplayDevicesTable.findMany({
-      where: (displayDevices, { inArray, isNull }) =>
-        and(inArray(displayDevices.id, displayDeviceIds), isNull(displayDevices.revokedAt)),
-    });
+    const displayDevices =
+      await db.query.multiplayerRemoteDisplayDevicesTable.findMany({
+        where: (displayDevices, { inArray, isNull }) =>
+          and(
+            inArray(displayDevices.id, displayDeviceIds),
+            isNull(displayDevices.revokedAt)
+          ),
+      });
 
     return new Map(
       displayDevices.map((displayDevice) => [
         displayDevice.id,
         this.mapDisplayDevice(displayDevice),
-      ]),
+      ])
     );
   }
 
   private async touchTrustedDevice(
     trustedDevice: MultiplayerRemoteTrustedDeviceRecord,
     input: TrustedDeviceBody,
-    userAgent: string | null,
+    userAgent: string | null
   ): Promise<MultiplayerRemoteTrustedDeviceRecord> {
     const now = new Date();
     const [updated] = await db
@@ -1177,13 +1224,14 @@ class MultiplayerRemoteService {
   }
 
   private mapTrustedDevice(
-    trustedDevice: MultiplayerRemoteTrustedDeviceRecord,
+    trustedDevice: MultiplayerRemoteTrustedDeviceRecord
   ): MultiplayerRemoteTrustedDeviceDto {
     return {
       id: trustedDevice.id,
       ownerUserId: trustedDevice.ownerUserId,
       deviceName: trustedDevice.deviceName,
-      deviceType: trustedDevice.deviceType as MultiplayerRemoteDeviceType | null,
+      deviceType:
+        trustedDevice.deviceType as MultiplayerRemoteDeviceType | null,
       userAgent: trustedDevice.userAgent,
       trustedAt: trustedDevice.trustedAt.toISOString(),
       lastSeenAt: this.dateToIso(trustedDevice.lastSeenAt),
@@ -1194,14 +1242,15 @@ class MultiplayerRemoteService {
   }
 
   private mapDisplayDevice(
-    displayDevice: MultiplayerRemoteDisplayDeviceRecord,
+    displayDevice: MultiplayerRemoteDisplayDeviceRecord
   ): MultiplayerRemoteDisplayDeviceDto {
     return {
       id: displayDevice.id,
       ownerUserId: displayDevice.ownerUserId,
       publicId: displayDevice.publicId,
       deviceName: displayDevice.deviceName,
-      deviceType: displayDevice.deviceType as MultiplayerRemoteDeviceType | null,
+      deviceType:
+        displayDevice.deviceType as MultiplayerRemoteDeviceType | null,
       trustedAt: displayDevice.trustedAt.toISOString(),
       lastSeenAt: this.dateToIso(displayDevice.lastSeenAt),
       lastHeartbeatAt: this.dateToIso(displayDevice.lastHeartbeatAt),
@@ -1216,4 +1265,6 @@ class MultiplayerRemoteService {
   }
 }
 
-export const multiplayerRemoteService = new MultiplayerRemoteService();
+export const multiplayerRemoteService = env.DEMO_MODE
+  ? multiplayerRemoteDemoService
+  : new MultiplayerRemoteService();

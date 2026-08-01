@@ -1,0 +1,280 @@
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { existsSync, rmSync, statSync } from "fs";
+import { resolve } from "path";
+
+process.env.NODE_ENV = "test";
+process.env.POSTGRES_USER ||= "demo-reset-test";
+process.env.POSTGRES_PASSWORD ||= "demo-reset-test";
+process.env.SESSION_SECRET ||=
+  "demo-reset-session-secret-at-least-32-characters";
+
+const databasePath = `/tmp/conversor-video-demo-reset-${process.pid}.sqlite`;
+const baselinePath = `${databasePath}.baseline`;
+let demo: typeof import("@/database/demo");
+
+function removeDatabases(): void {
+  for (const path of [
+    databasePath,
+    `${databasePath}-shm`,
+    `${databasePath}-wal`,
+    baselinePath,
+    `${baselinePath}-shm`,
+    `${baselinePath}-wal`,
+  ]) {
+    rmSync(path, { force: true });
+  }
+}
+
+describe("immutable demo SQLite baseline reset", () => {
+  beforeAll(async () => {
+    removeDatabases();
+    demo = await import("@/database/demo");
+    demo.setDemoDatabasePathForTests(databasePath);
+    demo.importDemoJsonFile(
+      resolve(process.cwd(), "demo_mode", "demo_mode.json"),
+      { reset: true }
+    );
+    demo.importDemoArtworkManifestFile(
+      resolve(process.cwd(), "demo_mode", "artwork", "manifest.json")
+    );
+    demo.createDemoBaselineSnapshot();
+  });
+
+  afterAll(() => {
+    demo.setDemoDatabasePathForTests(null);
+    removeDatabases();
+  });
+
+  it("fully restores catalog, relationships, artwork, and resources", () => {
+    expect(existsSync(baselinePath)).toBe(true);
+    expect(statSync(baselinePath).mode & 0o222).toBe(0);
+
+    const sqlite = demo.getDemoSqlite();
+    const original = {
+      videoTitle: sqlite
+        .query<
+          { title: string },
+          []
+        >("SELECT title FROM demo_videos WHERE id = 1")
+        .get()!.title,
+      creatorCount: sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_creators")
+        .get()!.count,
+      creator42: sqlite
+        .query<
+          { name: string },
+          []
+        >("SELECT name FROM demo_creators WHERE id = 42")
+        .get()!.name,
+      videoCount: sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_videos")
+        .get()!.count,
+      tagCount: sqlite
+        .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM demo_tags")
+        .get()!.count,
+      studioName: sqlite
+        .query<
+          { name: string },
+          []
+        >("SELECT name FROM demo_studios WHERE id = 1")
+        .get()!.name,
+      artworkTitle: sqlite
+        .query<
+          { title: string },
+          []
+        >("SELECT title FROM demo_artwork WHERE video_id = 1")
+        .get()!.title,
+      artworkCount: sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_artwork")
+        .get()!.count,
+      artworkAssetCount: sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_artwork_assets")
+        .get()!.count,
+    };
+
+    sqlite.run("UPDATE demo_videos SET title = ? WHERE id = 1", [
+      "Runtime-mutated title",
+    ]);
+    sqlite.run("DELETE FROM demo_creators WHERE id = 42");
+    sqlite.run("DELETE FROM demo_videos WHERE id = 132");
+    sqlite.run("UPDATE demo_studios SET name = ? WHERE id = 1", [
+      "Runtime-mutated studio",
+    ]);
+    sqlite.run(
+      `INSERT INTO demo_tags
+       (id, name, parent_id, description, color, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        999,
+        "Runtime-created tag",
+        null,
+        null,
+        null,
+        "2026-08-01T00:00:00.000Z",
+        "2026-08-01T00:00:00.000Z",
+      ]
+    );
+    sqlite.run(
+      `INSERT INTO demo_creators
+       (id, name, description, profile_picture_path, main_picture_path,
+        face_thumbnail_path, extra_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        999,
+        "Runtime-created creator",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "2026-08-01T00:00:00.000Z",
+        "2026-08-01T00:00:00.000Z",
+      ]
+    );
+    sqlite.run("UPDATE demo_artwork SET title = ? WHERE video_id = 1", [
+      "Runtime artwork title",
+    ]);
+    sqlite.run("DELETE FROM demo_artwork_assets WHERE video_id = 2");
+    sqlite.run("DELETE FROM demo_artwork WHERE video_id = 2");
+    sqlite.run("DELETE FROM demo_artwork_assets WHERE video_id = 3");
+    sqlite.run("DELETE FROM demo_artwork WHERE video_id = 3");
+    sqlite.run(
+      `INSERT INTO demo_artwork
+       (video_id, title, status, palette_json, generated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        3,
+        "Runtime-generated artwork",
+        "ready",
+        JSON.stringify({ dominant: "#123456" }),
+        "2026-08-01T00:00:00.000Z",
+      ]
+    );
+    demo.demoRepository.putResource("conversion-job", 777, {
+      id: 777,
+      status: "pending",
+    });
+
+    demo.resetDemoRuntimeState();
+
+    expect(
+      sqlite
+        .query<
+          { title: string },
+          []
+        >("SELECT title FROM demo_videos WHERE id = 1")
+        .get()!.title
+    ).toBe(original.videoTitle);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_creators")
+        .get()!.count
+    ).toBe(original.creatorCount);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_videos")
+        .get()!.count
+    ).toBe(original.videoCount);
+    expect(
+      sqlite
+        .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM demo_tags")
+        .get()!.count
+    ).toBe(original.tagCount);
+    expect(
+      sqlite
+        .query<
+          { name: string },
+          []
+        >("SELECT name FROM demo_studios WHERE id = 1")
+        .get()!.name
+    ).toBe(original.studioName);
+    expect(
+      sqlite
+        .query<
+          { name: string },
+          []
+        >("SELECT name FROM demo_creators WHERE id = 42")
+        .get()!.name
+    ).toBe(original.creator42);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_creators WHERE id = 999")
+        .get()!.count
+    ).toBe(0);
+    expect(
+      sqlite
+        .query<
+          { title: string },
+          []
+        >("SELECT title FROM demo_artwork WHERE video_id = 1")
+        .get()!.title
+    ).toBe(original.artworkTitle);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_artwork")
+        .get()!.count
+    ).toBe(original.artworkCount);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_artwork_assets")
+        .get()!.count
+    ).toBe(original.artworkAssetCount);
+    expect(demo.demoRepository.getResource("conversion-job", 777)).toBeNull();
+  });
+
+  it("preserves mutations across reopen until an explicit reset", () => {
+    demo
+      .getDemoSqlite()
+      .run("UPDATE demo_videos SET title = ? WHERE id = 1", [
+        "Manual-mode persisted title",
+      ]);
+    demo.closeDemoDatabase();
+    expect(
+      demo
+        .getDemoSqlite()
+        .query<
+          { title: string },
+          []
+        >("SELECT title FROM demo_videos WHERE id = 1")
+        .get()!.title
+    ).toBe("Manual-mode persisted title");
+
+    demo.resetDemoRuntimeState();
+    expect(
+      demo
+        .getDemoSqlite()
+        .query<
+          { title: string },
+          []
+        >("SELECT title FROM demo_videos WHERE id = 1")
+        .get()!.title
+    ).not.toBe("Manual-mode persisted title");
+  });
+});

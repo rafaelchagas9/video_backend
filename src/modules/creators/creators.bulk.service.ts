@@ -13,14 +13,19 @@ import type {
 import { db } from "@/config/drizzle";
 import { creatorsTable, platformsTable, videosTable } from "@/database/schema";
 import { eq } from "drizzle-orm";
+import { env } from "@/config/env";
+import { creatorsBulkDemoService } from "./creators.bulk.demo.service";
 
 export class CreatorsBulkService {
   // Bulk Import with Preview
   async bulkImport(
     items: BulkCreatorImportItem[],
     mode: "merge" | "replace",
-    dryRun: boolean,
+    dryRun: boolean
   ): Promise<BulkImportResult> {
+    if (env.DEMO_MODE) {
+      return creatorsBulkDemoService.bulkImport(items, mode, dryRun);
+    }
     const previewItems: BulkImportPreviewItem[] = [];
     let willCreate = 0;
     let willUpdate = 0;
@@ -79,7 +84,7 @@ export class CreatorsBulkService {
 
           if (!platformExists) {
             missingDependencies.push(
-              `Platform id ${platform.platform_id} not found`,
+              `Platform id ${platform.platform_id} not found`
             );
           }
         }
@@ -125,7 +130,7 @@ export class CreatorsBulkService {
         if (item.platforms) {
           const existingPlatforms =
             await creatorsPlatformsService.getPlatformProfiles(
-              existingCreator.id,
+              existingCreator.id
             );
           let add = 0,
             update = 0,
@@ -134,7 +139,7 @@ export class CreatorsBulkService {
           for (const p of item.platforms) {
             const existing = existingPlatforms.find(
               (ep) =>
-                ep.platform_id === p.platform_id && ep.username === p.username,
+                ep.platform_id === p.platform_id && ep.username === p.username
             );
             if (existing) {
               if (
@@ -153,8 +158,8 @@ export class CreatorsBulkService {
                 !item.platforms!.some(
                   (p) =>
                     p.platform_id === ep.platform_id &&
-                    p.username === ep.username,
-                ),
+                    p.username === ep.username
+                )
             ).length;
           }
 
@@ -170,7 +175,7 @@ export class CreatorsBulkService {
         // Compute social link changes
         if (item.social_links) {
           const existingLinks = await creatorsSocialService.getSocialLinks(
-            existingCreator.id,
+            existingCreator.id
           );
           let add = 0,
             update = 0,
@@ -178,7 +183,7 @@ export class CreatorsBulkService {
 
           for (const sl of item.social_links) {
             const existing = existingLinks.find(
-              (el) => el.platform_name === sl.platform_name,
+              (el) => el.platform_name === sl.platform_name
             );
             if (existing) {
               if (existing.url !== sl.url) update++;
@@ -191,8 +196,8 @@ export class CreatorsBulkService {
             remove = existingLinks.filter(
               (el) =>
                 !item.social_links!.some(
-                  (sl) => sl.platform_name === el.platform_name,
-                ),
+                  (sl) => sl.platform_name === el.platform_name
+                )
             ).length;
           }
 
@@ -208,7 +213,7 @@ export class CreatorsBulkService {
         // Compute alias changes
         if (item.aliases) {
           const existingAliases = await creatorsAliasesService.getAliases(
-            existingCreator.id,
+            existingCreator.id
           );
           let add = 0,
             update = 0,
@@ -225,7 +230,7 @@ export class CreatorsBulkService {
 
           if (mode === "replace") {
             remove = existingAliases.filter(
-              (ea) => !item.aliases!.some((a) => a.name === ea.name),
+              (ea) => !item.aliases!.some((a) => a.name === ea.name)
             ).length;
           }
 
@@ -241,16 +246,16 @@ export class CreatorsBulkService {
         // Compute video link changes
         if (item.link_video_ids) {
           const existingVideos = await creatorsRelationshipsService.getVideos(
-            existingCreator.id,
+            existingCreator.id
           );
           const existingVideoIds = existingVideos.map((v) => v.id);
           const add = item.link_video_ids.filter(
-            (id) => !existingVideoIds.includes(id),
+            (id) => !existingVideoIds.includes(id)
           ).length;
           const remove =
             mode === "replace"
               ? existingVideoIds.filter(
-                  (id) => !item.link_video_ids!.includes(id),
+                  (id) => !item.link_video_ids!.includes(id)
                 ).length
               : undefined;
 
@@ -330,12 +335,12 @@ export class CreatorsBulkService {
           try {
             await creatorsSocialService.setPictureFromUrl(
               creatorId,
-              item.profile_picture_url,
+              item.profile_picture_url
             );
           } catch (error: any) {
             logger.warn(
               { error, creatorId, url: item.profile_picture_url },
-              "Failed to set profile picture from URL",
+              "Failed to set profile picture from URL"
             );
           }
         }
@@ -350,7 +355,7 @@ export class CreatorsBulkService {
                 !item.platforms.some(
                   (p) =>
                     p.platform_id === ep.platform_id &&
-                    p.username === ep.username,
+                    p.username === ep.username
                 )
               ) {
                 await creatorsPlatformsService.deletePlatformProfile(ep.id);
@@ -359,7 +364,7 @@ export class CreatorsBulkService {
           }
           await creatorsPlatformsService.bulkUpsertPlatforms(
             creatorId,
-            item.platforms,
+            item.platforms
           );
         }
 
@@ -371,7 +376,7 @@ export class CreatorsBulkService {
             for (const el of existing) {
               if (
                 !item.social_links.some(
-                  (sl) => sl.platform_name === el.platform_name,
+                  (sl) => sl.platform_name === el.platform_name
                 )
               ) {
                 await creatorsSocialService.deleteSocialLink(el.id);
@@ -380,7 +385,7 @@ export class CreatorsBulkService {
           }
           await creatorsSocialService.bulkUpsertSocialLinks(
             creatorId,
-            item.social_links,
+            item.social_links
           );
         }
 
@@ -396,7 +401,7 @@ export class CreatorsBulkService {
           }
           await creatorsAliasesService.bulkUpsertAliases(
             creatorId,
-            item.aliases,
+            item.aliases
           );
         }
 
@@ -409,7 +414,7 @@ export class CreatorsBulkService {
               if (!item.link_video_ids.includes(v.id)) {
                 await creatorsRelationshipsService.removeFromVideo(
                   v.id,
-                  creatorId,
+                  creatorId
                 );
               }
             }
