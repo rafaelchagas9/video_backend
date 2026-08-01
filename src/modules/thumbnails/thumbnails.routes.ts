@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { createReadStream } from "fs";
 import { API_PREFIX } from "@/config/constants";
+import { env } from "@/config/env";
+import { resolveDemoAssetPath } from "@/database/demo/assets";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { thumbnailsService } from "./thumbnails.service";
 import {
@@ -14,14 +16,16 @@ import {
 } from "./thumbnails.schemas";
 
 export async function videoThumbnailsRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   // All routes require authentication
   app.addHook("preHandler", authenticateUser);
 
-  const mapThumbnail = (thumbnail: Awaited<ReturnType<typeof thumbnailsService.findById>>) => ({
+  const mapThumbnail = (
+    thumbnail: Awaited<ReturnType<typeof thumbnailsService.findById>>
+  ) => ({
     ...thumbnail,
     asset_url: `${API_PREFIX}/thumbnails/${thumbnail.id}/image`,
   });
@@ -48,7 +52,7 @@ export async function videoThumbnailsRoutes(
     async (request, reply) => {
       const thumbnail = await thumbnailsService.generate(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.status(201).send({
@@ -56,7 +60,7 @@ export async function videoThumbnailsRoutes(
         data: mapThumbnail(thumbnail),
         message: "Thumbnail generated successfully",
       });
-    },
+    }
   );
 
   // Get thumbnails for video
@@ -77,26 +81,28 @@ export async function videoThumbnailsRoutes(
     },
     async (request, reply) => {
       const thumbnails = await thumbnailsService.getByVideoId(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: thumbnails.map(mapThumbnail),
       });
-    },
+    }
   );
 }
 
 export async function thumbnailsRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   // All routes require authentication
   app.addHook("preHandler", authenticateUser);
 
-  const mapThumbnail = (thumbnail: Awaited<ReturnType<typeof thumbnailsService.findById>>) => ({
+  const mapThumbnail = (
+    thumbnail: Awaited<ReturnType<typeof thumbnailsService.findById>>
+  ) => ({
     ...thumbnail,
     asset_url: `${API_PREFIX}/thumbnails/${thumbnail.id}/image`,
   });
@@ -124,7 +130,7 @@ export async function thumbnailsRoutes(
         success: true,
         data: mapThumbnail(thumbnail),
       });
-    },
+    }
   );
 
   // Serve thumbnail image (uses fastify directly for binary response)
@@ -142,13 +148,21 @@ export async function thumbnailsRoutes(
       const thumbnail = await thumbnailsService.findById(request.params.id);
 
       // Determine mime type from file extension
-      const ext = thumbnail.file_path.split('.').pop()?.toLowerCase();
-      const mimeType = ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      const ext = thumbnail.file_path.split(".").pop()?.toLowerCase();
+      const mimeType =
+        ext === "png"
+          ? "image/png"
+          : ext === "webp"
+            ? "image/webp"
+            : "image/jpeg";
 
       reply.header("Content-Type", mimeType);
       reply.header("Cache-Control", "public, max-age=86400");
-      return reply.send(createReadStream(thumbnail.file_path));
-    },
+      const safePath = env.DEMO_MODE
+        ? resolveDemoAssetPath(thumbnail.file_path, { mustExist: true })
+        : thumbnail.file_path;
+      return reply.send(createReadStream(safePath));
+    }
   );
 
   // Delete thumbnail
@@ -174,6 +188,6 @@ export async function thumbnailsRoutes(
         success: true,
         message: "Thumbnail deleted successfully",
       });
-    },
+    }
   );
 }

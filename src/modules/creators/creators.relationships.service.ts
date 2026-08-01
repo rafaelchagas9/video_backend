@@ -17,10 +17,18 @@ import type { Video } from "@/modules/videos/videos.types";
 import type { Creator } from "./creators.types";
 import type { Studio } from "@/modules/studios/studios.types";
 import { env } from "@/config/env";
+import { demoRepository } from "@/database/demo";
+import { creatorsDemoService } from "./creators.demo.service";
+import { videosDemoService } from "@/modules/videos/videos.demo.service";
 
 export class CreatorsRelationshipsService {
   // Video Relationship Methods
   async getVideos(creatorId: number): Promise<Video[]> {
+    if (env.DEMO_MODE)
+      return demoRepository.getVideos({
+        creatorIds: [creatorId],
+        limit: 10_000,
+      }).data as Video[];
     // Verify creator exists
     await this.verifyCreatorExists(creatorId);
 
@@ -51,7 +59,7 @@ export class CreatorsRelationshipsService {
       .from(videosTable)
       .innerJoin(
         videoCreatorsTable,
-        eq(videosTable.id, videoCreatorsTable.videoId),
+        eq(videosTable.id, videoCreatorsTable.videoId)
       )
       .where(eq(videoCreatorsTable.creatorId, creatorId))
       .orderBy(videosTable.createdAt);
@@ -60,6 +68,15 @@ export class CreatorsRelationshipsService {
   }
 
   async addToVideo(videoId: number, creatorId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships(
+        [videoId],
+        "creators",
+        [creatorId],
+        "add"
+      );
+      return;
+    }
     // Verify creator exists
     await this.verifyCreatorExists(creatorId);
 
@@ -70,8 +87,8 @@ export class CreatorsRelationshipsService {
       .where(
         and(
           eq(videoCreatorsTable.videoId, videoId),
-          eq(videoCreatorsTable.creatorId, creatorId),
-        ),
+          eq(videoCreatorsTable.creatorId, creatorId)
+        )
       )
       .limit(1);
 
@@ -87,7 +104,7 @@ export class CreatorsRelationshipsService {
     } catch (error: any) {
       if (isUniqueViolation(error)) {
         throw new ConflictError(
-          "Creator is already associated with this video",
+          "Creator is already associated with this video"
         );
       }
       if (isForeignKeyViolation(error)) {
@@ -99,13 +116,22 @@ export class CreatorsRelationshipsService {
   }
 
   async removeFromVideo(videoId: number, creatorId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships(
+        [videoId],
+        "creators",
+        [creatorId],
+        "remove"
+      );
+      return;
+    }
     await db
       .delete(videoCreatorsTable)
       .where(
         and(
           eq(videoCreatorsTable.videoId, videoId),
-          eq(videoCreatorsTable.creatorId, creatorId),
-        ),
+          eq(videoCreatorsTable.creatorId, creatorId)
+        )
       );
 
     // Drizzle returns an array, not an object with rowCount
@@ -142,7 +168,7 @@ export class CreatorsRelationshipsService {
       .from(creatorsTable)
       .innerJoin(
         videoCreatorsTable,
-        eq(creatorsTable.id, videoCreatorsTable.creatorId),
+        eq(creatorsTable.id, videoCreatorsTable.creatorId)
       )
       .where(eq(videoCreatorsTable.videoId, videoId))
       .orderBy(creatorsTable.name);
@@ -151,7 +177,7 @@ export class CreatorsRelationshipsService {
   }
 
   async getCreatorsForVideos(
-    videoIds: number[],
+    videoIds: number[]
   ): Promise<Map<number, Creator[]>> {
     const grouped = new Map<number, Creator[]>();
     if (env.DEMO_MODE) {
@@ -160,7 +186,7 @@ export class CreatorsRelationshipsService {
         try {
           grouped.set(
             videoId,
-            demoMockService.getVideoById(videoId).creators as Creator[],
+            demoMockService.getVideoById(videoId).creators as Creator[]
           );
         } catch {
           // Missing demo videos simply do not contribute a relationship.
@@ -198,7 +224,7 @@ export class CreatorsRelationshipsService {
       .from(videoCreatorsTable)
       .innerJoin(
         creatorsTable,
-        eq(creatorsTable.id, videoCreatorsTable.creatorId),
+        eq(creatorsTable.id, videoCreatorsTable.creatorId)
       )
       .where(inArray(videoCreatorsTable.videoId, videoIds))
       .orderBy(videoCreatorsTable.videoId, creatorsTable.name);
@@ -215,6 +241,10 @@ export class CreatorsRelationshipsService {
 
   // Studio Relationship Methods
   async linkStudio(creatorId: number, studioId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      creatorsDemoService.linkStudio(creatorId, studioId);
+      return;
+    }
     // Verify creator exists
     await this.verifyCreatorExists(creatorId);
 
@@ -225,8 +255,8 @@ export class CreatorsRelationshipsService {
       .where(
         and(
           eq(creatorStudiosTable.creatorId, creatorId),
-          eq(creatorStudiosTable.studioId, studioId),
-        ),
+          eq(creatorStudiosTable.studioId, studioId)
+        )
       )
       .limit(1);
 
@@ -251,17 +281,25 @@ export class CreatorsRelationshipsService {
   }
 
   async unlinkStudio(creatorId: number, studioId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      creatorsDemoService.unlinkStudio(creatorId, studioId);
+      return;
+    }
     await db
       .delete(creatorStudiosTable)
       .where(
         and(
           eq(creatorStudiosTable.creatorId, creatorId),
-          eq(creatorStudiosTable.studioId, studioId),
-        ),
+          eq(creatorStudiosTable.studioId, studioId)
+        )
       );
   }
 
   async getStudios(creatorId: number): Promise<Studio[]> {
+    if (env.DEMO_MODE)
+      return creatorsDemoService
+        .getStudioIds(creatorId)
+        .map((id) => demoRepository.getStudioById(id) as Studio);
     // Verify creator exists
     await this.verifyCreatorExists(creatorId);
 
@@ -277,7 +315,7 @@ export class CreatorsRelationshipsService {
       .from(studiosTable)
       .innerJoin(
         creatorStudiosTable,
-        eq(studiosTable.id, creatorStudiosTable.studioId),
+        eq(studiosTable.id, creatorStudiosTable.studioId)
       )
       .where(eq(creatorStudiosTable.creatorId, creatorId))
       .orderBy(studiosTable.name);

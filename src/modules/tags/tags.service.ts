@@ -19,21 +19,22 @@ import type {
   PaginatedTags,
 } from "./tags.types";
 import type { Video } from "@/modules/videos/videos.types";
+import { tagsDemoService } from "./tags.demo.service";
+import { videosDemoService } from "@/modules/videos/videos.demo.service";
 
 export class TagsService {
   async list(options: ListTagsOptions = {}): Promise<PaginatedTags> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
       const page = options.page ?? 1;
       const limit = options.limit ?? 20;
-      let tags = demoMockService.getTags() as Tag[];
+      let tags = tagsDemoService.list();
 
       if (options.search) {
         const search = options.search.toLowerCase();
         tags = tags.filter(
           (tag) =>
             tag.name.toLowerCase().includes(search) ||
-            tag.description?.toLowerCase().includes(search),
+            tag.description?.toLowerCase().includes(search)
         );
       }
 
@@ -75,8 +76,8 @@ export class TagsService {
       whereClauses.push(
         or(
           ilike(tagsTable.name, `%${search}%`),
-          ilike(tagsTable.description, `%${search}%`),
-        ),
+          ilike(tagsTable.description, `%${search}%`)
+        )
       );
     }
 
@@ -124,7 +125,7 @@ export class TagsService {
     limit: number,
     search: string | undefined,
     sortColumn: string,
-    sortOrder: string,
+    sortOrder: string
   ): Promise<PaginatedTags> {
     const offset = (page - 1) * limit;
 
@@ -188,12 +189,12 @@ export class TagsService {
 
     // Fetch all tags once to build tree in-memory
     const allTags = await this.list({ limit: 10000 }).then(
-      (r) => r.data as Tag[],
+      (r) => r.data as Tag[]
     );
 
     // Build tree with children
     const treeWithChildren = await Promise.all(
-      rootTags.map((tag) => this.buildTreeWithDescendants(tag.id, allTags)),
+      rootTags.map((tag) => this.buildTreeWithDescendants(tag.id, allTags))
     );
 
     return {
@@ -209,7 +210,7 @@ export class TagsService {
 
   private async buildTreeWithDescendants(
     tagId: number,
-    preFetchedTags?: Tag[],
+    preFetchedTags?: Tag[]
   ): Promise<TagTreeNode> {
     const allTags: Tag[] =
       preFetchedTags ??
@@ -242,7 +243,7 @@ export class TagsService {
 
   private buildTree(
     tags: Tag[],
-    parentId: number | null = null,
+    parentId: number | null = null
   ): TagTreeNode[] {
     return tags
       .filter((tag) => tag.parent_id === parentId)
@@ -254,12 +255,7 @@ export class TagsService {
 
   async findById(id: number): Promise<Tag> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const tag = demoMockService.getTags().find((t) => t.id === id);
-      if (!tag) {
-        throw new NotFoundError(`Tag not found with id: ${id}`);
-      }
-      return tag;
+      return tagsDemoService.findById(id);
     }
 
     const tag = await db
@@ -283,7 +279,7 @@ export class TagsService {
       return {
         ...tag,
         path: [...ancestors.map((ancestor) => ancestor.name), tag.name].join(
-          " > ",
+          " > "
         ),
       };
     }
@@ -297,8 +293,7 @@ export class TagsService {
 
   async getAncestors(id: number): Promise<Tag[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const tags = demoMockService.getTags();
+      const tags = tagsDemoService.list();
       const ancestors: Tag[] = [];
       let current = tags.find((t) => t.id === id);
       while (current && current.parent_id !== null) {
@@ -346,19 +341,7 @@ export class TagsService {
 
   async getDescendants(id: number): Promise<Tag[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const tags = demoMockService.getTags();
-      const descendants: Tag[] = [];
-      const queue = [id];
-      while (queue.length > 0) {
-        const currentId = queue.shift()!;
-        const children = tags.filter((t) => t.parent_id === currentId);
-        for (const child of children) {
-          descendants.push(child);
-          queue.push(child.id);
-        }
-      }
-      return descendants;
+      return tagsDemoService.getDescendants(id);
     }
 
     // Recursive CTE to get all descendants
@@ -394,9 +377,7 @@ export class TagsService {
 
   async getChildren(id: number): Promise<Tag[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const tags = demoMockService.getTags();
-      return tags.filter((t) => t.parent_id === id);
+      return tagsDemoService.getChildren(id);
     }
 
     await this.findById(id); // Ensure exists
@@ -412,15 +393,7 @@ export class TagsService {
 
   async create(input: CreateTagInput): Promise<Tag> {
     if (env.DEMO_MODE) {
-      return {
-        id: 9999,
-        name: input.name,
-        parent_id: input.parent_id || null,
-        description: input.description || null,
-        color: input.color || null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      return tagsDemoService.create(input);
     }
 
     // Verify parent exists if provided
@@ -449,7 +422,7 @@ export class TagsService {
       if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
-          `Tag with name "${input.name}" already exists at this level`,
+          `Tag with name "${input.name}" already exists at this level`
         );
       }
       throw error;
@@ -458,16 +431,7 @@ export class TagsService {
 
   async update(id: number, input: UpdateTagInput): Promise<Tag> {
     if (env.DEMO_MODE) {
-      const tag = await this.findById(id);
-      return {
-        ...tag,
-        name: input.name !== undefined ? input.name : tag.name,
-        parent_id:
-          input.parent_id !== undefined ? input.parent_id : tag.parent_id,
-        description:
-          input.description !== undefined ? input.description : tag.description,
-        color: input.color !== undefined ? input.color : tag.color,
-      };
+      return tagsDemoService.update(id, input);
     }
 
     await this.findById(id); // Ensure exists
@@ -518,7 +482,7 @@ export class TagsService {
       if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
-          `Tag with name "${input.name}" already exists at this level`,
+          `Tag with name "${input.name}" already exists at this level`
         );
       }
       throw error;
@@ -527,6 +491,7 @@ export class TagsService {
 
   async delete(id: number): Promise<void> {
     if (env.DEMO_MODE) {
+      tagsDemoService.delete(id);
       return;
     }
 
@@ -580,6 +545,7 @@ export class TagsService {
 
   async addToVideo(videoId: number, tagId: number): Promise<void> {
     if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships([videoId], "tags", [tagId], "add");
       return;
     }
 
@@ -593,8 +559,8 @@ export class TagsService {
       .where(
         and(
           eq(videoTagsTable.videoId, videoId),
-          eq(videoTagsTable.tagId, tagId),
-        ),
+          eq(videoTagsTable.tagId, tagId)
+        )
       )
       .limit(1);
 
@@ -622,13 +588,19 @@ export class TagsService {
 
   async removeFromVideo(videoId: number, tagId: number): Promise<void> {
     if (env.DEMO_MODE) {
+      videosDemoService.updateRelationships(
+        [videoId],
+        "tags",
+        [tagId],
+        "remove"
+      );
       return;
     }
 
     await db
       .delete(videoTagsTable)
       .where(
-        sql`${videoTagsTable.videoId} = ${videoId} AND ${videoTagsTable.tagId} = ${tagId}`,
+        sql`${videoTagsTable.videoId} = ${videoId} AND ${videoTagsTable.tagId} = ${tagId}`
       );
 
     // Note: Drizzle postgres-js doesn't return rowCount, so we can't check if deletion happened

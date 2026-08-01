@@ -10,6 +10,22 @@ import type {
   HealthCheckResponse,
 } from "./face-recognition.types";
 import { env } from "@/config/env";
+import { faceRecognitionDemoService } from "./face-recognition.demo.service";
+
+function demoDetection(): DetectFacesResponse {
+  return {
+    faces: [
+      {
+        bbox: [0.2, 0.1, 0.8, 0.9],
+        det_score: 0.99,
+        embedding: [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08],
+      },
+    ],
+    image_width: 640,
+    image_height: 640,
+    processing_time_ms: 0,
+  };
+}
 
 export class FaceRecognitionClient {
   private baseUrl: string;
@@ -24,6 +40,8 @@ export class FaceRecognitionClient {
    * Check if the Python face service is healthy and ready
    */
   async healthCheck(): Promise<HealthCheckResponse> {
+    if (env.DEMO_MODE) return faceRecognitionDemoService.healthCheck();
+
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -40,7 +58,7 @@ export class FaceRecognitionClient {
       if (!response.ok) {
         logger.warn(
           { status: response.status },
-          "Face service health check failed",
+          "Face service health check failed"
         );
         return {
           status: "unhealthy",
@@ -63,6 +81,8 @@ export class FaceRecognitionClient {
    * @returns Detected faces with embeddings
    */
   async detectFaces(request: DetectFacesRequest): Promise<DetectFacesResponse> {
+    if (env.DEMO_MODE) return demoDetection();
+
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -81,7 +101,7 @@ export class FaceRecognitionClient {
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(
-          `Face detection failed: ${response.status} ${errorText}`,
+          `Face detection failed: ${response.status} ${errorText}`
         );
       }
 
@@ -104,6 +124,8 @@ export class FaceRecognitionClient {
    * @returns Detected faces with embeddings
    */
   async detectFacesFromFile(imagePath: string): Promise<DetectFacesResponse> {
+    if (env.DEMO_MODE) return demoDetection();
+
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -136,7 +158,7 @@ export class FaceRecognitionClient {
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(
-          `Face detection failed: ${response.status} ${errorText}`,
+          `Face detection failed: ${response.status} ${errorText}`
         );
       }
 
@@ -167,7 +189,7 @@ export class FaceRecognitionClient {
    */
   async waitForAvailability(
     maxWaitMs: number = 60000,
-    checkIntervalMs: number = 2000,
+    checkIntervalMs: number = 2000
   ): Promise<boolean> {
     const startTime = Date.now();
 

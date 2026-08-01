@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { env } from "@/config/env";
+import { resolveDemoAssetPath } from "@/database/demo";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import {
   listVideosQuerySchema,
@@ -86,14 +88,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const result = await creatorsService.list(
         request.query,
-        request.user!.id,
+        request.user!.id
       );
 
       return reply.send({
         success: true,
         ...result,
       });
-    },
+    }
   );
 
   // Get creator by ID
@@ -115,14 +117,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const creator = await creatorsService.findById(
         request.params.id,
-        request.user!.id,
+        request.user!.id
       );
 
       return reply.send({
         success: true,
         data: creator,
       });
-    },
+    }
   );
 
   // Create new creator
@@ -144,7 +146,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const creator = await creatorsService.create(
         request.body,
-        request.user!.id,
+        request.user!.id
       );
 
       return reply.status(201).send({
@@ -152,7 +154,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: creator,
         message: "Creator created successfully",
       });
-    },
+    }
   );
 
   // Bulk import creators
@@ -186,7 +188,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
           ? `Preview: ${result.summary.will_create} to create, ${result.summary.will_update} to update, ${result.summary.errors} errors`
           : `Imported: ${result.summary.will_create} created, ${result.summary.will_update} updated`,
       });
-    },
+    }
   );
 
   // Update creator
@@ -211,7 +213,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const creator = await creatorsService.update(
         request.params.id,
         request.body,
-        request.user!.id,
+        request.user!.id
       );
 
       return reply.send({
@@ -219,7 +221,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: creator,
         message: "Creator updated successfully",
       });
-    },
+    }
   );
 
   // Delete creator
@@ -245,7 +247,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Creator deleted successfully",
       });
-    },
+    }
   );
 
   app.post(
@@ -271,7 +273,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Creator added to favorites",
       });
-    },
+    }
   );
 
   app.delete(
@@ -297,7 +299,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Creator removed from favorites",
       });
-    },
+    }
   );
 
   app.get(
@@ -318,14 +320,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const isFavorite = await creatorFavoritesService.isFavorite(
         request.user!.id,
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: { is_favorite: isFavorite },
       });
-    },
+    }
   );
 
   // Get videos by creator
@@ -357,7 +359,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         ...result,
       });
-    },
+    }
   );
 
   // Upload profile picture
@@ -395,7 +397,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         id,
         buffer,
         data.filename,
-        variant,
+        variant
       );
 
       return reply.send({
@@ -406,7 +408,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
             ? "Main picture uploaded successfully"
             : "Portrait uploaded successfully",
       });
-    },
+    }
   );
 
   // Get profile picture
@@ -426,7 +428,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const { id } = request.params as { id: string };
       const creator = await creatorsService.findById(
         Number(id),
-        request.user!.id,
+        request.user!.id
       );
       const { type, variant } = request.query as {
         type?: "face";
@@ -466,9 +468,30 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
             : "image/jpeg";
 
       reply.header("Content-Type", contentType);
-      const buffer = readFileSync(filePath);
+      const creatorPaths = [
+        creator.profile_picture_path,
+        creator.main_picture_path,
+        creator.face_thumbnail_path,
+      ];
+      if (env.DEMO_MODE && !creatorPaths.includes(filePath)) {
+        return reply
+          .type("application/json")
+          .status(404)
+          .send({
+            success: false,
+            error: {
+              message: "Demo creator picture not found",
+              statusCode: 404,
+            },
+          });
+      }
+      const safePath =
+        env.DEMO_MODE && creatorPaths.includes(filePath)
+          ? resolveDemoAssetPath(filePath, { mustExist: true })
+          : filePath;
+      const buffer = readFileSync(safePath);
       return reply.send(buffer);
-    },
+    }
   );
 
   // Delete profile picture
@@ -495,7 +518,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       };
       const creator = await creatorsSocialService.deleteProfilePicture(
         request.params.id,
-        variant,
+        variant
       );
 
       return reply.send({
@@ -506,7 +529,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
             ? "Main picture deleted successfully"
             : "Portrait deleted successfully",
       });
-    },
+    }
   );
 
   // Add platform profile
@@ -531,7 +554,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const profile = await creatorsPlatformsService.addPlatformProfile(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.status(201).send({
@@ -539,7 +562,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: profile,
         message: "Platform profile added successfully",
       });
-    },
+    }
   );
 
   // Get platform profiles
@@ -560,14 +583,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const profiles = await creatorsPlatformsService.getPlatformProfiles(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: profiles,
       });
-    },
+    }
   );
 
   // Update platform profile
@@ -592,6 +615,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const profile = await creatorsPlatformsService.updatePlatformProfile(
         Number(platformId),
         request.body,
+        Number((request.params as { id: string }).id)
       );
 
       return reply.send({
@@ -599,7 +623,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: profile,
         message: "Platform profile updated successfully",
       });
-    },
+    }
   );
 
   // Delete platform profile
@@ -619,13 +643,16 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { platformId } = request.params as { platformId: string };
-      await creatorsPlatformsService.deletePlatformProfile(Number(platformId));
+      await creatorsPlatformsService.deletePlatformProfile(
+        Number(platformId),
+        Number((request.params as { id: string }).id)
+      );
 
       return reply.send({
         success: true,
         message: "Platform profile deleted successfully",
       });
-    },
+    }
   );
 
   // Add social link
@@ -649,7 +676,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const link = await creatorsSocialService.addSocialLink(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.status(201).send({
@@ -657,7 +684,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: link,
         message: "Social link added successfully",
       });
-    },
+    }
   );
 
   // Bulk upsert platforms
@@ -682,7 +709,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const result = await creatorsPlatformsService.bulkUpsertPlatforms(
         request.params.id,
-        request.body.items,
+        request.body.items
       );
 
       return reply.send({
@@ -690,7 +717,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: result,
         message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
       });
-    },
+    }
   );
 
   // Bulk upsert social links
@@ -715,7 +742,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const result = await creatorsSocialService.bulkUpsertSocialLinks(
         request.params.id,
-        request.body.items,
+        request.body.items
       );
 
       return reply.send({
@@ -723,7 +750,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: result,
         message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
       });
-    },
+    }
   );
 
   // Set picture from URL
@@ -749,7 +776,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const creator = await creatorsSocialService.setPictureFromUrl(
         request.params.id,
         request.body.url,
-        request.body.variant,
+        request.body.variant
       );
 
       return reply.send({
@@ -760,7 +787,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
             ? "Main picture set from URL successfully"
             : "Portrait set from URL successfully",
       });
-    },
+    }
   );
 
   app.get(
@@ -781,14 +808,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const media = await creatorsSocialService.listGalleryMedia(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: media,
       });
-    },
+    }
   );
 
   app.post(
@@ -839,7 +866,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         request.params.id,
         await data.toBuffer(),
         parsedMeta.label,
-        parsedMeta.description,
+        parsedMeta.description
       );
 
       return reply.status(201).send({
@@ -847,7 +874,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: media,
         message: "Gallery media uploaded successfully",
       });
-    },
+    }
   );
 
   app.post(
@@ -873,7 +900,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         request.params.id,
         request.body.url,
         request.body.label,
-        request.body.description,
+        request.body.description
       );
 
       return reply.status(201).send({
@@ -881,7 +908,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: media,
         message: "Gallery media added successfully",
       });
-    },
+    }
   );
 
   app.get(
@@ -896,7 +923,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const media = await creatorsSocialService.listGalleryMedia(
-        request.params.id,
+        request.params.id
       );
       const item = media.find((entry) => entry.id === request.params.mediaId);
 
@@ -917,11 +944,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
           ? "image/png"
           : ext === "webp"
             ? "image/webp"
-            : "image/jpeg",
+            : "image/jpeg"
       );
 
-      return reply.send(readFileSync(item.file_path));
-    },
+      const safePath = env.DEMO_MODE
+        ? resolveDemoAssetPath(item.file_path, { mustExist: true })
+        : item.file_path;
+      return reply.send(readFileSync(safePath));
+    }
   );
 
   app.patch(
@@ -946,7 +976,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const media = await creatorsSocialService.updateGalleryMediaRoles(
         request.params.id,
         request.params.mediaId,
-        request.body,
+        request.body
       );
 
       return reply.send({
@@ -954,7 +984,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: media,
         message: "Gallery media roles updated successfully",
       });
-    },
+    }
   );
 
   app.delete(
@@ -975,14 +1005,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       await creatorsSocialService.deleteGalleryMedia(
         request.params.id,
-        request.params.mediaId,
+        request.params.mediaId
       );
 
       return reply.send({
         success: true,
         message: "Gallery media deleted successfully",
       });
-    },
+    }
   );
 
   // Get social links
@@ -1003,14 +1033,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const links = await creatorsSocialService.getSocialLinks(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: links,
       });
-    },
+    }
   );
 
   // Update social link
@@ -1035,6 +1065,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const link = await creatorsSocialService.updateSocialLink(
         Number(linkId),
         request.body,
+        Number((request.params as { id: string }).id)
       );
 
       return reply.send({
@@ -1042,7 +1073,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: link,
         message: "Social link updated successfully",
       });
-    },
+    }
   );
 
   // Delete social link
@@ -1062,13 +1093,16 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { linkId } = request.params as { linkId: string };
-      await creatorsSocialService.deleteSocialLink(Number(linkId));
+      await creatorsSocialService.deleteSocialLink(
+        Number(linkId),
+        Number((request.params as { id: string }).id)
+      );
 
       return reply.send({
         success: true,
         message: "Social link deleted successfully",
       });
-    },
+    }
   );
 
   // Add alias
@@ -1094,7 +1128,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const alias = await creatorsAliasesService.addAlias(
         request.params.id,
-        request.body,
+        request.body
       );
 
       return reply.status(201).send({
@@ -1102,7 +1136,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: alias,
         message: "Alias added successfully",
       });
-    },
+    }
   );
 
   // Get aliases
@@ -1123,14 +1157,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const aliases = await creatorsAliasesService.getAliases(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: aliases,
       });
-    },
+    }
   );
 
   // Bulk upsert aliases
@@ -1155,7 +1189,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const result = await creatorsAliasesService.bulkUpsertAliases(
         request.params.id,
-        request.body.items,
+        request.body.items
       );
 
       return reply.send({
@@ -1163,7 +1197,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: result,
         message: `Created ${result.created.length}, updated ${result.updated.length}, errors ${result.errors.length}`,
       });
-    },
+    }
   );
 
   // Update alias
@@ -1189,6 +1223,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const alias = await creatorsAliasesService.updateAlias(
         Number(aliasId),
         request.body,
+        Number((request.params as { id: string }).id)
       );
 
       return reply.send({
@@ -1196,7 +1231,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: alias,
         message: "Alias updated successfully",
       });
-    },
+    }
   );
 
   // Delete alias
@@ -1216,13 +1251,16 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { aliasId } = request.params as { aliasId: string };
-      await creatorsAliasesService.deleteAlias(Number(aliasId));
+      await creatorsAliasesService.deleteAlias(
+        Number(aliasId),
+        Number((request.params as { id: string }).id)
+      );
 
       return reply.send({
         success: true,
         message: "Alias deleted successfully",
       });
-    },
+    }
   );
 
   // Link creator to studio
@@ -1248,14 +1286,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       };
       await creatorsRelationshipsService.linkStudio(
         Number(id),
-        Number(studioId),
+        Number(studioId)
       );
 
       return reply.send({
         success: true,
         message: "Creator linked to studio successfully",
       });
-    },
+    }
   );
 
   // Get studios for creator
@@ -1276,14 +1314,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const studios = await creatorsRelationshipsService.getStudios(
-        request.params.id,
+        request.params.id
       );
 
       return reply.send({
         success: true,
         data: studios,
       });
-    },
+    }
   );
 
   // Unlink creator from studio
@@ -1308,14 +1346,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       };
       await creatorsRelationshipsService.unlinkStudio(
         Number(id),
-        Number(studioId),
+        Number(studioId)
       );
 
       return reply.send({
         success: true,
         message: "Creator unlinked from studio successfully",
       });
-    },
+    }
   );
 
   // Autocomplete creators by name
@@ -1340,14 +1378,14 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const creators = await creatorsService.autocomplete(
         q,
         limit,
-        request.user!.id,
+        request.user!.id
       );
 
       return reply.send({
         success: true,
         data: creators,
       });
-    },
+    }
   );
 
   // Get recent creators
@@ -1375,7 +1413,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         data: creators,
       });
-    },
+    }
   );
 
   // Quick create creator (minimal fields)
@@ -1402,7 +1440,7 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       const creator = await creatorsService.quickCreate(
         name,
         description,
-        request.user!.id,
+        request.user!.id
       );
 
       return reply.status(201).send({
@@ -1410,6 +1448,6 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         data: creator,
         message: "Creator created successfully",
       });
-    },
+    }
   );
 }

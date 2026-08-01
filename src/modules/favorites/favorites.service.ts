@@ -5,12 +5,12 @@ import { videosService } from "@/modules/videos/videos.service";
 import { API_PREFIX } from "@/config/constants";
 import { env } from "@/config/env";
 import { isUniqueViolation } from "@/utils/errors";
+import { favoritesDemoService } from "./favorites.demo.service";
 
 export class FavoritesService {
   async add(userId: number, videoId: number): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      demoMockService.addFavoriteVideo(videoId);
+      favoritesDemoService.add(userId, videoId);
       return;
     }
 
@@ -40,8 +40,7 @@ export class FavoritesService {
 
   async remove(userId: number, videoId: number): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      demoMockService.removeFavoriteVideo(videoId);
+      favoritesDemoService.remove(userId, videoId);
       return;
     }
 
@@ -50,8 +49,8 @@ export class FavoritesService {
       .where(
         and(
           eq(favoritesTable.userId, userId),
-          eq(favoritesTable.videoId, videoId),
-        ),
+          eq(favoritesTable.videoId, videoId)
+        )
       );
 
     // Drizzle doesn't return rowCount, so we can't verify if it was deleted
@@ -60,8 +59,7 @@ export class FavoritesService {
 
   async list(userId: number) {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getFavoriteVideos();
+      return favoritesDemoService.list(userId);
     }
 
     const query = sql`
@@ -88,8 +86,7 @@ export class FavoritesService {
 
   async isFavorite(userId: number, videoId: number): Promise<boolean> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.isFavoriteVideo(videoId);
+      return favoritesDemoService.isFavorite(userId, videoId);
     }
 
     const result = await db
@@ -98,8 +95,8 @@ export class FavoritesService {
       .where(
         and(
           eq(favoritesTable.userId, userId),
-          eq(favoritesTable.videoId, videoId),
-        ),
+          eq(favoritesTable.videoId, videoId)
+        )
       )
       .limit(1);
 

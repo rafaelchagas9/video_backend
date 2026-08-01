@@ -11,9 +11,12 @@ import type {
   Directory,
   DirectoryStats,
 } from "./directories.types";
+import { env } from "@/config/env";
+import { directoriesDemoService } from "./directories.demo.service";
 
 export class DirectoriesService {
   async create(input: CreateDirectoryInput): Promise<Directory> {
+    if (env.DEMO_MODE) return directoriesDemoService.create(input);
     // Normalize path
     const normalizedPath = resolve(input.path);
 
@@ -34,7 +37,7 @@ export class DirectoriesService {
     } catch (error: any) {
       if (error.code === "EACCES") {
         throw new ValidationError(
-          `No read permission for directory: ${normalizedPath}`,
+          `No read permission for directory: ${normalizedPath}`
         );
       }
       throw error;
@@ -48,7 +51,7 @@ export class DirectoriesService {
 
     if (existing) {
       throw new ConflictError(
-        `Directory already registered: ${normalizedPath}`,
+        `Directory already registered: ${normalizedPath}`
       );
     }
 
@@ -79,6 +82,7 @@ export class DirectoriesService {
   }
 
   async findAll(): Promise<Directory[]> {
+    if (env.DEMO_MODE) return directoriesDemoService.findAll();
     const results = await db.query.watchedDirectoriesTable.findMany({
       orderBy: (dirs, { desc }) => [desc(dirs.addedAt)],
     });
@@ -96,6 +100,7 @@ export class DirectoriesService {
   }
 
   async findById(id: number): Promise<Directory> {
+    if (env.DEMO_MODE) return directoriesDemoService.findById(id);
     const directory = await db.query.watchedDirectoriesTable.findFirst({
       where: (dirs, { eq }) => eq(dirs.id, id),
     });
@@ -117,6 +122,7 @@ export class DirectoriesService {
   }
 
   async update(id: number, input: UpdateDirectoryInput): Promise<Directory> {
+    if (env.DEMO_MODE) return directoriesDemoService.update(id, input);
     await this.findById(id); // Ensure exists
 
     const updateData: Partial<typeof watchedDirectoriesTable.$inferInsert> = {};
@@ -148,6 +154,10 @@ export class DirectoriesService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      directoriesDemoService.delete(id);
+      return;
+    }
     await this.findById(id); // Ensure exists
 
     await db
@@ -156,6 +166,7 @@ export class DirectoriesService {
   }
 
   async getStats(id: number): Promise<DirectoryStats> {
+    if (env.DEMO_MODE) return directoriesDemoService.getStats(id);
     await this.findById(id); // Ensure exists
 
     const [stats] = await db
@@ -183,6 +194,10 @@ export class DirectoriesService {
   }
 
   async updateLastScanTime(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      directoriesDemoService.virtualScan(id);
+      return;
+    }
     await db
       .update(watchedDirectoriesTable)
       .set({ lastScanAt: new Date() })

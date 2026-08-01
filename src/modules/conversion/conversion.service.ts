@@ -14,6 +14,7 @@ import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionHistoryService } from "./conversion.history.service";
 import { conversionInsightsService } from "./conversion.insights.service";
 import { conversionDemoService } from "./conversion.demo.service";
+import { conversionOperationsDemoService } from "./conversion.operations.demo.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { logger } from "@/utils/logger";
 import { db } from "@/config/drizzle";
@@ -40,7 +41,7 @@ export class ConversionService {
     // Set up queue processor using the processor service
     if (!env.DEMO_MODE) {
       conversionQueue.setProcessor(
-        conversionProcessorService.processJob.bind(conversionProcessorService),
+        conversionProcessorService.processJob.bind(conversionProcessorService)
       );
     }
   }
@@ -56,6 +57,8 @@ export class ConversionService {
    * Create a new conversion job and add to queue
    */
   async createJob(input: CreateConversionJobInput): Promise<ConversionJob> {
+    if (env.DEMO_MODE) return conversionOperationsDemoService.createJob(input);
+
     const video = await videosService.findById(input.video_id);
     const preset = getPreset(input.preset);
 
@@ -67,7 +70,7 @@ export class ConversionService {
     const targetResolution = ffmpegService.calculateTargetResolution(
       video.width,
       video.height,
-      preset,
+      preset
     );
 
     // Generate output path
@@ -86,12 +89,12 @@ export class ConversionService {
     // Check if same job already exists and is pending/processing
     const existing = await conversionJobsService.findExisting(
       input.video_id,
-      input.preset,
+      input.preset
     );
 
     if (existing) {
       throw new BadRequestError(
-        `Conversion job already ${existing.status} for this video with preset ${input.preset}`,
+        `Conversion job already ${existing.status} for this video with preset ${input.preset}`
       );
     }
 
@@ -132,6 +135,10 @@ export class ConversionService {
     deleteOriginal?: boolean;
     batchId?: string;
   }): Promise<ConversionJob[]> {
+    if (env.DEMO_MODE) {
+      return conversionOperationsDemoService.bulkCreateJobs(input);
+    }
+
     const { videoIds, preset: presetId, deleteOriginal, batchId } = input;
     if (videoIds.length === 0) return [];
 
@@ -160,8 +167,8 @@ export class ConversionService {
         and(
           inArray(conversionJobsTable.videoId, videoIds),
           eq(conversionJobsTable.preset, presetId),
-          inArray(conversionJobsTable.status, ["pending", "processing"]),
-        ),
+          inArray(conversionJobsTable.status, ["pending", "processing"])
+        )
       );
 
     const existingVideoIds = new Set(existingJobs.map((j) => j.videoId));
@@ -176,10 +183,13 @@ export class ConversionService {
       const targetResolution = ffmpegService.calculateTargetResolution(
         video.width,
         video.height,
-        preset,
+        preset
       );
 
-      const outputFileName = this.generateOutputFileName(video.fileName, preset);
+      const outputFileName = this.generateOutputFileName(
+        video.fileName,
+        preset
+      );
       let outputPath: string;
 
       if (deleteOriginal) {
@@ -204,10 +214,7 @@ export class ConversionService {
 
     // 4. Perform bulk insert inside a transaction
     const results = await db.transaction(async (tx) => {
-      return tx
-        .insert(conversionJobsTable)
-        .values(insertValues)
-        .returning();
+      return tx.insert(conversionJobsTable).values(insertValues).returning();
     });
 
     // 5. Enqueue each created job
@@ -255,7 +262,7 @@ export class ConversionService {
    */
   private generateOutputFileName(
     originalName: string,
-    preset: { id: string },
+    preset: { id: string }
   ): string {
     const baseName = basename(originalName, extname(originalName));
     const timestamp = Date.now();
@@ -266,6 +273,7 @@ export class ConversionService {
    * Find job by ID
    */
   async findById(id: number): Promise<ConversionJob> {
+    if (env.DEMO_MODE) return conversionOperationsDemoService.findById(id);
     return conversionJobsService.findById(id);
   }
 
@@ -273,7 +281,9 @@ export class ConversionService {
    * List jobs for a video
    */
   async listByVideoId(videoId: number): Promise<ConversionJob[]> {
-    if (env.DEMO_MODE) return [];
+    if (env.DEMO_MODE) {
+      return conversionOperationsDemoService.listByVideoId(videoId);
+    }
     return conversionJobsService.listByVideoId(videoId);
   }
 
@@ -281,6 +291,7 @@ export class ConversionService {
    * Cancel a pending job
    */
   async cancel(id: number): Promise<ConversionJob> {
+    if (env.DEMO_MODE) return conversionOperationsDemoService.cancel(id);
     return conversionJobsService.cancel(id);
   }
 
@@ -288,6 +299,8 @@ export class ConversionService {
    * Delete a job (only completed/failed/cancelled)
    */
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) return conversionOperationsDemoService.delete(id);
+
     const job = await conversionJobsService.findById(id);
 
     if (job.status === "pending" || job.status === "processing") {
@@ -302,7 +315,7 @@ export class ConversionService {
       } catch (error) {
         logger.warn(
           { error, path: job.output_path },
-          "Failed to delete output file",
+          "Failed to delete output file"
         );
       }
     }
@@ -314,6 +327,7 @@ export class ConversionService {
    * Get all available presets
    */
   getPresets() {
+    if (env.DEMO_MODE) return conversionOperationsDemoService.getPresets();
     return listPresets();
   }
 
@@ -321,13 +335,7 @@ export class ConversionService {
    * Get queue status
    */
   async getQueueStatus() {
-    if (env.DEMO_MODE) {
-      return {
-        queueLength: 0,
-        activeJobs: 0,
-        isProcessing: false,
-      };
-    }
+    if (env.DEMO_MODE) return conversionOperationsDemoService.getQueueStatus();
     return conversionQueue.getStatus();
   }
 
@@ -346,26 +354,28 @@ export class ConversionService {
       created_at: string;
     }[]
   > {
-    if (env.DEMO_MODE) return [];
+    if (env.DEMO_MODE) {
+      return conversionOperationsDemoService.getActiveConversions();
+    }
     return conversionJobsService.getActiveConversions();
   }
 
   async getHistory(
-    options?: ConversionHistoryListOptions,
+    options?: ConversionHistoryListOptions
   ): Promise<ConversionHistoryListResult> {
     if (env.DEMO_MODE) return conversionDemoService.list(options);
     return conversionHistoryService.list(options);
   }
 
   async getHistoryOverview(
-    filters?: ConversionHistoryFilters,
+    filters?: ConversionHistoryFilters
   ): Promise<ConversionHistoryOverview> {
     if (env.DEMO_MODE) return conversionDemoService.overview(filters);
     return conversionHistoryService.getOverview(filters);
   }
 
   async getHistoryInsights(
-    filters?: ConversionHistoryFilters,
+    filters?: ConversionHistoryFilters
   ): Promise<ConversionInsights> {
     if (env.DEMO_MODE) return conversionDemoService.insights(filters);
     return conversionInsightsService.getInsights(filters);
@@ -401,6 +411,8 @@ export class ConversionService {
     pendingCleared: number;
     processingReset: number;
   }> {
+    if (env.DEMO_MODE) return conversionOperationsDemoService.clearQueue();
+
     // Clear Redis queue
     await conversionQueue.clear();
 
@@ -466,7 +478,7 @@ export class ConversionService {
         pendingCleared: pendingCount,
         processingReset: processingCount,
       },
-      "Conversion queue cleared",
+      "Conversion queue cleared"
     );
 
     return {
@@ -480,7 +492,9 @@ export class ConversionService {
    * Returns list of jobs with video info
    */
   async getQueue(_userId: number) {
-    if (env.DEMO_MODE) return [];
+    if (env.DEMO_MODE) {
+      return conversionOperationsDemoService.getQueue(_userId);
+    }
 
     // Get all pending/processing jobs with basic info
     const jobs = await conversionJobsService.findByVideoIds([]);
@@ -492,6 +506,10 @@ export class ConversionService {
     // For now, return basic job info
     // TODO: Enhance this to fetch full video details if needed
     return jobs;
+  }
+
+  getDemoDownload(id: number): { filename: string; content: Buffer } {
+    return conversionOperationsDemoService.getDownload(id);
   }
 }
 

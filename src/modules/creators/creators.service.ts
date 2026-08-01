@@ -6,7 +6,11 @@ import {
   creatorGalleryMediaTable,
   creatorsTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+} from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { existsSync, unlinkSync } from "fs";
 import type {
@@ -17,11 +21,12 @@ import type {
   PaginatedCreators,
   EnhancedCreator,
 } from "./creators.types";
+import { creatorsDemoService } from "./creators.demo.service";
 
 export class CreatorsService {
   async list(
     options: ListCreatorsOptions = {},
-    userId?: number,
+    userId?: number
   ): Promise<PaginatedCreators> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
@@ -54,7 +59,7 @@ export class CreatorsService {
         sql`(c.name ILIKE ${searchPattern} OR cp_search.username ILIKE ${searchPattern} OR EXISTS (
           SELECT 1 FROM creator_aliases ca_search
           WHERE ca_search.creator_id = c.id AND ca_search.name ILIKE ${searchPattern}
-        ))`,
+        ))`
       );
     }
 
@@ -85,12 +90,12 @@ export class CreatorsService {
     // Video count filters
     if (minVideoCount !== undefined) {
       whereConditions.push(
-        sql`COALESCE(vc.video_count, 0) >= ${minVideoCount}`,
+        sql`COALESCE(vc.video_count, 0) >= ${minVideoCount}`
       );
     }
     if (maxVideoCount !== undefined) {
       whereConditions.push(
-        sql`COALESCE(vc.video_count, 0) <= ${maxVideoCount}`,
+        sql`COALESCE(vc.video_count, 0) <= ${maxVideoCount}`
       );
     }
 
@@ -290,8 +295,7 @@ export class CreatorsService {
 
   async findById(id: number, userId?: number): Promise<Creator> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCreatorById(id);
+      return creatorsDemoService.findById(id, userId);
     }
     const result = await db.execute(sql`
       SELECT
@@ -327,21 +331,7 @@ export class CreatorsService {
 
   async create(input: CreateCreatorInput, userId?: number): Promise<Creator> {
     if (env.DEMO_MODE) {
-      return {
-        id: 9999,
-        name: input.name,
-        description: input.description || null,
-        profile_picture_path: null,
-        main_picture_path: null,
-        face_thumbnail_path: null,
-        profile_picture_url: undefined,
-        main_picture_url: undefined,
-        face_thumbnail_url: undefined,
-        gallery_media: [],
-        is_favorite: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      return creatorsDemoService.create(input);
     }
 
     try {
@@ -362,7 +352,7 @@ export class CreatorsService {
       if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
-          `Creator with name "${input.name}" already exists`,
+          `Creator with name "${input.name}" already exists`
         );
       }
       throw error;
@@ -372,15 +362,10 @@ export class CreatorsService {
   async update(
     id: number,
     input: UpdateCreatorInput,
-    userId?: number,
+    userId?: number
   ): Promise<Creator> {
     if (env.DEMO_MODE) {
-      const creator = await this.findById(id);
-      return {
-        ...creator,
-        name: input.name !== undefined ? input.name : creator.name,
-        description: input.description !== undefined ? input.description : creator.description,
-      };
+      return creatorsDemoService.update(id, input);
     }
 
     await this.findById(id); // Ensure exists
@@ -412,7 +397,7 @@ export class CreatorsService {
       if (isUniqueViolation(error)) {
         // UNIQUE violation
         throw new ConflictError(
-          `Creator with name "${input.name}" already exists`,
+          `Creator with name "${input.name}" already exists`
         );
       }
       throw error;
@@ -421,6 +406,7 @@ export class CreatorsService {
 
   async delete(id: number): Promise<void> {
     if (env.DEMO_MODE) {
+      creatorsDemoService.delete(id);
       return;
     }
 
@@ -434,7 +420,7 @@ export class CreatorsService {
       } catch (error) {
         logger.warn(
           { error, path: creator.face_thumbnail_path },
-          "Failed to delete creator face thumbnail file",
+          "Failed to delete creator face thumbnail file"
         );
       }
     }
@@ -448,7 +434,7 @@ export class CreatorsService {
       } catch (error) {
         logger.warn(
           { error, path: media.file_path, creatorId: id, mediaId: media.id },
-          "Failed to delete creator gallery media file",
+          "Failed to delete creator gallery media file"
         );
       }
     }
@@ -456,20 +442,22 @@ export class CreatorsService {
     await db.delete(creatorsTable).where(eq(creatorsTable.id, id));
 
     // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
-    const { enrichmentService } = await import(
-      "@/modules/enrichment/enrichment.service"
-    );
+    const { enrichmentService } =
+      await import("@/modules/enrichment/enrichment.service");
     await enrichmentService.deleteForEntity("creator", id);
   }
 
   async autocomplete(
     query: string,
     limitParam: number = 10,
-    userId?: number,
+    userId?: number
   ): Promise<EnhancedCreator[]> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      const listObj = demoMockService.getCreators({ search: query, limit: limitParam });
+      const listObj = demoMockService.getCreators({
+        search: query,
+        limit: limitParam,
+      });
       return listObj.data as EnhancedCreator[];
     }
 
@@ -540,13 +528,13 @@ export class CreatorsService {
             ...(creator.linked_video_count > 0 ? [] : ["linked_videos"]),
           ],
         },
-      }),
+      })
     ) as EnhancedCreator[];
   }
 
   async getRecent(
     limitParam: number = 10,
-    userId?: number,
+    userId?: number
   ): Promise<EnhancedCreator[]> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
@@ -611,24 +599,24 @@ export class CreatorsService {
             ...(creator.linked_video_count > 0 ? [] : ["linked_videos"]),
           ],
         },
-      }),
+      })
     ) as EnhancedCreator[];
   }
 
   async quickCreate(
     name: string,
     description?: string,
-    userId?: number,
+    userId?: number
   ): Promise<Creator> {
     return this.create(
       { name: name.trim(), description: description?.trim() },
-      userId,
+      userId
     );
   }
 
   private favoriteSelectSql(
     userId: number | undefined,
-    creatorIdSql: ReturnType<typeof sql>,
+    creatorIdSql: ReturnType<typeof sql>
   ) {
     if (!userId) {
       return sql`false`;
@@ -649,7 +637,7 @@ export class CreatorsService {
       .where(eq(creatorGalleryMediaTable.creatorId, creatorId))
       .orderBy(
         sql`${creatorGalleryMediaTable.createdAt} DESC`,
-        sql`${creatorGalleryMediaTable.id} DESC`,
+        sql`${creatorGalleryMediaTable.id} DESC`
       );
 
     return media.map((item) => ({
@@ -697,14 +685,14 @@ export class CreatorsService {
         creator.faceThumbnailPath ?? creator.face_thumbnail_path ?? null,
       profile_picture_url:
         (creator.unified_profile_picture_path ??
-          creator.profilePicturePath ??
-          creator.profile_picture_path)
+        creator.profilePicturePath ??
+        creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
           : undefined,
       main_picture_url:
         (creator.unified_main_picture_path ??
-          creator.mainPicturePath ??
-          creator.main_picture_path)
+        creator.mainPicturePath ??
+        creator.main_picture_path)
           ? `/api/creators/${creator.id}/picture?variant=main`
           : undefined,
       face_thumbnail_url:

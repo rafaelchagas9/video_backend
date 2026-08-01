@@ -11,7 +11,11 @@ import {
   studiosTable,
   videosTable,
 } from "@/database/schema";
-import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
+import {
+  NotFoundError,
+  ConflictError,
+  isUniqueViolation,
+} from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import type {
   TaggingRule,
@@ -22,9 +26,12 @@ import type {
   TestRuleResult,
   ApplyRulesResult,
 } from "./tagging-rules.types";
+import { env } from "@/config/env";
+import { taggingRulesDemoService } from "./tagging-rules.demo.service";
 
 export class TaggingRulesService {
   async list(includeDisabled: boolean = false): Promise<TaggingRule[]> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.list(includeDisabled);
     const whereConditions = [];
     if (!includeDisabled) {
       whereConditions.push(sql`is_enabled = true`);
@@ -63,6 +70,7 @@ export class TaggingRulesService {
   }
 
   async findById(id: number): Promise<TaggingRule> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.findById(id);
     const rules = await db
       .select()
       .from(taggingRulesTable)
@@ -86,7 +94,7 @@ export class TaggingRulesService {
 
     const mappedRule = this.mapRuleToSnakeCase(rule);
     mappedRule.conditions = conditions.map((c) =>
-      this.mapConditionToSnakeCase(c),
+      this.mapConditionToSnakeCase(c)
     );
     mappedRule.actions = actions.map((a) => this.mapActionToSnakeCase(a));
 
@@ -94,6 +102,7 @@ export class TaggingRulesService {
   }
 
   async create(input: CreateTaggingRuleInput): Promise<TaggingRule> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.create(input);
     const { conditions, actions, ...ruleData } = input;
 
     try {
@@ -118,7 +127,7 @@ export class TaggingRulesService {
             conditionType: condition.condition_type,
             operator: condition.operator,
             value: condition.value,
-          })),
+          }))
         );
       }
 
@@ -131,7 +140,7 @@ export class TaggingRulesService {
             targetId: action.target_id ?? null,
             targetName: action.target_name ?? null,
             dynamicValue: action.dynamic_value ?? null,
-          })),
+          }))
         );
       }
 
@@ -140,7 +149,7 @@ export class TaggingRulesService {
       if (isUniqueViolation(error)) {
         // Unique violation
         throw new ConflictError(
-          `Tagging rule with name "${ruleData.name}" already exists`,
+          `Tagging rule with name "${ruleData.name}" already exists`
         );
       }
       throw error;
@@ -149,8 +158,9 @@ export class TaggingRulesService {
 
   async update(
     id: number,
-    input: UpdateTaggingRuleInput,
+    input: UpdateTaggingRuleInput
   ): Promise<TaggingRule> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.update(id, input);
     await this.findById(id);
 
     const updates: any = {};
@@ -200,7 +210,7 @@ export class TaggingRulesService {
             conditionType: condition.condition_type,
             operator: condition.operator,
             value: condition.value,
-          })),
+          }))
         );
       }
     }
@@ -218,7 +228,7 @@ export class TaggingRulesService {
             targetId: action.target_id ?? null,
             targetName: action.target_name ?? null,
             dynamicValue: action.dynamic_value ?? null,
-          })),
+          }))
         );
       }
     }
@@ -227,11 +237,13 @@ export class TaggingRulesService {
   }
 
   async delete(id: number): Promise<void> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.delete(id);
     await this.findById(id);
     await db.delete(taggingRulesTable).where(eq(taggingRulesTable.id, id));
   }
 
   async bulkDelete(ids: number[]): Promise<{ deleted: number }> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.bulkDelete(ids);
     if (ids.length === 0) {
       return { deleted: 0 };
     }
@@ -244,6 +256,7 @@ export class TaggingRulesService {
   }
 
   async testRule(ruleId: number, limit: number = 10): Promise<TestRuleResult> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.testRule(ruleId, limit);
     const rule = await this.findById(ruleId);
 
     const videosResult = await db.execute(sql`
@@ -261,7 +274,7 @@ export class TaggingRulesService {
     for (const video of videos) {
       const matchedConditions = this.evaluateConditions(
         video,
-        rule.conditions || [],
+        rule.conditions || []
       );
 
       if (matchedConditions.length > 0) {
@@ -288,6 +301,7 @@ export class TaggingRulesService {
     dry_run?: boolean;
     limit?: number;
   }): Promise<ApplyRulesResult> {
+    if (env.DEMO_MODE) return taggingRulesDemoService.applyRules(input);
     const { video_ids, dry_run = false, limit = 100 } = input;
 
     const rules = await this.list(false);
@@ -356,7 +370,7 @@ export class TaggingRulesService {
                 const result = await this.applyAction(
                   video.id,
                   action,
-                  video.file_path,
+                  video.file_path
                 );
                 if (result.success) {
                   tagged++;
@@ -380,7 +394,7 @@ export class TaggingRulesService {
               });
               logger.warn(
                 { error, video_id: video.id, rule_id: rule.id },
-                "Failed to apply tagging rule",
+                "Failed to apply tagging rule"
               );
             }
           }
@@ -403,7 +417,7 @@ export class TaggingRulesService {
 
   private evaluateConditions(
     video: { id: number; file_path: string; file_name: string },
-    conditions: TaggingRuleCondition[],
+    conditions: TaggingRuleCondition[]
   ): string[] {
     const matched: string[] = [];
 
@@ -415,49 +429,49 @@ export class TaggingRulesService {
           matches = this.matchPattern(
             video.file_path,
             condition.operator,
-            condition.value,
+            condition.value
           );
           break;
         case "file_pattern":
           matches = this.matchPattern(
             video.file_name,
             condition.operator,
-            condition.value,
+            condition.value
           );
           break;
         case "resolution":
           matches = this.matchResolution(
             video.file_path,
             condition.operator,
-            condition.value,
+            condition.value
           );
           break;
         case "codec":
           matches = this.matchCodec(
             video.file_path,
             condition.operator,
-            condition.value,
+            condition.value
           );
           break;
         case "duration_range":
           matches = this.matchDuration(
             video.file_path,
             condition.operator,
-            condition.value,
+            condition.value
           );
           break;
         case "file_size":
           matches = this.matchFileSize(
             video.file_path,
             condition.operator,
-            condition.value,
+            condition.value
           );
           break;
       }
 
       if (matches) {
         matched.push(
-          `${condition.condition_type} ${condition.operator} ${condition.value}`,
+          `${condition.condition_type} ${condition.operator} ${condition.value}`
         );
       }
     }
@@ -468,7 +482,7 @@ export class TaggingRulesService {
   private matchPattern(
     filePath: string,
     operator: string,
-    value: string,
+    value: string
   ): boolean {
     const normalizedPath = filePath.toLowerCase();
     const normalizedValue = value.toLowerCase();
@@ -493,7 +507,7 @@ export class TaggingRulesService {
   private matchResolution(
     filePath: string,
     operator: string,
-    value: string,
+    value: string
   ): boolean {
     const match = filePath.match(/(\d{3,4})x(\d{3,4})/i);
     if (!match) return false;
@@ -520,7 +534,7 @@ export class TaggingRulesService {
   private matchCodec(
     filePath: string,
     operator: string,
-    value: string,
+    value: string
   ): boolean {
     const lowerValue = value.toLowerCase();
     const hasCodec = filePath.toLowerCase().includes(lowerValue);
@@ -530,7 +544,7 @@ export class TaggingRulesService {
   private matchDuration(
     _filePath: string,
     _operator: string,
-    _value: string,
+    _value: string
   ): boolean {
     return false;
   }
@@ -538,7 +552,7 @@ export class TaggingRulesService {
   private matchFileSize(
     _filePath: string,
     _operator: string,
-    _value: string,
+    _value: string
   ): boolean {
     return false;
   }
@@ -546,7 +560,7 @@ export class TaggingRulesService {
   private async applyAction(
     videoId: number,
     action: TaggingRuleAction,
-    filePath: string,
+    filePath: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
       switch (action.action_type) {
@@ -566,8 +580,8 @@ export class TaggingRulesService {
               .where(
                 and(
                   eq(videoTagsTable.videoId, videoId),
-                  eq(videoTagsTable.tagId, action.target_id),
-                ),
+                  eq(videoTagsTable.tagId, action.target_id)
+                )
               );
           }
           break;
@@ -577,7 +591,7 @@ export class TaggingRulesService {
             const groupName = action.dynamic_value.slice(1);
             const creatorName = this.extractCreatorFromPath(
               filePath,
-              groupName,
+              groupName
             );
             if (creatorName) {
               const existingCreator = await db
@@ -616,8 +630,8 @@ export class TaggingRulesService {
               .where(
                 and(
                   eq(videoCreatorsTable.videoId, videoId),
-                  eq(videoCreatorsTable.creatorId, action.target_id),
-                ),
+                  eq(videoCreatorsTable.creatorId, action.target_id)
+                )
               );
           }
           break;
@@ -663,8 +677,8 @@ export class TaggingRulesService {
               .where(
                 and(
                   eq(videoStudiosTable.videoId, videoId),
-                  eq(videoStudiosTable.studioId, action.target_id),
-                ),
+                  eq(videoStudiosTable.studioId, action.target_id)
+                )
               );
           }
           break;
@@ -678,12 +692,12 @@ export class TaggingRulesService {
 
   private extractCreatorFromPath(
     filePath: string,
-    groupName: string,
+    groupName: string
   ): string | null {
     const match = filePath.match(new RegExp(`\\(\\?<${groupName}>[^)]+\\)`));
     if (match) {
       const regex = new RegExp(
-        match[0].replace(/\\?<\w+>/, "(?<creator>[^/]+)"),
+        match[0].replace(/\\?<\w+>/, "(?<creator>[^/]+)")
       );
       const actualMatch = regex.exec(filePath);
       return actualMatch?.groups?.creator || null;
@@ -693,7 +707,7 @@ export class TaggingRulesService {
 
   private extractStudioFromPath(
     filePath: string,
-    groupName: string,
+    groupName: string
   ): string | null {
     return this.extractCreatorFromPath(filePath, groupName);
   }

@@ -1,6 +1,9 @@
 import { eq, sql, and, inArray, desc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
+import { demoRepository } from "@/database/demo";
+import { videosDemoService } from "./videos.demo.service";
+import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 import {
   videosTable,
   videoStatsTable,
@@ -64,14 +67,14 @@ export class VideosService {
    * Find video file path and availability by ID (lightweight lookup for streaming)
    */
   async findFilePathById(
-    id: number,
+    id: number
   ): Promise<{ file_path: string; is_available: boolean }> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       const video = demoMockService.getVideoById(id);
       return {
         file_path: video.file_path,
-        is_available: true,
+        is_available: video.is_available,
       };
     }
 
@@ -101,13 +104,14 @@ export class VideosService {
   async findById(
     id: number,
     userId?: number,
-    include: VideoInclude[] = [],
+    include: VideoInclude[] = []
   ): Promise<Video> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       const video = demoMockService.getVideoById(id);
       if (!include.includes("artwork")) return video;
-      const { artworkService } = await import("@/modules/artwork/artwork.service");
+      const { artworkService } =
+        await import("@/modules/artwork/artwork.service");
       const summaries = await artworkService.getSummariesByVideoIds([id]);
       return { ...video, artwork: summaries.get(id) ?? null };
     }
@@ -153,10 +157,7 @@ export class VideosService {
         .select({ id: favoritesTable.videoId })
         .from(favoritesTable)
         .where(
-          and(
-            eq(favoritesTable.userId, userId),
-            eq(favoritesTable.videoId, id),
-          ),
+          and(eq(favoritesTable.userId, userId), eq(favoritesTable.videoId, id))
         )
         .limit(1);
       isFavorite = favoriteCheck.length > 0;
@@ -195,9 +196,11 @@ export class VideosService {
 
     if (include.includes("collection")) {
       promises.push(
-        videoCollectionsService.getCollectionContextByVideoId(id).then((res) => {
-          response.collection = res;
-        })
+        videoCollectionsService
+          .getCollectionContextByVideoId(id)
+          .then((res) => {
+            response.collection = res;
+          })
       );
     }
 
@@ -236,10 +239,12 @@ export class VideosService {
     if (include.includes("artwork")) {
       promises.push(
         import("@/modules/artwork/artwork.service")
-          .then(({ artworkService }) => artworkService.getSummariesByVideoIds([id]))
+          .then(({ artworkService }) =>
+            artworkService.getSummariesByVideoIds([id])
+          )
           .then((summaries) => {
             response.artwork = summaries.get(id) ?? null;
-          }),
+          })
       );
     }
 
@@ -255,7 +260,7 @@ export class VideosService {
    */
   async getRandomVideo(
     userId: number,
-    options: RandomVideoOptions = {},
+    options: RandomVideoOptions = {}
   ): Promise<Video | Video[]> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
@@ -263,7 +268,7 @@ export class VideosService {
         tagIds: options.tagIds,
         creatorIds: options.creatorIds,
         studioIds: options.studioIds,
-        limit: 100
+        limit: 100,
       });
       const list = videosObj.data;
       if (list.length === 0) {
@@ -380,7 +385,8 @@ export class VideosService {
       `);
     }
 
-    const limit = resolvedOptions.limit !== undefined ? resolvedOptions.limit : 1;
+    const limit =
+      resolvedOptions.limit !== undefined ? resolvedOptions.limit : 1;
 
     const randomVideos = await db
       .select({ id: videosTable.id })
@@ -407,13 +413,8 @@ export class VideosService {
    */
   async update(id: number, input: UpdateVideoInput): Promise<Video> {
     if (env.DEMO_MODE) {
-      const video = await this.findById(id);
-      return {
-        ...video,
-        title: input.title !== undefined ? input.title : video.title,
-        description: input.description !== undefined ? input.description : video.description,
-        themes: input.themes !== undefined ? input.themes : video.themes,
-      };
+      videosDemoService.update(id, input);
+      return demoRepository.getVideoById(id) as Video;
     }
 
     const updateData: Partial<typeof videosTable.$inferInsert> = {};
@@ -447,6 +448,7 @@ export class VideosService {
    */
   async delete(id: number): Promise<void> {
     if (env.DEMO_MODE) {
+      videosDemoService.delete(id);
       return;
     }
 
@@ -462,7 +464,10 @@ export class VideosService {
       try {
         fs.unlinkSync(video.file_path);
       } catch (error) {
-        logger.warn({ error, path: video.file_path }, "Failed to delete video file");
+        logger.warn(
+          { error, path: video.file_path },
+          "Failed to delete video file"
+        );
       }
     }
 
@@ -470,9 +475,8 @@ export class VideosService {
     await db.delete(videosTable).where(eq(videosTable.id, id));
 
     // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
-    const { enrichmentService } = await import(
-      "@/modules/enrichment/enrichment.service"
-    );
+    const { enrichmentService } =
+      await import("@/modules/enrichment/enrichment.service");
     await enrichmentService.deleteForEntity("scene", id);
   }
 
@@ -481,7 +485,8 @@ export class VideosService {
    */
   async verifyAvailability(id: number): Promise<Video> {
     if (env.DEMO_MODE) {
-      return this.findById(id);
+      videosDemoService.verifyAvailability({ videoId: id });
+      return demoRepository.getVideoById(id) as Video;
     }
 
     const video = await this.findById(id);
@@ -495,7 +500,11 @@ export class VideosService {
       .set({ isAvailable: exists, lastVerifiedAt })
       .where(eq(videosTable.id, id));
 
-    return { ...video, is_available: exists, last_verified_at: lastVerifiedAt.toISOString() };
+    return {
+      ...video,
+      is_available: exists,
+      last_verified_at: lastVerifiedAt.toISOString(),
+    };
   }
 
   /**
@@ -509,15 +518,25 @@ export class VideosService {
     directoryId?: number;
   }): Promise<{
     data: UnavailableVideo[];
-    pagination: { page: number; limit: number; total: number; totalPages: number };
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
   }> {
     const { page, limit, directoryId } = options;
     const offset = (page - 1) * limit;
 
     if (env.DEMO_MODE) {
-      return {
-        data: [],
-        pagination: { page, limit, total: 0, totalPages: 0 }
+      return videosDemoService.listUnavailable(options) as unknown as {
+        data: UnavailableVideo[];
+        pagination: {
+          page: number;
+          limit: number;
+          total: number;
+          totalPages: number;
+        };
       };
     }
 
@@ -547,7 +566,7 @@ export class VideosService {
       .from(videosTable)
       .leftJoin(
         watchedDirectoriesTable,
-        eq(videosTable.directoryId, watchedDirectoriesTable.id),
+        eq(videosTable.directoryId, watchedDirectoriesTable.id)
       )
       .where(whereClause)
       .orderBy(desc(videosTable.updatedAt))
@@ -588,7 +607,7 @@ export class VideosService {
           .from(faceImagesTable)
           .innerJoin(
             videoFaceDetectionsTable,
-            eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id),
+            eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id)
           )
           .where(inArray(videoFaceDetectionsTable.videoId, ids))
           .groupBy(videoFaceDetectionsTable.videoId),
@@ -616,7 +635,10 @@ export class VideosService {
         faceMap.set(face.videoId, { count: face.count, bytes: face.bytes });
       }
       for (const asset of artwork) {
-        artworkMap.set(asset.videoId, { count: asset.count, bytes: asset.bytes });
+        artworkMap.set(asset.videoId, {
+          count: asset.count,
+          bytes: asset.bytes,
+        });
       }
     }
 
@@ -677,7 +699,7 @@ export class VideosService {
     directoryId?: number;
   }): Promise<{ deleted_count: number; deleted_ids: number[] }> {
     if (env.DEMO_MODE) {
-      return { deleted_count: 0, deleted_ids: [] };
+      return videosDemoService.purgeUnavailable(input);
     }
 
     const conditions = [eq(videosTable.isAvailable, false)];
@@ -709,11 +731,15 @@ export class VideosService {
    * directory). Useful before purging so files that have returned are no longer
    * counted as unavailable.
    */
-  async verifyAvailabilityBulk(options: {
-    directoryId?: number;
-  }): Promise<{ checked: number; now_available: number; still_missing: number }> {
+  async verifyAvailabilityBulk(options: { directoryId?: number }): Promise<{
+    checked: number;
+    now_available: number;
+    still_missing: number;
+  }> {
     if (env.DEMO_MODE) {
-      return { checked: 0, now_available: 0, still_missing: 0 };
+      return videosDemoService.verifyAvailability({
+        directoryId: options.directoryId,
+      });
     }
 
     const conditions =
@@ -757,7 +783,8 @@ export class VideosService {
    */
   async refreshDerivedData(id: number, userId?: number): Promise<Video> {
     if (env.DEMO_MODE) {
-      return this.findById(id, userId);
+      await demoMediaAssetsService.refreshVideo(id);
+      return demoRepository.getVideoById(id) as Video;
     }
 
     const video = await this.findById(id, userId);
@@ -829,7 +856,7 @@ export class VideosService {
       .from(studiosTable)
       .innerJoin(
         videoStudiosTable,
-        eq(studiosTable.id, videoStudiosTable.studioId),
+        eq(studiosTable.id, videoStudiosTable.studioId)
       )
       .where(eq(videoStudiosTable.videoId, videoId))
       .orderBy(studiosTable.name);
@@ -850,7 +877,8 @@ export class VideosService {
    */
   async replaceFile(videoId: number, newFilePath: string): Promise<Video> {
     if (env.DEMO_MODE) {
-      return this.findById(videoId);
+      await demoMediaAssetsService.replaceVideoFile(videoId, newFilePath);
+      return demoRepository.getVideoById(videoId) as Video;
     }
 
     await this.findById(videoId);
@@ -883,7 +911,7 @@ export class VideosService {
 
     logger.info(
       { videoId, newFilePath, newSize: fileStats.size },
-      "Video file replaced in-place",
+      "Video file replaced in-place"
     );
 
     return this.findById(videoId);

@@ -11,14 +11,19 @@ import type {
 import { db } from "@/config/drizzle";
 import { studiosTable, creatorsTable, videosTable } from "@/database/schema";
 import { eq } from "drizzle-orm";
+import { env } from "@/config/env";
+import { studiosBulkDemoService } from "./studios.bulk.demo.service";
 
 export class StudiosBulkService {
   // Bulk Import with Preview
   async bulkImport(
     items: BulkStudioImportItem[],
     mode: "merge" | "replace",
-    dryRun: boolean,
+    dryRun: boolean
   ): Promise<BulkStudioImportResult> {
+    if (env.DEMO_MODE) {
+      return studiosBulkDemoService.bulkImport(items, mode, dryRun);
+    }
     const previewItems: BulkStudioImportPreviewItem[] = [];
     let willCreate = 0;
     let willUpdate = 0;
@@ -117,7 +122,7 @@ export class StudiosBulkService {
         // Compute social link changes
         if (item.social_links) {
           const existingLinks = await studiosSocialService.getSocialLinks(
-            existingStudio.id,
+            existingStudio.id
           );
           let add = 0,
             update = 0,
@@ -125,7 +130,7 @@ export class StudiosBulkService {
 
           for (const sl of item.social_links) {
             const existing = existingLinks.find(
-              (el) => el.platform_name === sl.platform_name,
+              (el) => el.platform_name === sl.platform_name
             );
             if (existing) {
               if (existing.url !== sl.url) update++;
@@ -138,8 +143,8 @@ export class StudiosBulkService {
             remove = existingLinks.filter(
               (el) =>
                 !item.social_links!.some(
-                  (sl) => sl.platform_name === el.platform_name,
-                ),
+                  (sl) => sl.platform_name === el.platform_name
+                )
             ).length;
           }
 
@@ -158,12 +163,12 @@ export class StudiosBulkService {
             await studiosRelationshipsService.getCreators(existingStudio.id);
           const existingCreatorIds = existingCreators.map((c) => c.id);
           const add = item.link_creator_ids.filter(
-            (id) => !existingCreatorIds.includes(id),
+            (id) => !existingCreatorIds.includes(id)
           ).length;
           const remove =
             mode === "replace"
               ? existingCreatorIds.filter(
-                  (id) => !item.link_creator_ids!.includes(id),
+                  (id) => !item.link_creator_ids!.includes(id)
                 ).length
               : undefined;
 
@@ -175,16 +180,16 @@ export class StudiosBulkService {
         // Compute video link changes
         if (item.link_video_ids) {
           const existingVideos = await studiosRelationshipsService.getVideos(
-            existingStudio.id,
+            existingStudio.id
           );
           const existingVideoIds = existingVideos.map((v) => v.id);
           const add = item.link_video_ids.filter(
-            (id) => !existingVideoIds.includes(id),
+            (id) => !existingVideoIds.includes(id)
           ).length;
           const remove =
             mode === "replace"
               ? existingVideoIds.filter(
-                  (id) => !item.link_video_ids!.includes(id),
+                  (id) => !item.link_video_ids!.includes(id)
                 ).length
               : undefined;
 
@@ -261,12 +266,12 @@ export class StudiosBulkService {
           try {
             await studiosSocialService.setPictureFromUrl(
               studioId,
-              item.profile_picture_url,
+              item.profile_picture_url
             );
           } catch (error: any) {
             logger.warn(
               { error, studioId, url: item.profile_picture_url },
-              "Failed to set profile picture from URL",
+              "Failed to set profile picture from URL"
             );
           }
         }
@@ -279,7 +284,7 @@ export class StudiosBulkService {
             for (const el of existing) {
               if (
                 !item.social_links.some(
-                  (sl) => sl.platform_name === el.platform_name,
+                  (sl) => sl.platform_name === el.platform_name
                 )
               ) {
                 await studiosSocialService.deleteSocialLink(el.id);
@@ -288,7 +293,7 @@ export class StudiosBulkService {
           }
           await studiosSocialService.bulkUpsertSocialLinks(
             studioId,
-            item.social_links,
+            item.social_links
           );
         }
 
@@ -307,7 +312,7 @@ export class StudiosBulkService {
             try {
               await studiosRelationshipsService.linkCreator(
                 studioId,
-                creatorId,
+                creatorId
               );
             } catch {
               // Ignore duplicates

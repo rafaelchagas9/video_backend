@@ -2,31 +2,12 @@ import { db } from "@/config/drizzle";
 import { appSettingsTable } from "@/database/schema";
 import type { AppSetting, SettingValue } from "./settings.types";
 import { env } from "@/config/env";
-
-const DEFAULT_SETTINGS: Record<string, SettingValue> = {
-  min_watch_seconds: 60,
-  short_video_watch_seconds: 10,
-  short_video_duration_seconds: 60,
-  downscale_inactive_days: 90,
-  watch_session_gap_minutes: 30,
-  max_suggestions: 200,
-  notifications_in_app_enabled: true,
-  notifications_task_started: false,
-  notifications_conversion_completed: true,
-  notifications_conversion_failed: true,
-  notifications_storyboard_ready: true,
-  notifications_storyboard_failed: true,
-  notifications_face_extraction_completed: true,
-  notifications_face_extraction_failed: true,
-};
+import { settingsDemoService } from "./settings.demo.service";
+import { DEFAULT_SETTINGS } from "./settings.defaults";
 
 export class SettingsService {
   private cache: Map<string, SettingValue> | null = null;
   private initPromise: Promise<void> | null = null;
-  private demoValues = new Map<string, SettingValue>(
-    Object.entries(DEFAULT_SETTINGS),
-  );
-
   private async init(): Promise<void> {
     if (this.initPromise) return this.initPromise;
     this.initPromise = this._loadAndEnsureDefaults();
@@ -40,13 +21,13 @@ export class SettingsService {
         Object.entries(DEFAULT_SETTINGS).map(([key, value]) => ({
           key,
           value: String(value),
-        })),
+        }))
       )
       .onConflictDoNothing();
 
     const rows = await db.query.appSettingsTable.findMany();
     this.cache = new Map(
-      rows.map((row) => [row.key, this.parseSettingValue(row.key, row.value)]),
+      rows.map((row) => [row.key, this.parseSettingValue(row.key, row.value)])
     );
   }
 
@@ -73,13 +54,7 @@ export class SettingsService {
 
   async getAll(): Promise<AppSetting[]> {
     if (env.DEMO_MODE) {
-      return Array.from(this.demoValues.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, value]) => ({
-          key,
-          value,
-          updated_at: "2026-01-01T00:00:00.000Z",
-        }));
+      return settingsDemoService.getAll();
     }
 
     await this.init();
@@ -96,7 +71,7 @@ export class SettingsService {
 
   async getValue(key: string): Promise<SettingValue> {
     if (env.DEMO_MODE) {
-      return this.demoValues.get(key) ?? DEFAULT_SETTINGS[key] ?? "";
+      return settingsDemoService.getValue(key);
     }
 
     await this.init();
@@ -105,7 +80,10 @@ export class SettingsService {
       return this.cache!.get(key)!;
     }
 
-    const defaultValue = Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key)
+    const defaultValue = Object.prototype.hasOwnProperty.call(
+      DEFAULT_SETTINGS,
+      key
+    )
       ? DEFAULT_SETTINGS[key]
       : "";
     this.cache!.set(key, defaultValue);
@@ -126,13 +104,10 @@ export class SettingsService {
   }
 
   async updateValues(
-    values: Record<string, SettingValue>,
+    values: Record<string, SettingValue>
   ): Promise<AppSetting[]> {
     if (env.DEMO_MODE) {
-      for (const [key, value] of Object.entries(values)) {
-        this.demoValues.set(key, value);
-      }
-      return this.getAll();
+      return settingsDemoService.updateValues(values);
     }
 
     const entries = Object.entries(values);

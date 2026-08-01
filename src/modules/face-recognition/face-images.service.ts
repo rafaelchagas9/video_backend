@@ -4,38 +4,51 @@
  * from video face detections
  */
 
-import { join } from 'path';
-import { existsSync, mkdirSync, unlinkSync, statSync } from 'fs';
-import { eq } from 'drizzle-orm';
-import { db } from '@/config/drizzle';
-import { faceImagesTable, videoFaceDetectionsTable } from '@/database/schema';
-import type { FaceImage, NewFaceImage, VideoFaceDetection } from '@/database/schema';
-import { env } from '@/config/env';
-import { NotFoundError, InternalServerError } from '@/utils/errors';
-import { logger } from '@/utils/logger';
-import { cropFaceThumbnail } from '@/utils/image-processing';
-import { getFrameExtractionService } from '@/modules/frame-extraction/frame-extraction.service';
-import { videosService } from '@/modules/videos/videos.service';
+import { join } from "path";
+import { existsSync, mkdirSync, unlinkSync, statSync } from "fs";
+import { eq } from "drizzle-orm";
+import { db } from "@/config/drizzle";
+import { faceImagesTable, videoFaceDetectionsTable } from "@/database/schema";
+import type {
+  FaceImage,
+  NewFaceImage,
+  VideoFaceDetection,
+} from "@/database/schema";
+import { env } from "@/config/env";
+import { NotFoundError, InternalServerError } from "@/utils/errors";
+import { logger } from "@/utils/logger";
+import { cropFaceThumbnail } from "@/utils/image-processing";
+import { getFrameExtractionService } from "@/modules/frame-extraction/frame-extraction.service";
+import { videosService } from "@/modules/videos/videos.service";
+import { faceRecognitionDemoService } from "./face-recognition.demo.service";
 
 export class FaceImagesService {
   private facesDir: string;
 
   constructor() {
-    this.facesDir = env.FACES_DIR || './data/faces';
+    this.facesDir = env.FACES_DIR || "./data/faces";
 
     // Ensure faces directory exists
     if (!env.DEMO_MODE && !existsSync(this.facesDir)) {
       mkdirSync(this.facesDir, { recursive: true });
-      logger.info({ facesDir: this.facesDir }, 'Created faces directory');
+      logger.info({ facesDir: this.facesDir }, "Created faces directory");
     }
   }
-
 
   /**
    * Get face image by detection ID
    * Returns null if not yet generated
    */
   async getByDetectionId(detectionId: number): Promise<FaceImage | null> {
+    if (env.DEMO_MODE) {
+      try {
+        return await faceRecognitionDemoService.getFaceImage(detectionId);
+      } catch (error) {
+        if (error instanceof NotFoundError) return null;
+        throw error;
+      }
+    }
+
     const result = await db
       .select()
       .from(faceImagesTable)
@@ -49,6 +62,8 @@ export class FaceImagesService {
    * Get face image by primary key
    */
   async findById(id: number): Promise<FaceImage> {
+    if (env.DEMO_MODE) return faceRecognitionDemoService.getFaceImage(id);
+
     const result = await db
       .select()
       .from(faceImagesTable)
@@ -56,7 +71,7 @@ export class FaceImagesService {
       .limit(1);
 
     if (!result[0]) {
-      throw new NotFoundError('Face image not found');
+      throw new NotFoundError("Face image not found");
     }
 
     return result[0];
@@ -67,7 +82,10 @@ export class FaceImagesService {
    * Extracts frame, crops to face bounding box, and stores
    */
   async generateFromDetection(detectionId: number): Promise<FaceImage> {
-    logger.info({ detectionId }, 'Generating face image from detection');
+    if (env.DEMO_MODE)
+      return faceRecognitionDemoService.getFaceImage(detectionId);
+
+    logger.info({ detectionId }, "Generating face image from detection");
 
     // Get detection data
     const detection = await this.getDetection(detectionId);
@@ -76,11 +94,16 @@ export class FaceImagesService {
     const video = await videosService.findById(detection.videoId);
 
     if (!video.width || !video.height) {
-      throw new InternalServerError('Video dimensions not available for face cropping');
+      throw new InternalServerError(
+        "Video dimensions not available for face cropping"
+      );
     }
 
     // Create temp directory for frame extraction
-    const tempDir = join(env.FRAME_EXTRACTION_TEMP_DIR || '/tmp', `face_gen_${detectionId}_${Date.now()}`);
+    const tempDir = join(
+      env.FRAME_EXTRACTION_TEMP_DIR || "/tmp",
+      `face_gen_${detectionId}_${Date.now()}`
+    );
     if (!existsSync(tempDir)) {
       mkdirSync(tempDir, { recursive: true });
     }
@@ -96,7 +119,10 @@ export class FaceImagesService {
         quality: env.FRAME_EXTRACTION_QUALITY,
       });
 
-      logger.debug({ framePath, detectionId }, 'Frame extracted for face cropping');
+      logger.debug(
+        { framePath, detectionId },
+        "Frame extracted for face cropping"
+      );
 
       // Bounding box is already in pixel coordinates
       const bbox = [
@@ -122,7 +148,7 @@ export class FaceImagesService {
         paddingScale,
       });
 
-      logger.debug({ outputPath, detectionId }, 'Face image cropped and saved');
+      logger.debug({ outputPath, detectionId }, "Face image cropped and saved");
 
       // Get file stats
       const stats = statSync(outputPath);
@@ -142,7 +168,10 @@ export class FaceImagesService {
         .values(newFaceImage)
         .returning();
 
-      logger.info({ faceImageId: result[0].id, detectionId }, 'Face image generated successfully');
+      logger.info(
+        { faceImageId: result[0].id, detectionId },
+        "Face image generated successfully"
+      );
 
       // Cleanup temp directory
       this.cleanupTempDir(tempDir);
@@ -160,6 +189,9 @@ export class FaceImagesService {
    * This is the primary method used by the API
    */
   async getOrGenerateByDetectionId(detectionId: number): Promise<FaceImage> {
+    if (env.DEMO_MODE)
+      return faceRecognitionDemoService.getFaceImage(detectionId);
+
     // Check if already exists
     const existing = await this.getByDetectionId(detectionId);
     if (existing) {
@@ -175,6 +207,11 @@ export class FaceImagesService {
    * Removes both file and database record
    */
   async deleteByDetectionId(detectionId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      await faceRecognitionDemoService.deleteFaceImageByDetection(detectionId);
+      return;
+    }
+
     const faceImage = await this.getByDetectionId(detectionId);
 
     if (!faceImage) {
@@ -185,10 +222,16 @@ export class FaceImagesService {
     try {
       if (existsSync(faceImage.filePath)) {
         unlinkSync(faceImage.filePath);
-        logger.debug({ filePath: faceImage.filePath }, 'Face image file deleted');
+        logger.debug(
+          { filePath: faceImage.filePath },
+          "Face image file deleted"
+        );
       }
     } catch (error) {
-      logger.warn({ error, filePath: faceImage.filePath }, 'Failed to delete face image file');
+      logger.warn(
+        { error, filePath: faceImage.filePath },
+        "Failed to delete face image file"
+      );
     }
 
     // Delete database record
@@ -196,13 +239,18 @@ export class FaceImagesService {
       .delete(faceImagesTable)
       .where(eq(faceImagesTable.detectionId, detectionId));
 
-    logger.info({ detectionId }, 'Face image deleted');
+    logger.info({ detectionId }, "Face image deleted");
   }
 
   /**
    * Delete face image by primary key
    */
   async deleteById(id: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      await faceRecognitionDemoService.deleteFaceImageByDetection(id);
+      return;
+    }
+
     const faceImage = await this.findById(id);
     await this.deleteByDetectionId(faceImage.detectionId);
   }
@@ -218,7 +266,7 @@ export class FaceImagesService {
       .limit(1);
 
     if (!result[0]) {
-      throw new NotFoundError('Face detection not found');
+      throw new NotFoundError("Face detection not found");
     }
 
     return result[0];
@@ -234,7 +282,7 @@ export class FaceImagesService {
         frameService.cleanupFrames(tempDir, { removeDirectory: true });
       }
     } catch (error) {
-      logger.warn({ error, tempDir }, 'Failed to cleanup temp directory');
+      logger.warn({ error, tempDir }, "Failed to cleanup temp directory");
     }
   }
 }

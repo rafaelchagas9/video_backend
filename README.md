@@ -49,44 +49,58 @@ Server starts at `http://localhost:3000`. Swagger UI at `http://localhost:3000/d
 
 See `.env.example` for all options. Key variables:
 
-| Variable                       | Description                                            |
-| ------------------------------ | ------------------------------------------------------ |
-| `POSTGRES_*`                   | Database connection                                    |
-| `SESSION_SECRET`               | Min 32 chars — used for cookie signing                 |
-| `FFMPEG_PATH` / `FFPROBE_PATH` | Paths to FFmpeg binaries                               |
-| `REDIS_URL`                    | Redis connection for job queue (optional)              |
-| `FACE_SERVICE_URL`             | Python face service endpoint (optional)                |
-| `DEMO_MODE`                    | Use only isolated demo assets and in-memory demo state |
+| Variable                       | Description                                                 |
+| ------------------------------ | ----------------------------------------------------------- |
+| `POSTGRES_*`                   | Database connection                                         |
+| `SESSION_SECRET`               | Min 32 chars — used for cookie signing                      |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | Paths to FFmpeg binaries                                    |
+| `REDIS_URL`                    | Redis connection for job queue (optional)                   |
+| `FACE_SERVICE_URL`             | Python face service endpoint (optional)                     |
+| `DEMO_MODE`                    | Use only isolated demo assets and SQLite-backed state       |
+| `DEMO_DATABASE_PATH`           | Isolated demo SQLite file (default `demo_mode/demo.sqlite`) |
+| `DEMO_ASSETS_DIR`              | Root allowed for demo media assets (default `demo_mode`)    |
+| `DEMO_RESET_MODE`              | Reset mutable demo state `on-start` or only `manual`        |
 
 ## Commands
 
-| Command                  | Description                                                        |
-| ------------------------ | ------------------------------------------------------------------ |
-| `bun dev`                | Dev server with auto-reload                                        |
-| `bun start`              | Production server                                                  |
-| `bun run build`          | Compile TS to JS                                                   |
-| `bun run start:prod`     | Production from compiled build                                     |
-| `bun run validate:env`   | Validate environment variables                                     |
-| `bun run check:deps`     | Check PostgreSQL, FFmpeg, directories                              |
-| `bun run demo:download`  | Download the curated trailer, cinematic, and music demo collection |
-| `bun db:generate`        | Generate Drizzle migrations                                        |
-| `bun db:migrate`         | Apply pending migrations                                           |
-| `bun db:push`            | Direct schema sync (dev only)                                      |
-| `bun db:studio`          | Drizzle Studio GUI                                                 |
-| `bun db:introspect`      | Introspect DB to schema                                            |
-| `bun db:apply-migration` | Run custom migration script                                        |
-| `bunx eslint .`          | Lint                                                               |
-| `bunx tsc --noEmit`      | Type check                                                         |
+| Command                     | Description                                                      |
+| --------------------------- | ---------------------------------------------------------------- |
+| `bun dev`                   | Dev server with auto-reload                                      |
+| `bun start`                 | Production server                                                |
+| `bun run build`             | Compile TS to JS                                                 |
+| `bun run start:prod`        | Production from compiled build                                   |
+| `bun run validate:env`      | Validate environment variables                                   |
+| `bun run check:deps`        | Check PostgreSQL, FFmpeg, directories                            |
+| `bun run demo:download`     | Build a fresh SQLite demo catalog and download its curated media |
+| `bun run demo:migrate-json` | Explicitly migrate the legacy JSON fixture into demo SQLite      |
+| `bun run demo:seed`         | Restore demo SQLite from its existing immutable baseline         |
+| `bun run demo:reset`        | Restore the full demo catalog from its immutable SQLite baseline |
+| `bun run demo:db:generate`  | Generate migrations for the isolated SQLite schema               |
+| `bun run demo:db:migrate`   | Apply migrations to the isolated demo SQLite database            |
+| `bun db:generate`           | Generate Drizzle migrations                                      |
+| `bun db:migrate`            | Apply pending migrations                                         |
+| `bun db:push`               | Direct schema sync (dev only)                                    |
+| `bun db:studio`             | Drizzle Studio GUI                                               |
+| `bun db:introspect`         | Introspect DB to schema                                          |
+| `bun db:apply-migration`    | Run custom migration script                                      |
+| `bunx eslint .`             | Lint                                                             |
+| `bunx tsc --noEmit`         | Type check                                                       |
 
 ## Demo Mode
 
-Set `DEMO_MODE=true` to expose only the isolated demo library. Demo mode uses
-a generic anonymous user, keeps supported mutations in memory, validates that
-all served asset paths stay inside `demo_mode/`, and disables background scans,
-media queues, telemetry, backups, directory management, uploads, enrichment,
-face recognition, and other personal-library operations. Routes that have not
-been explicitly audited for demo use fail closed with
+Set `DEMO_MODE=true` to expose only the isolated demo library. Demo mode uses a
+generic anonymous user and a separate SQLite database for both catalog data and
+supported mutations. It never opens the PostgreSQL application database for
+demo-backed operations. Asset paths are constrained to `DEMO_ASSETS_DIR`, and
+routes that have not been explicitly audited for demo use fail closed with
 `DEMO_MODE_ROUTE_BLOCKED`.
+
+The SQLite database is opened lazily only in demo mode, with foreign keys, WAL,
+a busy timeout, schema migrations, and an integrity check enabled. In
+`DEMO_RESET_MODE=on-start`, startup restores the immutable baseline before
+checking the live database, so a missing or empty live SQLite file recovers
+automatically. Manual mode preserves live mutations and fails with an actionable
+error if the database has not been seeded.
 
 The media itself is intentionally gitignored. Install `yt-dlp`, FFmpeg, and
 FFprobe, then run:
@@ -95,7 +109,23 @@ FFprobe, then run:
 bun run demo:download
 ```
 
-The importer is idempotent and downloads a curated set of trailers, game
+`demo:download` is the fresh-install path: it can start from an empty SQLite
+database, builds the catalog directly, downloads media beneath
+`DEMO_ASSETS_DIR`, and refreshes the read-only sibling
+`demo.sqlite.baseline`. Artwork generation refreshes that baseline again after
+writing its SQLite rows.
+
+`DEMO_ASSETS_DIR/demo_mode.json` and its artwork manifest are legacy migration
+inputs, not seed or runtime stores. Existing installations that still need them
+can run `bun run demo:migrate-json`; `demo:import-json` remains a compatibility
+alias for that explicitly named migration. `DEMO_RESET_MODE=on-start`,
+`demo:seed`, and `demo:reset` restore every demo table from the SQLite baseline
+without reading legacy JSON at runtime. Manual mode continues to preserve SQLite
+mutations across restarts.
+The media remains on disk under `DEMO_ASSETS_DIR` and is intentionally
+gitignored.
+
+The downloader is idempotent and downloads a curated set of trailers, game
 cinematics, live performances, and music videos at the best available quality
 capped at 1080p. It also builds thumbnails, metadata, creators, studios, tags,
 ratings, bookmarks, and watch statistics for pagination and frontend testing.
@@ -113,6 +143,7 @@ src/
 │   ├── drizzle.ts               # Drizzle ORM setup
 │   └── env.ts                   # Env validation
 ├── database/
+│   ├── demo/                    # Isolated SQLite schema, migrations, seed, repository
 │   ├── schema/                  # 18 schema files, 40 tables
 │   │   ├── users.schema.ts      # Auth (users, sessions, accounts)
 │   │   ├── videos.schema.ts     # Core video records + stats + metadata

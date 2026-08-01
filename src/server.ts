@@ -17,7 +17,6 @@ import { env } from "./config/env";
 import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
-import { closeDrizzleDatabase } from "./config/drizzle";
 import { logger } from "./utils/logger";
 import {
   captureTelemetryEvent,
@@ -70,7 +69,7 @@ function formatValidationPath(context: string, issue: ValidationIssue): string {
 
 function formatValidationIssue(
   context: string,
-  issue: ValidationIssue,
+  issue: ValidationIssue
 ): string {
   const path = formatValidationPath(context, issue);
   const message = issue.message ?? "invalid value";
@@ -81,6 +80,11 @@ function formatValidationIssue(
 }
 
 export async function buildServer() {
+  if (env.DEMO_MODE) {
+    const { prepareDemoDatabaseForStartup } = await import("@/database/demo");
+    prepareDemoDatabaseForStartup(env.DEMO_RESET_MODE);
+  }
+
   const fastify = Fastify({
     loggerInstance: logger,
     disableRequestLogging: false,
@@ -95,22 +99,6 @@ export async function buildServer() {
 
   fastify.addHook("onRequest", async (request) => {
     request.telemetryStartTime = process.hrtime.bigint();
-  });
-
-  fastify.addHook("onRequest", async (request, reply) => {
-    if (!env.DEMO_MODE || isDemoRequestAllowed(request.method, request.url)) {
-      return;
-    }
-
-    return reply.status(403).send({
-      success: false,
-      error: {
-        code: "DEMO_MODE_ROUTE_BLOCKED",
-        message:
-          "This feature is disabled in demo mode because it is not isolated from the personal library.",
-        statusCode: 403,
-      },
-    });
   });
 
   fastify.addHook("onResponse", async (request, reply) => {
@@ -132,7 +120,7 @@ export async function buildServer() {
         durationMs,
         authenticated: Boolean(request.user),
       },
-      getTelemetryDistinctId(request.user?.id),
+      getTelemetryDistinctId(request.user?.id)
     );
   });
 
@@ -140,9 +128,8 @@ export async function buildServer() {
     schedulerService.stop();
 
     if (!env.DEMO_MODE) {
-      const { conversionQueue } = await import(
-        "./modules/conversion/conversion.queue"
-      );
+      const { conversionQueue } =
+        await import("./modules/conversion/conversion.queue");
       const { editsQueue } = await import("./modules/edits/edits.queue");
 
       conversionQueue.stop();
@@ -150,7 +137,13 @@ export async function buildServer() {
     }
     eventsService.closeAll("server shutdown");
     multiplayerRemoteWebSocketService.closeAll("server shutdown");
-    await closeDrizzleDatabase();
+    if (env.DEMO_MODE) {
+      const { closeDemoDatabase } = await import("@/database/demo");
+      closeDemoDatabase();
+    } else {
+      const { closeDrizzleDatabase } = await import("./config/drizzle");
+      await closeDrizzleDatabase();
+    }
     await shutdownTelemetry();
   });
 
@@ -180,7 +173,7 @@ export async function buildServer() {
                 ...env.CORS_ORIGINS.split(","),
               ]
                 .map((value) => value.trim())
-                .filter((value) => value.length > 0),
+                .filter((value) => value.length > 0)
             );
 
             if (allowedOrigins.has(origin)) {
@@ -210,17 +203,17 @@ export async function buildServer() {
             }
 
             const matchesAllowedSuffix = Array.from(
-              allowedHostnameSuffixes,
+              allowedHostnameSuffixes
             ).some(
               (suffix) =>
                 originHostname === suffix ||
-                originHostname.endsWith(`.${suffix}`),
+                originHostname.endsWith(`.${suffix}`)
             );
 
             if (!matchesAllowedSuffix) {
               fastify.log.warn(
                 { origin, allowedOrigins: Array.from(allowedOrigins) },
-                "Blocked CORS origin",
+                "Blocked CORS origin"
               );
             }
 
@@ -309,6 +302,45 @@ export async function buildServer() {
 
   await fastify.register(websocket);
 
+  // Register the demo privacy gate after global request plugins so a blocked
+  // generated HEAD route cannot send its 403 before Helmet/CORS set headers.
+  // It remains an onRequest hook and therefore still runs before parsing,
+  // validation, authentication, and every route handler.
+  fastify.addHook("onRequest", async (request, reply) => {
+    if (!env.DEMO_MODE || isDemoRequestAllowed(request.method, request.url)) {
+      return;
+    }
+
+    const payload = {
+      success: false,
+      error: {
+        code: "DEMO_MODE_ROUTE_BLOCKED",
+        message:
+          "This feature is disabled in demo mode because it is not isolated from the personal library.",
+        statusCode: 403,
+      },
+    };
+
+    if (request.method === "HEAD") {
+      // Fastify's generated HEAD handler delegates to the GET handler. A reply
+      // sent from an async onRequest hook can otherwise fall through to that
+      // delegate and attempt a second response. Hijacking only this blocked
+      // transport ends it before any personal-library handler can run.
+      const serializedPayload = JSON.stringify(payload);
+      reply.hijack();
+      reply.raw.statusCode = 403;
+      reply.raw.setHeader("content-type", "application/json; charset=utf-8");
+      reply.raw.setHeader(
+        "content-length",
+        Buffer.byteLength(serializedPayload).toString()
+      );
+      reply.raw.end();
+      return;
+    }
+
+    return reply.status(403).send(payload);
+  });
+
   // Global error handler (must be registered BEFORE routes)
   fastify.setErrorHandler((error, request, reply) => {
     const validationError = error as ValidationErrorLike;
@@ -330,12 +362,12 @@ export async function buildServer() {
           ? validationError.validationContext
           : "body";
       const validationIssues: ValidationIssue[] = Array.isArray(
-        validationError.validation,
+        validationError.validation
       )
         ? validationError.validation
         : [];
       const formattedIssues = validationIssues.map((issue) =>
-        formatValidationIssue(validationContext, issue),
+        formatValidationIssue(validationContext, issue)
       );
       const detailsSuffix =
         formattedIssues.length > 1
@@ -351,7 +383,7 @@ export async function buildServer() {
           validationIssueCount: formattedIssues.length,
           validationIssues: formattedIssues,
         },
-        "Request validation failed",
+        "Request validation failed"
       );
 
       return reply.status(400).send({
@@ -376,7 +408,7 @@ export async function buildServer() {
         url: request.url,
         statusCode: 500,
       },
-      getTelemetryDistinctId(request.user?.id),
+      getTelemetryDistinctId(request.user?.id)
     );
 
     fastify.log.error(error);
@@ -427,9 +459,8 @@ export async function buildServer() {
         await import("./modules/artwork/artwork.routes");
       const { playlistsRoutes } =
         await import("./modules/playlists/playlists.routes");
-      const { videoCollectionsRoutes } = await import(
-        "./modules/video-collections/video-collections.routes"
-      );
+      const { videoCollectionsRoutes } =
+        await import("./modules/video-collections/video-collections.routes");
       const { favoritesRoutes } =
         await import("./modules/favorites/favorites.routes");
       const { bookmarksRoutes } =
@@ -442,34 +473,28 @@ export async function buildServer() {
         conversionRoutes,
         conversionStatusRoutes,
         videoConversionRoutes,
-      } =
-        await import("./modules/conversion/conversion.routes");
-      const { triageRoutes, usersTriageLegacyRoutes } = await import(
-        "./modules/triage/triage.routes"
-      );
+      } = await import("./modules/conversion/conversion.routes");
+      const { triageRoutes, usersTriageLegacyRoutes } =
+        await import("./modules/triage/triage.routes");
       const { videoStatsRoutes } =
         await import("./modules/video-stats/video-stats.routes");
       const { settingsRoutes } =
         await import("./modules/settings/settings.routes");
       const { storyboardsRoutes } =
         await import("./modules/storyboards/storyboards.routes");
-      const { statsLegacySnapshotRoutes, statsRoutes } = await import(
-        "./modules/stats/stats.routes"
-      );
+      const { statsLegacySnapshotRoutes, statsRoutes } =
+        await import("./modules/stats/stats.routes");
       const { eventsRoutes } = await import("./modules/events/events.routes");
       const { taggingRulesRoutes } =
         await import("./modules/tagging-rules/tagging-rules.routes");
       const { faceRecognitionRoutes } =
         await import("./modules/face-recognition/face-recognition.routes");
-      const { editsRoutes, videoEditsRoutes } = await import(
-        "./modules/edits/edits.routes"
-      );
-      const { multiplayerRemoteRoutes } = await import(
-        "./modules/multiplayer-remote/multiplayer-remote.routes"
-      );
-      const { enrichmentRoutes } = await import(
-        "./modules/enrichment/enrichment.routes"
-      );
+      const { editsRoutes, videoEditsRoutes } =
+        await import("./modules/edits/edits.routes");
+      const { multiplayerRemoteRoutes } =
+        await import("./modules/multiplayer-remote/multiplayer-remote.routes");
+      const { enrichmentRoutes } =
+        await import("./modules/enrichment/enrichment.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -520,12 +545,13 @@ export async function buildServer() {
       });
       await instance.register(enrichmentRoutes, { prefix: "/enrichment" });
     },
-    { prefix: API_PREFIX },
+    { prefix: API_PREFIX }
   );
 
   // Start scheduler for automatic directory scanning
   if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
-    const { artworkService } = await import("./modules/artwork/artwork.service");
+    const { artworkService } =
+      await import("./modules/artwork/artwork.service");
     artworkService.resumePendingJobs().catch((err) => {
       fastify.log.error(err, "Failed to resume pending artwork jobs");
     });

@@ -1,7 +1,9 @@
-import { eq, and, asc } from 'drizzle-orm';
-import { db } from '@/config/drizzle';
-import { videoMetadataTable } from '@/database/schema';
-import { NotFoundError } from '@/utils/errors';
+import { eq, and, asc } from "drizzle-orm";
+import { db } from "@/config/drizzle";
+import { videoMetadataTable } from "@/database/schema";
+import { NotFoundError } from "@/utils/errors";
+import { env } from "@/config/env";
+import { videosDemoService } from "./videos.demo.service";
 
 /**
  * Service for managing custom video metadata (key-value pairs)
@@ -11,8 +13,12 @@ export class VideosMetadataService {
    * Get all metadata for a video
    */
   async getMetadata(
-    videoId: number,
+    videoId: number
   ): Promise<{ key: string; value: string }[]> {
+    if (env.DEMO_MODE)
+      return videosDemoService
+        .getMetadata(videoId)
+        .map(({ key, value }) => ({ key, value }));
     const metadata = await db
       .select({
         key: videoMetadataTable.key,
@@ -31,8 +37,12 @@ export class VideosMetadataService {
   async setMetadata(
     videoId: number,
     key: string,
-    value: string,
+    value: string
   ): Promise<void> {
+    if (env.DEMO_MODE) {
+      videosDemoService.setMetadata(videoId, key, value);
+      return;
+    }
     await db
       .insert(videoMetadataTable)
       .values({
@@ -53,13 +63,17 @@ export class VideosMetadataService {
    * Delete metadata key
    */
   async deleteMetadata(videoId: number, key: string): Promise<void> {
+    if (env.DEMO_MODE) {
+      videosDemoService.deleteMetadata(videoId, key);
+      return;
+    }
     const result = await db
       .delete(videoMetadataTable)
       .where(
         and(
           eq(videoMetadataTable.videoId, videoId),
-          eq(videoMetadataTable.key, key),
-        ),
+          eq(videoMetadataTable.key, key)
+        )
       )
       .returning({ id: videoMetadataTable.id });
 

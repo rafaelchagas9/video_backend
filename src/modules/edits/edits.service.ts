@@ -3,6 +3,8 @@ import { db } from "@/config/drizzle";
 import { editJobsTable } from "@/database/schema";
 import { NotFoundError, ValidationError } from "@/utils/errors";
 import { editsQueue } from "./edits.queue";
+import { editsDemoService } from "./edits.demo.service";
+import { env } from "@/config/env";
 import type {
   EditJob,
   CreateEditJobInput,
@@ -15,6 +17,8 @@ export class EditsService {
    * Create a new edit job
    */
   async create(videoId: number, input: CreateEditJobInput): Promise<EditJob> {
+    if (env.DEMO_MODE) return editsDemoService.create(videoId, input);
+
     // Basic validation
     if (input.timeline.segments.length === 0) {
       throw new ValidationError("Timeline must have at least one segment");
@@ -47,6 +51,8 @@ export class EditsService {
    * Get job by ID
    */
   async getById(id: number): Promise<EditJob> {
+    if (env.DEMO_MODE) return editsDemoService.getById(id);
+
     const job = await db.query.editJobsTable.findFirst({
       where: (jobs, { eq }) => eq(jobs.id, id),
     });
@@ -64,7 +70,7 @@ export class EditsService {
   async updateStatus(
     id: number,
     status: EditJob["status"],
-    updates: Partial<Omit<EditJob, "id" | "videoId" | "status">> = {},
+    updates: Partial<Omit<EditJob, "id" | "videoId" | "status">> = {}
   ): Promise<void> {
     const updateData: any = { status, ...updates };
 
@@ -88,6 +94,8 @@ export class EditsService {
    * Cancel a job
    */
   async cancel(id: number): Promise<EditJob> {
+    if (env.DEMO_MODE) return editsDemoService.cancel(id);
+
     const job = await this.getById(id);
 
     if (

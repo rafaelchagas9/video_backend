@@ -6,6 +6,8 @@ import { storageStatsService } from "./stats.storage.service";
 import { libraryStatsService } from "./stats.library.service";
 import { contentStatsService } from "./stats.content.service";
 import { usageStatsService } from "./stats.usage.service";
+import { statsDemoService } from "./stats.demo.service";
+import { env } from "@/config/env";
 import {
   historyQuerySchema,
   errorResponseSchema,
@@ -26,12 +28,20 @@ import {
 
 type HistoryQuery = { days: number; limit: number };
 
+const storageStats = () =>
+  env.DEMO_MODE ? statsDemoService : storageStatsService;
+const libraryStats = () =>
+  env.DEMO_MODE ? statsDemoService : libraryStatsService;
+const contentStats = () =>
+  env.DEMO_MODE ? statsDemoService : contentStatsService;
+const usageStats = () => (env.DEMO_MODE ? statsDemoService : usageStatsService);
+
 async function createAllSnapshots() {
   const [storage, library, content, usage] = await Promise.all([
-    storageStatsService.createStorageSnapshot(),
-    libraryStatsService.createLibrarySnapshot(),
-    contentStatsService.createContentSnapshot(),
-    usageStatsService.createUsageSnapshot(),
+    storageStats().createStorageSnapshot(),
+    libraryStats().createLibrarySnapshot(),
+    contentStats().createContentSnapshot(),
+    usageStats().createUsageSnapshot(),
   ]);
 
   return {
@@ -61,9 +71,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await storageStatsService.getCurrentStorageStats();
+      const data = await storageStats().getCurrentStorageStats();
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.get(
@@ -83,9 +93,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { days, limit } = request.query as HistoryQuery;
-      const data = await storageStatsService.getStorageHistory(days, limit);
+      const data = await storageStats().getStorageHistory(days, limit);
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.post(
@@ -102,11 +112,11 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await storageStatsService.createStorageSnapshot();
+      const data = await storageStats().createStorageSnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Storage snapshot created" });
-    },
+    }
   );
 
   app.get(
@@ -124,9 +134,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await libraryStatsService.getCurrentLibraryStats();
+      const data = await libraryStats().getCurrentLibraryStats();
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.get(
@@ -145,9 +155,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { days, limit } = request.query as HistoryQuery;
-      const data = await libraryStatsService.getLibraryHistory(days, limit);
+      const data = await libraryStats().getLibraryHistory(days, limit);
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.post(
@@ -164,11 +174,11 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await libraryStatsService.createLibrarySnapshot();
+      const data = await libraryStats().createLibrarySnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Library snapshot created" });
-    },
+    }
   );
 
   app.get(
@@ -186,9 +196,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await contentStatsService.getCurrentContentStats();
+      const data = await contentStats().getCurrentContentStats();
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.get(
@@ -207,9 +217,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { days, limit } = request.query as HistoryQuery;
-      const data = await contentStatsService.getContentHistory(days, limit);
+      const data = await contentStats().getContentHistory(days, limit);
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.post(
@@ -226,11 +236,11 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await contentStatsService.createContentSnapshot();
+      const data = await contentStats().createContentSnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Content snapshot created" });
-    },
+    }
   );
 
   app.get(
@@ -248,9 +258,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await usageStatsService.getCurrentUsageStats();
+      const data = await usageStats().getCurrentUsageStats();
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.get(
@@ -269,9 +279,9 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { days, limit } = request.query as HistoryQuery;
-      const data = await usageStatsService.getUsageHistory(days, limit);
+      const data = await usageStats().getUsageHistory(days, limit);
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   app.post(
@@ -288,11 +298,11 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (_request, reply) => {
-      const data = await usageStatsService.createUsageSnapshot();
+      const data = await usageStats().createUsageSnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Usage snapshot created" });
-    },
+    }
   );
 
   app.post(
@@ -314,12 +324,12 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply
         .status(201)
         .send({ success: true, data, message: "All snapshots created" });
-    },
+    }
   );
 }
 
 export async function statsLegacySnapshotRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook("preHandler", authenticateUser);
@@ -339,12 +349,14 @@ export async function statsLegacySnapshotRoutes(
       },
     },
     async (_request, reply) => {
-      markRouteDeprecated(reply, { replacement: "/api/stats/storage-snapshots" });
-      const data = await storageStatsService.createStorageSnapshot();
+      markRouteDeprecated(reply, {
+        replacement: "/api/stats/storage-snapshots",
+      });
+      const data = await storageStats().createStorageSnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Storage snapshot created" });
-    },
+    }
   );
 
   app.post(
@@ -362,12 +374,14 @@ export async function statsLegacySnapshotRoutes(
       },
     },
     async (_request, reply) => {
-      markRouteDeprecated(reply, { replacement: "/api/stats/library-snapshots" });
-      const data = await libraryStatsService.createLibrarySnapshot();
+      markRouteDeprecated(reply, {
+        replacement: "/api/stats/library-snapshots",
+      });
+      const data = await libraryStats().createLibrarySnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Library snapshot created" });
-    },
+    }
   );
 
   app.post(
@@ -385,12 +399,14 @@ export async function statsLegacySnapshotRoutes(
       },
     },
     async (_request, reply) => {
-      markRouteDeprecated(reply, { replacement: "/api/stats/content-snapshots" });
-      const data = await contentStatsService.createContentSnapshot();
+      markRouteDeprecated(reply, {
+        replacement: "/api/stats/content-snapshots",
+      });
+      const data = await contentStats().createContentSnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Content snapshot created" });
-    },
+    }
   );
 
   app.post(
@@ -409,11 +425,11 @@ export async function statsLegacySnapshotRoutes(
     },
     async (_request, reply) => {
       markRouteDeprecated(reply, { replacement: "/api/stats/usage-snapshots" });
-      const data = await usageStatsService.createUsageSnapshot();
+      const data = await usageStats().createUsageSnapshot();
       return reply
         .status(201)
         .send({ success: true, data, message: "Usage snapshot created" });
-    },
+    }
   );
 
   app.post(
@@ -436,6 +452,6 @@ export async function statsLegacySnapshotRoutes(
       return reply
         .status(201)
         .send({ success: true, data, message: "All snapshots created" });
-    },
+    }
   );
 }

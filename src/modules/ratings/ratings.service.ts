@@ -9,12 +9,12 @@ import type {
 } from "./ratings.types";
 import { videosService } from "@/modules/videos/videos.service";
 import { env } from "@/config/env";
+import { ratingsDemoService } from "./ratings.demo.service";
 
 export class RatingsService {
   async addRating(videoId: number, input: CreateRatingInput): Promise<Rating> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.addRating(videoId, input) as Rating;
+      return ratingsDemoService.addRating(videoId, input);
     }
 
     await videosService.findById(videoId); // Ensure video exists
@@ -37,12 +37,7 @@ export class RatingsService {
 
   async findById(id: number): Promise<Rating> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const rating = demoMockService.findRatingById(id);
-      if (!rating) {
-        throw new NotFoundError(`Rating not found with id: ${id}`);
-      }
-      return rating as Rating;
+      return ratingsDemoService.findById(id);
     }
 
     const ratings = await db
@@ -60,8 +55,7 @@ export class RatingsService {
 
   async getRatingsForVideo(videoId: number): Promise<Rating[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getRatingsForVideo(videoId) as Rating[];
+      return ratingsDemoService.getRatingsForVideo(videoId);
     }
 
     await videosService.findById(videoId); // Ensure video exists
@@ -77,12 +71,7 @@ export class RatingsService {
 
   async update(id: number, input: UpdateRatingInput): Promise<Rating> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const rating = demoMockService.updateRating(id, input);
-      if (!rating) {
-        throw new NotFoundError(`Rating not found with id: ${id}`);
-      }
-      return rating as Rating;
+      return ratingsDemoService.update(id, input);
     }
 
     await this.findById(id); // Ensure exists
@@ -108,10 +97,7 @@ export class RatingsService {
 
   async delete(id: number): Promise<void> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      if (!demoMockService.deleteRating(id)) {
-        throw new NotFoundError(`Rating not found with id: ${id}`);
-      }
+      ratingsDemoService.delete(id);
       return;
     }
 
@@ -121,15 +107,7 @@ export class RatingsService {
 
   async getAverageRating(videoId: number): Promise<number | null> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const ratings = demoMockService.getRatingsForVideo(videoId);
-      if (ratings.length === 0) {
-        return null;
-      }
-      return (
-        ratings.reduce((total: number, rating: any) => total + rating.rating, 0) /
-        ratings.length
-      );
+      return ratingsDemoService.getAverageRating(videoId);
     }
 
     const result = await db

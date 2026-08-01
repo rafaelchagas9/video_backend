@@ -29,6 +29,8 @@ import type {
   CreatorGalleryMedia,
 } from "./creators.types";
 import type { Creator } from "./creators.types";
+import { creatorsDemoService } from "./creators.demo.service";
+import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 
 type CreatorPictureVariant = "portrait" | "main";
 
@@ -36,8 +38,10 @@ export class CreatorsSocialService {
   // Social Links Methods
   async addSocialLink(
     creatorId: number,
-    input: CreateSocialLinkInput,
+    input: CreateSocialLinkInput
   ): Promise<SocialLink> {
+    if (env.DEMO_MODE)
+      return creatorsDemoService.addSocialLink(creatorId, input);
     // Verify creator exists
     const creator = await db
       .select({ id: creatorsTable.id })
@@ -68,7 +72,13 @@ export class CreatorsSocialService {
   async updateSocialLink(
     id: number,
     input: UpdateSocialLinkInput,
+    creatorId?: number
   ): Promise<SocialLink> {
+    if (env.DEMO_MODE) {
+      if (creatorId === undefined)
+        throw new NotFoundError(`Social link not found with id: ${id}`);
+      return creatorsDemoService.updateSocialLink(creatorId, id, input);
+    }
     await this.findSocialLinkById(id); // Ensure exists
 
     const updates: any = {};
@@ -93,7 +103,13 @@ export class CreatorsSocialService {
     return this.findSocialLinkById(id);
   }
 
-  async deleteSocialLink(id: number): Promise<void> {
+  async deleteSocialLink(id: number, creatorId?: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      if (creatorId === undefined)
+        throw new NotFoundError(`Social link not found with id: ${id}`);
+      creatorsDemoService.deleteSocialLink(creatorId, id);
+      return;
+    }
     await this.findSocialLinkById(id); // Ensure exists
     await db
       .delete(creatorSocialLinksTable)
@@ -102,8 +118,7 @@ export class CreatorsSocialService {
 
   async getSocialLinks(creatorId: number): Promise<SocialLink[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCreatorSocialLinks(creatorId) as SocialLink[];
+      return creatorsDemoService.getSocialLinks(creatorId);
     }
 
     // Verify creator exists
@@ -128,8 +143,33 @@ export class CreatorsSocialService {
 
   async bulkUpsertSocialLinks(
     creatorId: number,
-    items: BulkSocialLinkItem[],
+    items: BulkSocialLinkItem[]
   ): Promise<BulkOperationResult<SocialLink>> {
+    if (env.DEMO_MODE) {
+      const created: SocialLink[] = [];
+      const updated: SocialLink[] = [];
+      const errors: Array<{ index: number; error: string }> = [];
+      const existing = creatorsDemoService.getSocialLinks(creatorId);
+      for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        try {
+          const match = existing.find(
+            (link) => link.platform_name === item.platform_name
+          );
+          if (match)
+            updated.push(
+              creatorsDemoService.updateSocialLink(creatorId, match.id, item)
+            );
+          else created.push(creatorsDemoService.addSocialLink(creatorId, item));
+        } catch (error) {
+          errors.push({
+            index,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+      return { created, updated, errors };
+    }
     // Verify creator exists
     const creator = await db
       .select({ id: creatorsTable.id })
@@ -156,8 +196,8 @@ export class CreatorsSocialService {
             and(
               eq(creatorSocialLinksTable.creatorId, creatorId),
               eq(creatorSocialLinksTable.platformName, item.platform_name),
-              eq(creatorSocialLinksTable.url, item.url),
-            ),
+              eq(creatorSocialLinksTable.url, item.url)
+            )
           )
           .limit(1);
 
@@ -172,8 +212,8 @@ export class CreatorsSocialService {
             .where(
               and(
                 eq(creatorSocialLinksTable.creatorId, creatorId),
-                eq(creatorSocialLinksTable.platformName, item.platform_name),
-              ),
+                eq(creatorSocialLinksTable.platformName, item.platform_name)
+              )
             )
             .limit(1);
 
@@ -216,8 +256,14 @@ export class CreatorsSocialService {
     id: number,
     fileBuffer: Buffer,
     _filename: string,
-    variant: CreatorPictureVariant = "portrait",
+    variant: CreatorPictureVariant = "portrait"
   ): Promise<Creator> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.uploadCreatorPicture(
+        id,
+        fileBuffer,
+        variant
+      );
     const creator = await this.findCreatorById(id);
     const filePath = await this.storeProcessedImage({
       input: fileBuffer,
@@ -268,8 +314,10 @@ export class CreatorsSocialService {
 
   async deleteProfilePicture(
     id: number,
-    variant: CreatorPictureVariant = "portrait",
+    variant: CreatorPictureVariant = "portrait"
   ): Promise<Creator> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.deleteCreatorPicture(id, variant);
     const creator = await this.findCreatorById(id);
 
     if (variant === "main") {
@@ -296,23 +344,26 @@ export class CreatorsSocialService {
   async setPictureFromUrl(
     creatorId: number,
     url: string,
-    variant: CreatorPictureVariant = "portrait",
+    variant: CreatorPictureVariant = "portrait"
   ): Promise<Creator> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.setCreatorPictureFromUrl(
+        creatorId,
+        url,
+        variant
+      );
     const buffer = await this.downloadImage(url);
     return this.uploadProfilePicture(
       creatorId,
       buffer,
       "downloaded-image",
-      variant,
+      variant
     );
   }
 
   async listGalleryMedia(creatorId: number): Promise<CreatorGalleryMedia[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCreatorGalleryMedia(
-        creatorId,
-      ) as CreatorGalleryMedia[];
+      return creatorsDemoService.listGallery(creatorId);
     }
 
     await this.findCreatorById(creatorId);
@@ -333,8 +384,15 @@ export class CreatorsSocialService {
     creatorId: number,
     fileBuffer: Buffer,
     label?: string,
-    description?: string,
+    description?: string
   ): Promise<CreatorGalleryMedia> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.addGallery(
+        creatorId,
+        fileBuffer,
+        label,
+        description
+      );
     await this.findCreatorById(creatorId);
 
     const filePath = await this.storeProcessedImage({
@@ -364,13 +422,24 @@ export class CreatorsSocialService {
     creatorId: number,
     url: string,
     label?: string,
-    description?: string,
+    description?: string
   ): Promise<CreatorGalleryMedia> {
+    if (env.DEMO_MODE)
+      return demoMediaAssetsService.addGalleryFromUrl(
+        creatorId,
+        url,
+        label,
+        description
+      );
     const buffer = await this.downloadImage(url);
     return this.addGalleryMedia(creatorId, buffer, label, description);
   }
 
   async deleteGalleryMedia(creatorId: number, mediaId: number): Promise<void> {
+    if (env.DEMO_MODE) {
+      demoMediaAssetsService.deleteGallery(creatorId, mediaId);
+      return;
+    }
     const media = await this.findGalleryMediaById(creatorId, mediaId);
 
     this.deleteFileIfExists(media.file_path);
@@ -386,16 +455,21 @@ export class CreatorsSocialService {
    */
   async getGalleryMediaById(
     creatorId: number,
-    mediaId: number,
+    mediaId: number
   ): Promise<CreatorGalleryMedia> {
+    if (env.DEMO_MODE) {
+      return demoMediaAssetsService.gallery(creatorId, mediaId);
+    }
     return this.findGalleryMediaById(creatorId, mediaId);
   }
 
   async updateGalleryMediaRoles(
     creatorId: number,
     mediaId: number,
-    roles: { is_profile_picture?: boolean; is_main_picture?: boolean },
+    roles: { is_profile_picture?: boolean; is_main_picture?: boolean }
   ): Promise<CreatorGalleryMedia> {
+    if (env.DEMO_MODE)
+      return creatorsDemoService.updateGalleryRoles(creatorId, mediaId, roles);
     await this.findGalleryMediaById(creatorId, mediaId);
 
     if (roles.is_profile_picture === true) {
@@ -420,8 +494,8 @@ export class CreatorsSocialService {
       .where(
         and(
           eq(creatorGalleryMediaTable.id, mediaId),
-          eq(creatorGalleryMediaTable.creatorId, creatorId),
-        ),
+          eq(creatorGalleryMediaTable.creatorId, creatorId)
+        )
       );
 
     await this.touchCreator(creatorId);
@@ -475,7 +549,7 @@ export class CreatorsSocialService {
 
   private async findGalleryMediaById(
     creatorId: number,
-    mediaId: number,
+    mediaId: number
   ): Promise<CreatorGalleryMedia> {
     const result = await db
       .select()
@@ -483,14 +557,14 @@ export class CreatorsSocialService {
       .where(
         and(
           eq(creatorGalleryMediaTable.id, mediaId),
-          eq(creatorGalleryMediaTable.creatorId, creatorId),
-        ),
+          eq(creatorGalleryMediaTable.creatorId, creatorId)
+        )
       )
       .limit(1);
 
     if (!result[0]) {
       throw new NotFoundError(
-        `Creator gallery media not found with id: ${mediaId}`,
+        `Creator gallery media not found with id: ${mediaId}`
       );
     }
 
@@ -588,7 +662,7 @@ export class CreatorsSocialService {
       description?: string;
       isProfilePicture?: boolean;
       isMainPicture?: boolean;
-    } = {},
+    } = {}
   ) {
     await db.insert(creatorGalleryMediaTable).values({
       creatorId,
@@ -632,7 +706,7 @@ export class CreatorsSocialService {
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(
-          `Failed to download image: ${response.status} ${response.statusText}`,
+          `Failed to download image: ${response.status} ${response.statusText}`
         );
       }
 
@@ -662,7 +736,7 @@ export class CreatorsSocialService {
 
     const filePath = join(
       env.PROFILE_PICTURES_DIR,
-      `${params.namePrefix}_${Date.now()}.${env.PROFILE_PICTURE_FORMAT}`,
+      `${params.namePrefix}_${Date.now()}.${env.PROFILE_PICTURE_FORMAT}`
     );
 
     const processedBuffer = await processProfilePicture({
@@ -678,7 +752,7 @@ export class CreatorsSocialService {
 
   private async generateFaceThumbnail(
     profilePath: string,
-    creatorId: number,
+    creatorId: number
   ): Promise<string | null> {
     try {
       const faceClient = getFaceRecognitionClient();
@@ -689,7 +763,7 @@ export class CreatorsSocialService {
       }
 
       const bestFace = result.faces.reduce((best, current) =>
-        current.det_score > best.det_score ? current : best,
+        current.det_score > best.det_score ? current : best
       );
 
       const faceDir = join(env.PROFILE_PICTURES_DIR, "faces");
@@ -717,7 +791,7 @@ export class CreatorsSocialService {
 
   private async generateProfilePictureEmbedding(
     profilePath: string,
-    creatorId: number,
+    creatorId: number
   ): Promise<void> {
     try {
       const existingEmbedding = await db
@@ -737,7 +811,7 @@ export class CreatorsSocialService {
     } catch (error) {
       logger.warn(
         { error, creatorId },
-        "Failed to generate profile picture embedding",
+        "Failed to generate profile picture embedding"
       );
     }
   }
