@@ -15,6 +15,7 @@ import {
 import { and, eq } from "drizzle-orm";
 import { creatorFaceEmbeddingsTable } from "@/database/schema";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 
 export async function faceRecognitionRoutes(server: FastifyInstance) {
   const app = server.withTypeProvider<ZodTypeProvider>();
@@ -443,6 +444,24 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         id: string;
         eid: string;
       };
+
+      if (env.DEMO_MODE) {
+        const { demoMockService } = await import("@/utils/demo-mock");
+        const demoPath = demoMockService.getCreatorFaceEmbeddingPath(
+          Number(creatorId),
+          Number(embeddingId),
+        );
+
+        if (!demoPath || !existsSync(demoPath)) {
+          return reply.code(404).send({
+            success: false,
+            error: { message: "Thumbnail not found", statusCode: 404 },
+          });
+        }
+
+        reply.header("Content-Type", "image/jpeg");
+        return reply.send(readFileSync(demoPath));
+      }
 
       // Get embedding from database
       const embedding = await db

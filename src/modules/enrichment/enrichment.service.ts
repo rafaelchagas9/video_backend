@@ -36,6 +36,7 @@ import {
   type NewCreator,
 } from "@/database/schema";
 import { AppError, BadRequestError, NotFoundError } from "@/utils/errors";
+import { env } from "@/config/env";
 import { logger } from "@/utils/logger";
 import { creatorsService } from "@/modules/creators/creators.service";
 import { creatorsSocialService } from "@/modules/creators/creators.social.service";
@@ -127,6 +128,18 @@ export class EnrichmentService {
     entityId: number,
     options: RunEnrichmentOptions = {},
   ): Promise<RunDTO> {
+    // In demo mode the seeded proposals are the whole universe: a scan logs a
+    // run and reports what is still awaiting a decision, without reaching the
+    // external enrichment service or the database.
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.runEnrichmentScan(
+        entityType,
+        entityId,
+        options.sources ?? [],
+      ) as unknown as RunDTO;
+    }
+
     const request = await this.gatherInputs(entityType, entityId, options);
 
     const [run] = await db
@@ -293,6 +306,13 @@ export class EnrichmentService {
   async listSuggestions(
     filters: ListSuggestionsFilters,
   ): Promise<SuggestionDTO[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getEnrichmentSuggestions(
+        filters,
+      ) as unknown as SuggestionDTO[];
+    }
+
     const conditions = [];
     if (filters.entity_type) {
       conditions.push(
@@ -328,6 +348,14 @@ export class EnrichmentService {
     entityType: EntityType,
     entityId: number,
   ): Promise<RunDTO[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getEnrichmentRuns(
+        entityType,
+        entityId,
+      ) as unknown as RunDTO[];
+    }
+
     const rows = await db
       .select()
       .from(enrichmentRunsTable)
@@ -346,6 +374,14 @@ export class EnrichmentService {
    * then mark it accepted.
    */
   async acceptSuggestion(id: number): Promise<SuggestionDTO> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.decideEnrichmentSuggestion(
+        id,
+        "accepted",
+      ) as unknown as SuggestionDTO;
+    }
+
     const suggestion = await this.getSuggestionOrThrow(id);
     if (suggestion.status !== "pending") {
       throw new BadRequestError(
@@ -392,6 +428,14 @@ export class EnrichmentService {
   }
 
   async rejectSuggestion(id: number): Promise<SuggestionDTO> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.decideEnrichmentSuggestion(
+        id,
+        "rejected",
+      ) as unknown as SuggestionDTO;
+    }
+
     await this.getSuggestionOrThrow(id);
     const [updated] = await db
       .update(enrichmentSuggestionsTable)

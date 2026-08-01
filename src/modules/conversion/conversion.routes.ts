@@ -19,11 +19,18 @@ import {
   listActiveConversionsResponseSchema,
   clearQueueResponseSchema,
   conversionHistoryQuerySchema,
+  conversionHistoryOverviewQuerySchema,
   conversionHistoryResponseSchema,
   conversionHistoryOverviewResponseSchema,
+  conversionHistoryFacetsResponseSchema,
+  conversionInsightsResponseSchema,
   conversionQueueStatusResponseSchema,
   updateConversionJobSchema,
 } from "./conversion.schemas";
+import type {
+  ConversionHistoryFilters,
+  ConversionHistoryListOptions,
+} from "./conversion.types";
 
 async function createVideoConversionJob(
   request: FastifyRequest,
@@ -258,23 +265,25 @@ export async function conversionRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { limit, offset, videoId, preset } = request.query as {
-        limit?: number;
-        offset?: number;
-        videoId?: number;
-        preset?: string;
-      };
+      const query = request.query as ConversionHistoryListOptions;
+      const history = await conversionService.getHistory(query);
 
-      const history = await conversionService.getHistory({
-        limit,
-        offset,
-        videoId,
-        preset,
+      return reply.send({
+        success: true,
+        data: history.items,
+        meta: {
+          total: history.total,
+          limit: history.limit,
+          offset: history.offset,
+        },
       });
-
-      return reply.send({ success: true, data: history });
     },
   );
+
+  /**
+   * Aggregate metrics for the (optionally filtered) history
+   * GET /conversions/history/overview
+   */
   app.get(
     "/history/overview",
     {
@@ -283,31 +292,72 @@ export async function conversionRoutes(fastify: FastifyInstance) {
         summary: "Get conversion history overview",
         description:
           "Returns aggregate metrics for completed conversion history.",
-        querystring: conversionHistoryQuerySchema,
+        querystring: conversionHistoryOverviewQuerySchema,
         response: {
           200: conversionHistoryOverviewResponseSchema,
         },
       },
     },
     async (request, reply) => {
-      const { videoId, preset } = request.query as {
-        videoId?: number;
-        preset?: string;
-      };
-
-      const overview = await conversionService.getHistoryOverview({
-        videoId,
-        preset,
-      });
+      const overview = await conversionService.getHistoryOverview(
+        request.query as ConversionHistoryFilters,
+      );
 
       return reply.send({ success: true, data: overview });
     },
   );
 
   /**
-   * Get conversion history overview
-   * GET /conversions/history/overview
+   * Compression insights derived from the history
+   * GET /conversions/history/insights
    */
+  app.get(
+    "/history/insights",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Get conversion insights",
+        description:
+          "Breaks the conversion history down by preset and by source characteristics " +
+          "(bitrate, resolution, codec, frame rate) so compression profiles can be tuned.",
+        querystring: conversionHistoryOverviewQuerySchema,
+        response: {
+          200: conversionInsightsResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const insights = await conversionService.getHistoryInsights(
+        request.query as ConversionHistoryFilters,
+      );
+
+      return reply.send({ success: true, data: insights });
+    },
+  );
+
+  /**
+   * Distinct values available for history filters
+   * GET /conversions/history/facets
+   */
+  app.get(
+    "/history/facets",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Get conversion history filter facets",
+        description:
+          "Returns the distinct presets and source codecs present in the history.",
+        response: {
+          200: conversionHistoryFacetsResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      const facets = await conversionService.getHistoryFacets();
+      return reply.send({ success: true, data: facets });
+    },
+  );
+
   app.get(
     "/:id",
     {

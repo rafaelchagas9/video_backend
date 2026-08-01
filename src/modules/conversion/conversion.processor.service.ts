@@ -5,15 +5,25 @@
 import { statSync, unlinkSync } from "fs";
 import { basename } from "path";
 import { getPreset } from "@/config/presets";
+import { metadataService } from "@/modules/videos/metadata.service";
 import { videosService } from "@/modules/videos/videos.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionBatchService } from "./conversion.batch.service";
 import { conversionHistoryService } from "./conversion.history.service";
+import {
+  calculateEffectiveDimensions,
+  formatEffectiveResolution,
+} from "./conversion.planning";
 import { eventsService } from "@/modules/events/events.service";
 import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
-import type { QueueJobPayload, ConversionEvent } from "./conversion.types";
+import type { Video } from "@/modules/videos/videos.types";
+import type {
+  ConversionMediaMetadata,
+  QueueJobPayload,
+  ConversionEvent,
+} from "./conversion.types";
 
 export class ConversionProcessorService {
   /**
@@ -70,6 +80,13 @@ export class ConversionProcessorService {
         );
       }
 
+      // Probe the source before it is (possibly) replaced, so history keeps a
+      // record of what was actually fed to the encoder.
+      const sourceMetadata = this.withDerivedBitrate(
+        (await this.probeMedia(inputPath)) ?? this.metadataFromVideo(video),
+        originalSizeBytes,
+      );
+
       // Build and run FFmpeg command with progress callback
       const ffmpegResult = await ffmpegService.runConversion(
         jobId,
@@ -103,7 +120,26 @@ export class ConversionProcessorService {
       // Update job as completed
       await conversionJobsService.markAsCompleted(jobId, stats.size);
 
+      const outputMetadata = this.withDerivedBitrate(
+        await this.probeMedia(outputPath),
+        stats.size,
+      );
+
       try {
+        const effectiveResolution = formatEffectiveResolution(
+          outputMetadata?.width && outputMetadata.height
+            ? {
+                width: outputMetadata.width,
+                height: outputMetadata.height,
+              }
+            : calculateEffectiveDimensions(
+                sourceMetadata?.width ?? video.width,
+                sourceMetadata?.height ?? video.height,
+                job.target_resolution,
+              ),
+          job.target_resolution,
+        );
+
         await conversionHistoryService.createCompletedEntry({
           conversionJobId: jobId,
           videoId,
@@ -117,6 +153,14 @@ export class ConversionProcessorService {
           originalSizeBytes,
           outputSizeBytes: stats.size,
           conversionDurationMs: ffmpegResult.durationMs,
+          sourceMetadata,
+          outputMetadata,
+          profileVersion: ffmpegResult.profileVersion,
+          plannedVideoBitrate: ffmpegResult.plannedVideoBitrate,
+          plannedMaxBitrate: ffmpegResult.plannedMaxBitrate,
+          plannedQp: ffmpegResult.plannedQp,
+          effectiveResolution,
+          encodingMode: ffmpegResult.encodingMode,
           startedAt,
           completedAt,
         });
@@ -208,6 +252,66 @@ export class ConversionProcessorService {
 
       throw error;
     }
+  }
+
+  /**
+   * Probe a file for technical metadata. Never throws: history is
+   * supplementary and must not fail an otherwise successful conversion.
+   */
+  private async probeMedia(
+    filePath: string,
+  ): Promise<ConversionMediaMetadata | null> {
+    try {
+      const metadata = await metadataService.extractMetadata(filePath);
+
+      return {
+        width: metadata.width,
+        height: metadata.height,
+        fps: metadata.fps,
+        codec: metadata.codec,
+        audioCodec: metadata.audio_codec,
+        bitrate: metadata.bitrate,
+        durationSeconds: metadata.duration_seconds,
+      };
+    } catch (error) {
+      logger.warn({ error, filePath }, "Failed to probe conversion metadata");
+      return null;
+    }
+  }
+
+  private metadataFromVideo(video: Video): ConversionMediaMetadata {
+    return {
+      width: video.width,
+      height: video.height,
+      fps: video.fps,
+      codec: video.codec,
+      audioCodec: video.audio_codec,
+      bitrate: video.bitrate,
+      durationSeconds: video.duration_seconds,
+    };
+  }
+
+  /**
+   * ffprobe does not always report a container bitrate; derive it from
+   * size/duration so bitrate comparisons stay usable across the whole history.
+   */
+  private withDerivedBitrate(
+    metadata: ConversionMediaMetadata | null,
+    sizeBytes: number,
+  ): ConversionMediaMetadata | null {
+    if (!metadata || metadata.bitrate !== null) {
+      return metadata;
+    }
+
+    const duration = metadata.durationSeconds;
+    if (!duration || duration <= 0) {
+      return metadata;
+    }
+
+    return {
+      ...metadata,
+      bitrate: Math.round((sizeBytes * 8) / duration),
+    };
   }
 
   /**

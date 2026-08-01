@@ -26,6 +26,7 @@ import { tagsService } from "@/modules/tags/tags.service";
 import { videoCollectionsService } from "@/modules/video-collections/video-collections.service";
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
+import { artworkService } from "@/modules/artwork/artwork.service";
 import type {
   ListVideosOptions,
   NextVideoOptions,
@@ -87,7 +88,17 @@ export class VideosSearchService {
   ): Promise<PaginatedVideos> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getVideos(options) as PaginatedVideos;
+      const result = demoMockService.getVideos(options) as PaginatedVideos;
+      if (options.include?.includes("artwork")) {
+        const summaries = await artworkService.getSummariesByVideoIds(
+          result.data.map((video) => video.id),
+        );
+        result.data = result.data.map((video) => ({
+          ...video,
+          artwork: summaries.get(video.id) ?? null,
+        }));
+      }
+      return result;
     }
     const {
       page = 1,
@@ -545,7 +556,7 @@ export class VideosSearchService {
     }
 
     const videoIds = videos.map((video) => video.id);
-    const [collections, creators, tags, studios] = await Promise.all([
+    const [collections, creators, tags, studios, artwork] = await Promise.all([
       include.includes("collection")
         ? videoCollectionsService.getCollectionContextsByVideoIds(videoIds)
         : Promise.resolve(new Map()),
@@ -557,6 +568,9 @@ export class VideosSearchService {
         : Promise.resolve(new Map()),
       include.includes("studios")
         ? studiosRelationshipsService.getStudiosForVideos(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("artwork")
+        ? artworkService.getSummariesByVideoIds(videoIds)
         : Promise.resolve(new Map()),
     ]);
 
@@ -571,6 +585,9 @@ export class VideosSearchService {
       ...(include.includes("tags") ? { tags: tags.get(video.id) ?? [] } : {}),
       ...(include.includes("studios")
         ? { studios: studios.get(video.id) ?? [] }
+        : {}),
+      ...(include.includes("artwork")
+        ? { artwork: artwork.get(video.id) ?? null }
         : {}),
     }));
   }

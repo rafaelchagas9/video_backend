@@ -23,6 +23,18 @@ const envSchema = z.object({
 
   // Paths
   THUMBNAILS_DIR: z.string().default("./data/thumbnails"),
+  ARTWORK_DIR: z.string().default("./data/artwork"),
+  // Title treatments. The family names are registered explicitly from these
+  // files, so realigning the baked lettering with whatever display pairing the
+  // clients ship is a config change plus a regeneration, not a code change.
+  ARTWORK_TITLE_FONT_PATH: z
+    .string()
+    .default("./assets/fonts/Figtree-Display.ttf"),
+  ARTWORK_TITLE_FONT_FAMILY: z.string().default("Figtree"),
+  ARTWORK_TITLE_FALLBACK_FONT_PATH: z
+    .string()
+    .default("./assets/fonts/Archivo-Regular.ttf"),
+  ARTWORK_TITLE_FALLBACK_FONT_FAMILY: z.string().default("Archivo"),
   PROFILE_PICTURES_DIR: z.string().default("./data/profile-pictures"),
   FACES_DIR: z.string().default("./data/faces"),
   CREATOR_FACE_THUMBNAILS_DIR: z
@@ -52,6 +64,11 @@ const envSchema = z.object({
     .default("20")
     .transform(Number)
     .pipe(z.number().min(0).max(100)),
+  ARTWORK_QUALITY: z
+    .string()
+    .default("84")
+    .transform(Number)
+    .pipe(z.number().min(1).max(100)),
   PROFILE_PICTURE_MAX_SIZE: z.string().default("1080").transform(Number),
   PROFILE_PICTURE_FORMAT: z.enum(["webp", "jpg"]).default("webp"),
   PROFILE_PICTURE_QUALITY: z

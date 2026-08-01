@@ -12,23 +12,23 @@ import {
 import { CONVERSION_PRESETS } from "@/config/presets";
 import { settingsService } from "@/modules/settings/settings.service";
 import { API_PREFIX } from "@/config/constants";
+import {
+  buildConversionBitratePlan,
+  calculateEffectiveDimensions,
+  calculateTargetResolution,
+  formatEffectiveResolution,
+} from "@/modules/conversion/conversion.planning";
+import {
+  buildConversionCalibration,
+  classifyCompressionRecommendation,
+  estimateConversion,
+  USEFUL_ABSOLUTE_SAVINGS_BYTES,
+} from "@/modules/conversion/conversion.estimator";
 import type {
   CompressionSuggestion,
   CompressionSuggestionsSummary,
   Video,
 } from "./videos.types";
-
-/** Hardcoded conservative fallback ratios when no history exists */
-const DEFAULT_RATIOS: Record<string, number> = {
-  "1080p_av1:h264": 0.25,
-  "1080p_av1:hevc": 0.45,
-  "1080p_av1:other": 0.35,
-  "original_av1:h264": 0.35,
-  "original_av1:hevc": 0.55,
-  "original_av1:other": 0.45,
-};
-
-type HistoricalRatios = Map<string, { avgRatio: number; count: number }>;
 
 function getCodecCategory(codec: string | null): string {
   const c = (codec ?? "").toLowerCase();
@@ -42,60 +42,30 @@ function getCodecCategory(codec: string | null): string {
  * Service for generating video compression suggestions
  */
 export class VideosSuggestionsService {
-  /**
-   * Phase A: Build historical compression ratios from conversion history
-   */
-  private async buildHistoricalRatios(): Promise<HistoricalRatios> {
+  private async buildCalibration() {
     const rows = await db
       .select({
         preset: conversionHistoryTable.preset,
-        codec: conversionHistoryTable.codec,
-        avgRatio: sql<number>`AVG(${conversionHistoryTable.outputSizeBytes}::float / NULLIF(${conversionHistoryTable.originalSizeBytes}, 0))`,
-        count: sql<number>`COUNT(*)::int`,
+        profileVersion: conversionHistoryTable.profileVersion,
+        sourceBitrate: conversionHistoryTable.sourceBitrate,
+        sourceCodec: conversionHistoryTable.sourceCodec,
+        outputWidth: conversionHistoryTable.outputWidth,
+        outputHeight: conversionHistoryTable.outputHeight,
+        originalSizeBytes: conversionHistoryTable.originalSizeBytes,
+        outputSizeBytes: conversionHistoryTable.outputSizeBytes,
       })
-      .from(conversionHistoryTable)
-      .groupBy(conversionHistoryTable.preset, conversionHistoryTable.codec);
+      .from(conversionHistoryTable);
 
-    const ratios: HistoricalRatios = new Map();
-    for (const row of rows) {
-      if (row.avgRatio != null && row.count > 0) {
-        // We key by preset - we'll look up by preset directly
-        ratios.set(row.preset, {
-          avgRatio: row.avgRatio,
-          count: row.count,
-        });
-      }
-    }
-
-    return ratios;
-  }
-
-  /**
-   * Get estimated output ratio for a given preset and source codec
-   */
-  private getEstimatedRatio(
-    historicalRatios: HistoricalRatios,
-    preset: string,
-    sourceCodecCategory: string,
-  ): { ratio: number; confidence: "high" | "medium" | "low" } {
-    // Try exact preset match from history
-    const historical = historicalRatios.get(preset);
-    if (historical && historical.count >= 5) {
-      return { ratio: historical.avgRatio, confidence: "high" };
-    }
-    if (historical && historical.count >= 2) {
-      return { ratio: historical.avgRatio, confidence: "medium" };
-    }
-
-    // Fallback to hardcoded defaults
-    const key = `${preset}:${sourceCodecCategory}`;
-    const fallback = DEFAULT_RATIOS[key];
-    if (fallback) {
-      return { ratio: fallback, confidence: "low" };
-    }
-
-    // Generic fallback
-    return { ratio: 0.4, confidence: "low" };
+    return {
+      calibration: buildConversionCalibration(
+        rows.map((row) => ({
+          ...row,
+          originalSizeBytes: Number(row.originalSizeBytes),
+          outputSizeBytes: Number(row.outputSizeBytes),
+        })),
+      ),
+      historyCount: rows.length,
+    };
   }
 
   /**
@@ -115,14 +85,16 @@ export class VideosSuggestionsService {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       const videosObj = demoMockService.getVideos({ limit: 100 });
-      const candidates = (videosObj.data as Video[]).filter((v) => !v.codec?.toLowerCase().includes("av1"));
-      
+      const candidates = (videosObj.data as Video[]).filter(
+        (v) => !v.codec?.toLowerCase().includes("av1"),
+      );
+
       const suggestions: CompressionSuggestion[] = candidates.map((v) => {
         const fileSizeBytes = v.file_size_bytes;
         const estimatedOutputBytes = Math.round(fileSizeBytes * 0.35);
         const estimatedSavingsBytes = fileSizeBytes - estimatedOutputBytes;
         const estimatedSavingsPercent = 65.0;
-        
+
         return {
           video_id: v.id,
           file_name: v.file_name,
@@ -134,40 +106,56 @@ export class VideosSuggestionsService {
           fps: v.fps,
           duration_seconds: v.duration_seconds,
           is_favorite: v.is_favorite,
-          bytes_per_second: v.duration_seconds ? Math.round(fileSizeBytes / v.duration_seconds) : null,
+          bytes_per_second: v.duration_seconds
+            ? Math.round(fileSizeBytes / v.duration_seconds)
+            : null,
           estimated_output_bytes: estimatedOutputBytes,
           estimated_savings_bytes: estimatedSavingsBytes,
           estimated_savings_percent: estimatedSavingsPercent,
           confidence: "low",
+          historical_sample_count: 0,
+          prediction_error_percent: null,
           priority_score: 85,
           recommended_preset: "1080p_av1",
-          recommended_preset_name: "1080p AV1 (Slower, High Quality)",
+          recommended_preset_name: "AV1 up to 1080p",
+          expected_target_resolution: "original",
+          effective_resolution:
+            v.width && v.height ? `${v.width}x${v.height}` : null,
+          profile_version: 2,
+          planned_video_bitrate: Math.max(
+            100_000,
+            (v.bitrate ?? 6_096_000) - 96_000,
+          ),
+          planned_max_bitrate: Math.min(v.bitrate ?? 6_000_000, 6_000_000),
+          recommendation_tier:
+            estimatedSavingsBytes >= USEFUL_ABSOLUTE_SAVINGS_BYTES
+              ? "recommended"
+              : "marginal",
           reasons: ["codec-inefficient", "large-savings"],
           thumbnail_id: v.thumbnail_id,
-          thumbnail_url: v.thumbnail_url
+          thumbnail_url: v.thumbnail_url,
         } as CompressionSuggestion;
       });
-      
-      const totalEstimatedSavings = suggestions.reduce((sum, s) => sum + s.estimated_savings_bytes, 0);
+
+      const totalEstimatedSavings = suggestions.reduce(
+        (sum, s) => sum + s.estimated_savings_bytes,
+        0,
+      );
       const avgSavingsPercent = suggestions.length > 0 ? 65.0 : 0;
-      
+
       return {
         suggestions: suggestions.slice(offset, offset + limit),
         summary: {
           total_candidates: suggestions.length,
           total_estimated_savings_bytes: totalEstimatedSavings,
           avg_estimated_savings_percent: avgSavingsPercent,
-          historical_accuracy_note: "Demo Mode Active - Mocked estimates based on demo data"
-        }
+          historical_accuracy_note:
+            "Demo Mode Active - Mocked estimates based on demo data",
+        },
       };
     }
 
-    // Phase A: Historical ratios
-    const historicalRatios = await this.buildHistoricalRatios();
-    const historyCount = Array.from(historicalRatios.values()).reduce(
-      (sum, v) => sum + v.count,
-      0,
-    );
+    const { calibration, historyCount } = await this.buildCalibration();
 
     // Phase B: Candidate query
     const pendingJobsSubquery = db
@@ -222,52 +210,109 @@ export class VideosSuggestionsService {
 
     const now = new Date();
 
-    // Phase C: Scoring
-    const suggestions: CompressionSuggestion[] = rows
+    const eligibleSuggestions = rows
       .map((row) => {
+        if (
+          row.fileSizeBytes <= 0 ||
+          !row.width ||
+          !row.height ||
+          !row.bitrate ||
+          !row.durationSeconds
+        ) {
+          return null;
+        }
+
         const reasons: string[] = [];
         const codecCategory = getCodecCategory(row.codec);
         const isFavorite = row.isFavorite;
 
-        // Determine recommended preset
         const preset = isFavorite ? "original_av1" : "1080p_av1";
         const presetConfig = CONVERSION_PRESETS[preset];
+        if (!presetConfig) {
+          return null;
+        }
 
-        // Estimate output size
-        const { ratio, confidence } = this.getEstimatedRatio(
-          historicalRatios,
-          preset,
-          codecCategory,
+        const targetResolution = calculateTargetResolution(
+          row.width,
+          row.height,
+          presetConfig,
         );
-        const estimatedOutputBytes = Math.round(row.fileSizeBytes * ratio);
-        const estimatedSavingsBytes = row.fileSizeBytes - estimatedOutputBytes;
-        const estimatedSavingsPercent =
-          row.fileSizeBytes > 0
-            ? (estimatedSavingsBytes / row.fileSizeBytes) * 100
-            : 0;
+        const effectiveDimensions = calculateEffectiveDimensions(
+          row.width,
+          row.height,
+          targetResolution,
+        );
+        if (!effectiveDimensions) {
+          return null;
+        }
 
-        // Bytes per second
-        const bytesPerSecond =
-          row.durationSeconds && row.durationSeconds > 0
-            ? row.fileSizeBytes / row.durationSeconds
-            : null;
+        const plan = buildConversionBitratePlan(
+          {
+            width: row.width,
+            height: row.height,
+            bitrate: row.bitrate,
+          },
+          presetConfig,
+          targetResolution,
+        );
+        const estimate = estimateConversion(
+          {
+            preset,
+            profileVersion: plan.profileVersion,
+            sourceBitrate: row.bitrate,
+            sourceCodec: row.codec,
+            effectiveWidth: effectiveDimensions.width,
+            effectiveHeight: effectiveDimensions.height,
+            originalSizeBytes: row.fileSizeBytes,
+            durationSeconds: row.durationSeconds,
+            plan,
+          },
+          calibration,
+        );
 
-        // --- Scoring components ---
+        const recommendationTier = classifyCompressionRecommendation(
+          estimate.estimatedSavingsPercent,
+          estimate.estimatedSavingsBytes,
+        );
+        if (!recommendationTier) {
+          return null;
+        }
+
+        if (recommendationTier === "marginal") {
+          reasons.push("marginal-savings");
+        } else {
+          reasons.push("meaningful-savings");
+        }
+        if (estimate.historicalSampleCount > 0) {
+          reasons.push("historically-calibrated");
+        }
+        if (estimate.usedSourceCodec) {
+          reasons.push("source-codec-calibrated");
+        }
+        if (estimate.usedCurrentProfileVersion) {
+          reasons.push("profile-version-calibrated");
+        }
+
+        const estimatedOutputBytes = estimate.estimatedOutputBytes;
+        const estimatedSavingsBytes = estimate.estimatedSavingsBytes;
+        const estimatedSavingsPercent = estimate.estimatedSavingsPercent;
+
+        const bytesPerSecond = row.fileSizeBytes / row.durationSeconds;
         const ONE_GB = 1024 ** 3;
         const ONE_MB = 1024 ** 2;
 
-        // Estimated absolute savings (0-50)
         const savingsScore = Math.min(
           50,
           (estimatedSavingsBytes / (5 * ONE_GB)) * 50,
         );
+        const percentageScore = Math.min(25, estimatedSavingsPercent);
+        const usefulSavingsBonus =
+          estimatedSavingsBytes >= USEFUL_ABSOLUTE_SAVINGS_BYTES ? 15 : 0;
+        const recommendationBonus =
+          recommendationTier === "recommended" ? 15 : 0;
 
-        // Bytes-per-second efficiency (0-25): high bps = easy win
-        const bpsScore = bytesPerSecond
-          ? Math.min(25, (bytesPerSecond / ONE_MB) * 25)
-          : 0;
+        const bpsScore = Math.min(15, (bytesPerSecond / ONE_MB) * 15);
 
-        // Usage staleness (0-15)
         let stalenessScore = 0;
         let daysSinceLastPlayed: number | null = null;
         if (row.lastPlayedAt) {
@@ -289,7 +334,6 @@ export class VideosSuggestionsService {
           stalenessScore = 3;
         }
 
-        // Codec inefficiency (0-10)
         let codecScore = 0;
         if (codecCategory === "h264") {
           codecScore = 10;
@@ -302,16 +346,21 @@ export class VideosSuggestionsService {
           reasons.push("codec-upgradeable");
         }
 
-        // Additional reasons
         if (estimatedSavingsBytes > ONE_GB) {
           reasons.push("large-savings");
         }
-        if (bytesPerSecond && bytesPerSecond > ONE_MB) {
+        if (bytesPerSecond > ONE_MB) {
           reasons.push("high-bitrate");
         }
 
         const priorityScore = Math.round(
-          savingsScore + bpsScore + stalenessScore + codecScore,
+          savingsScore +
+            percentageScore +
+            usefulSavingsBonus +
+            recommendationBonus +
+            bpsScore +
+            stalenessScore +
+            codecScore,
         );
 
         return {
@@ -325,69 +374,70 @@ export class VideosSuggestionsService {
           fps: row.fps,
           duration_seconds: row.durationSeconds,
           is_favorite: isFavorite,
-          bytes_per_second: bytesPerSecond
-            ? Math.round(bytesPerSecond)
-            : null,
+          bytes_per_second: Math.round(bytesPerSecond),
           estimated_output_bytes: estimatedOutputBytes,
           estimated_savings_bytes: estimatedSavingsBytes,
-          estimated_savings_percent: Math.round(estimatedSavingsPercent * 10) / 10,
-          confidence,
+          estimated_savings_percent:
+            Math.round(estimatedSavingsPercent * 10) / 10,
+          confidence: estimate.confidence,
+          historical_sample_count: estimate.historicalSampleCount,
+          prediction_error_percent:
+            estimate.predictionErrorPercent === null
+              ? null
+              : Math.round(estimate.predictionErrorPercent * 10) / 10,
           priority_score: Math.min(100, priorityScore),
           recommended_preset: preset,
           recommended_preset_name: presetConfig?.name ?? preset,
+          expected_target_resolution: targetResolution,
+          effective_resolution: formatEffectiveResolution(
+            effectiveDimensions,
+            targetResolution,
+          ),
+          profile_version: plan.profileVersion,
+          planned_video_bitrate: plan.videoBitrateBps,
+          planned_max_bitrate: plan.maxBitrateBps,
+          recommendation_tier: recommendationTier,
           reasons,
           thumbnail_id: row.thumbnailId,
           thumbnail_url: row.thumbnailId
             ? `${API_PREFIX}/thumbnails/${row.thumbnailId}/image`
             : null,
-        } as CompressionSuggestion;
+        } satisfies CompressionSuggestion;
       })
-      .filter((s) => s.estimated_savings_bytes > 0)
+      .filter(
+        (suggestion): suggestion is NonNullable<typeof suggestion> =>
+          suggestion !== null,
+      )
       .sort((a, b) => {
+        if (a.recommendation_tier !== b.recommendation_tier) {
+          return a.recommendation_tier === "recommended" ? -1 : 1;
+        }
         if (b.priority_score !== a.priority_score) {
           return b.priority_score - a.priority_score;
         }
         return b.estimated_savings_bytes - a.estimated_savings_bytes;
-      })
-      .slice(offset, offset + limit);
+      });
 
-    // Build summary
-    const allCandidates = rows.filter((r) => {
-      const cat = getCodecCategory(r.codec);
-      const preset = r.isFavorite ? "original_av1" : "1080p_av1";
-      const { ratio } = this.getEstimatedRatio(historicalRatios, preset, cat);
-      return r.fileSizeBytes - Math.round(r.fileSizeBytes * ratio) > 0;
-    });
-
-    const totalEstimatedSavings = allCandidates.reduce((sum, r) => {
-      const cat = getCodecCategory(r.codec);
-      const preset = r.isFavorite ? "original_av1" : "1080p_av1";
-      const { ratio } = this.getEstimatedRatio(historicalRatios, preset, cat);
-      return sum + (r.fileSizeBytes - Math.round(r.fileSizeBytes * ratio));
-    }, 0);
-
+    const suggestions = eligibleSuggestions.slice(offset, offset + limit);
+    const totalEstimatedSavings = eligibleSuggestions.reduce(
+      (sum, suggestion) => sum + suggestion.estimated_savings_bytes,
+      0,
+    );
     const avgSavingsPercent =
-      allCandidates.length > 0
-        ? allCandidates.reduce((sum, r) => {
-            const cat = getCodecCategory(r.codec);
-            const preset = r.isFavorite ? "original_av1" : "1080p_av1";
-            const { ratio } = this.getEstimatedRatio(
-              historicalRatios,
-              preset,
-              cat,
-            );
-            return sum + (1 - ratio) * 100;
-          }, 0) / allCandidates.length
+      eligibleSuggestions.length > 0
+        ? eligibleSuggestions.reduce(
+            (sum, suggestion) => sum + suggestion.estimated_savings_percent,
+            0,
+          ) / eligibleSuggestions.length
         : 0;
 
     const summary: CompressionSuggestionsSummary = {
-      total_candidates: allCandidates.length,
+      total_candidates: eligibleSuggestions.length,
       total_estimated_savings_bytes: totalEstimatedSavings,
       avg_estimated_savings_percent: Math.round(avgSavingsPercent * 10) / 10,
       historical_accuracy_note:
-        historyCount >= 10
-          ? `Estimates based on ${historyCount} historical conversions`
-          : `Limited history (${historyCount} conversions). Estimates use conservative defaults.`,
+        `${historyCount} historical conversions available. ` +
+        "Confidence is calculated from the matching resolution, bitrate, profile-version, and source-codec segment.",
     };
 
     return { suggestions, summary };

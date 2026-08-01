@@ -157,6 +157,13 @@ export class FaceRecognitionService {
   async getCreatorEmbeddings(
     creatorId: number,
   ): Promise<CreatorFaceEmbedding[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreatorFaceEmbeddings(
+        creatorId,
+      ) as unknown as CreatorFaceEmbedding[];
+    }
+
     return await db
       .select()
       .from(creatorFaceEmbeddingsTable)

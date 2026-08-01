@@ -10,6 +10,7 @@ import {
   storyboardsTable,
   videoFaceDetectionsTable,
   faceImagesTable,
+  artworkAssetsTable,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
 import type { ListVideosOptions } from "./videos.types";
@@ -68,7 +69,7 @@ export class VideosBulkService {
   async deleteVideoArtifactFiles(videoIds: number[]): Promise<void> {
     if (videoIds.length === 0) return;
 
-    const [thumbnails, storyboards, faceImages] = await Promise.all([
+    const [thumbnails, storyboards, faceImages, artworkAssets] = await Promise.all([
       db
         .select({ filePath: thumbnailsTable.filePath })
         .from(thumbnailsTable)
@@ -88,6 +89,10 @@ export class VideosBulkService {
           eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id),
         )
         .where(inArray(videoFaceDetectionsTable.videoId, videoIds)),
+      db
+        .select({ filePath: artworkAssetsTable.filePath })
+        .from(artworkAssetsTable)
+        .where(inArray(artworkAssetsTable.videoId, videoIds)),
     ]);
 
     const paths: string[] = [];
@@ -100,6 +105,9 @@ export class VideosBulkService {
     }
     for (const faceImage of faceImages) {
       if (faceImage.filePath) paths.push(faceImage.filePath);
+    }
+    for (const artworkAsset of artworkAssets) {
+      if (artworkAsset.filePath) paths.push(artworkAsset.filePath);
     }
 
     const fs = await import("fs");

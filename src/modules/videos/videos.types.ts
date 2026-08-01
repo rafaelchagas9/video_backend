@@ -6,13 +6,15 @@ import type {
   VideoCollectionContext,
   VideoCollectionNeighbors,
 } from "@/modules/video-collections/video-collections.types";
+import type { VideoArtworkSummary } from "@/modules/artwork/artwork.types";
 
 export type VideoInclude =
   | "collection"
   | "collection_neighbors"
   | "creators"
   | "tags"
-  | "studios";
+  | "studios"
+  | "artwork";
 export type VideoListInclude = Exclude<VideoInclude, "collection_neighbors">;
 
 export interface Video {
@@ -45,6 +47,7 @@ export interface Video {
   creators?: Creator[];
   tags?: Tag[];
   studios?: Studio[];
+  artwork?: VideoArtworkSummary | null;
 }
 
 export interface VideoMetadata {
@@ -208,9 +211,17 @@ export interface CompressionSuggestion {
   estimated_savings_bytes: number;
   estimated_savings_percent: number;
   confidence: "high" | "medium" | "low";
+  historical_sample_count: number;
+  prediction_error_percent: number | null;
   priority_score: number;
   recommended_preset: string;
   recommended_preset_name: string;
+  expected_target_resolution: string;
+  effective_resolution: string | null;
+  profile_version: number;
+  planned_video_bitrate: number;
+  planned_max_bitrate: number;
+  recommendation_tier: "recommended" | "marginal";
   reasons: string[];
   thumbnail_id?: number | null;
   thumbnail_url?: string | null;
@@ -255,6 +266,7 @@ export interface UnavailableVideo {
     thumbnail: boolean;
     storyboard: boolean;
     face_count: number;
+    artwork_count: number;
     reclaimable_bytes: number;
   };
 }

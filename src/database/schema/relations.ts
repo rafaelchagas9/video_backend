@@ -40,7 +40,12 @@ import {
   videoCollectionsTable,
   videoCollectionEntriesTable,
 } from "./video-collections.schema";
-import { thumbnailsTable, storyboardsTable } from "./media.schema";
+import {
+  artworkAssetsTable,
+  storyboardsTable,
+  thumbnailsTable,
+  videoArtworkTable,
+} from "./media.schema";
 import {
   conversionJobsTable,
   conversionHistoryTable,
@@ -121,6 +126,11 @@ export const videosRelations = relations(videosTable, ({ one, many }) => ({
     fields: [videosTable.id],
     references: [storyboardsTable.videoId],
   }),
+  artwork: one(videoArtworkTable, {
+    fields: [videosTable.id],
+    references: [videoArtworkTable.videoId],
+  }),
+  artworkAssets: many(artworkAssetsTable),
   videoCreators: many(videoCreatorsTable),
   videoTags: many(videoTagsTable),
   videoStudios: many(videoStudiosTable),
@@ -140,6 +150,20 @@ export const videosRelations = relations(videosTable, ({ one, many }) => ({
   conversionJobs: many(conversionJobsTable),
   conversionHistory: many(conversionHistoryTable),
   taggingRuleLogs: many(taggingRuleLogTable),
+}));
+
+export const videoArtworkRelations = relations(videoArtworkTable, ({ one }) => ({
+  video: one(videosTable, {
+    fields: [videoArtworkTable.videoId],
+    references: [videosTable.id],
+  }),
+}));
+
+export const artworkAssetsRelations = relations(artworkAssetsTable, ({ one }) => ({
+  video: one(videosTable, {
+    fields: [artworkAssetsTable.videoId],
+    references: [videosTable.id],
+  }),
 }));
 
 // Related-video score relations

@@ -104,10 +104,10 @@ describe("video route schemas", () => {
   it("parses include lists for video detail queries", () => {
     expect(
       getVideoQuerySchema.parse({
-        include: "collection, collection_neighbors, creators",
+        include: "collection, collection_neighbors, creators, artwork",
       }),
     ).toEqual({
-      include: ["collection", "collection_neighbors", "creators"],
+      include: ["collection", "collection_neighbors", "creators", "artwork"],
     });
 
     expect(getVideoQuerySchema.safeParse({ include: "invalid" }).success).toBe(

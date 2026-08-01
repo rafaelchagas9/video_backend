@@ -14,6 +14,7 @@ import {
   watchedDirectoriesTable,
   videoFaceDetectionsTable,
   faceImagesTable,
+  artworkAssetsTable,
 } from "@/database/schema";
 import { BadRequestError, NotFoundError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
@@ -104,7 +105,11 @@ export class VideosService {
   ): Promise<Video> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getVideoById(id);
+      const video = demoMockService.getVideoById(id);
+      if (!include.includes("artwork")) return video;
+      const { artworkService } = await import("@/modules/artwork/artwork.service");
+      const summaries = await artworkService.getSummariesByVideoIds([id]);
+      return { ...video, artwork: summaries.get(id) ?? null };
     }
     const results = await db
       .select({
@@ -225,6 +230,16 @@ export class VideosService {
         studiosRelationshipsService.getStudiosForVideo(id).then((res) => {
           response.studios = res;
         })
+      );
+    }
+
+    if (include.includes("artwork")) {
+      promises.push(
+        import("@/modules/artwork/artwork.service")
+          .then(({ artworkService }) => artworkService.getSummariesByVideoIds([id]))
+          .then((summaries) => {
+            response.artwork = summaries.get(id) ?? null;
+          }),
       );
     }
 
@@ -545,9 +560,10 @@ export class VideosService {
     const thumbnailMap = new Map<number, { id: number; bytes: number }>();
     const storyboardMap = new Map<number, number>();
     const faceMap = new Map<number, { count: number; bytes: number }>();
+    const artworkMap = new Map<number, { count: number; bytes: number }>();
 
     if (ids.length > 0) {
-      const [thumbnails, storyboards, faces] = await Promise.all([
+      const [thumbnails, storyboards, faces, artwork] = await Promise.all([
         db
           .select({
             id: thumbnailsTable.id,
@@ -576,6 +592,15 @@ export class VideosService {
           )
           .where(inArray(videoFaceDetectionsTable.videoId, ids))
           .groupBy(videoFaceDetectionsTable.videoId),
+        db
+          .select({
+            videoId: artworkAssetsTable.videoId,
+            count: sql<number>`count(${artworkAssetsTable.id})::int`,
+            bytes: sql<number>`coalesce(sum(${artworkAssetsTable.fileSizeBytes}), 0)::int`,
+          })
+          .from(artworkAssetsTable)
+          .where(inArray(artworkAssetsTable.videoId, ids))
+          .groupBy(artworkAssetsTable.videoId),
       ]);
 
       for (const thumbnail of thumbnails) {
@@ -590,6 +615,9 @@ export class VideosService {
       for (const face of faces) {
         faceMap.set(face.videoId, { count: face.count, bytes: face.bytes });
       }
+      for (const asset of artwork) {
+        artworkMap.set(asset.videoId, { count: asset.count, bytes: asset.bytes });
+      }
     }
 
     const data: UnavailableVideo[] = rows.map((row) => {
@@ -597,10 +625,12 @@ export class VideosService {
       const hasThumbnail = thumbnail !== undefined;
       const hasStoryboard = storyboardMap.has(row.id);
       const faceSummary = faceMap.get(row.id);
+      const artworkSummary = artworkMap.get(row.id);
       const reclaimableBytes =
         (thumbnail?.bytes ?? 0) +
         (storyboardMap.get(row.id) ?? 0) +
-        (faceSummary?.bytes ?? 0);
+        (faceSummary?.bytes ?? 0) +
+        (artworkSummary?.bytes ?? 0);
 
       return {
         id: row.id,
@@ -616,6 +646,7 @@ export class VideosService {
           thumbnail: hasThumbnail,
           storyboard: hasStoryboard,
           face_count: faceSummary?.count ?? 0,
+          artwork_count: artworkSummary?.count ?? 0,
           reclaimable_bytes: reclaimableBytes,
         },
       };

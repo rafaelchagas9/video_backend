@@ -3,6 +3,7 @@ import {
   videoCollectionContextSchema,
   videoCollectionNeighborsSchema,
 } from "@/modules/video-collections/video-collections.schemas";
+import { artworkSummarySchema } from "@/modules/artwork/artwork.schemas";
 
 // Re-export from types for consistency
 export { updateVideoSchema } from "./videos.types";
@@ -163,7 +164,7 @@ export const listVideosQuerySchema = z
       .preprocess(
         parseIncludeList,
         z
-          .array(z.enum(["collection", "creators", "tags", "studios"]))
+          .array(z.enum(["collection", "creators", "tags", "studios", "artwork"]))
           .optional(),
       )
       .optional(),
@@ -319,6 +320,7 @@ export const getVideoQuerySchema = z.object({
             "creators",
             "tags",
             "studios",
+            "artwork",
           ]),
         )
         .optional(),
@@ -409,6 +411,7 @@ const videoSchema = z.object({
   creators: z.array(creatorSchema).optional(),
   tags: z.array(tagSchema).optional(),
   studios: z.array(studioSchema).optional(),
+  artwork: artworkSummarySchema.nullable().optional(),
 });
 
 const errorSchema = z.object({
@@ -521,6 +524,7 @@ const unavailableVideoSchema = z.object({
     thumbnail: z.boolean(),
     storyboard: z.boolean(),
     face_count: z.number(),
+    artwork_count: z.number(),
     reclaimable_bytes: z.number(),
   }),
 });
@@ -542,9 +546,15 @@ export const cleanupUnavailableSchema = z
     directoryId: z.number().int().positive().optional(),
     all: z.literal(true).optional(),
   })
-  .refine((value) => value.ids !== undefined || value.directoryId !== undefined || value.all === true, {
-    message: "Provide one of: ids, directoryId, or all=true",
-  });
+  .refine(
+    (value) =>
+      value.ids !== undefined ||
+      value.directoryId !== undefined ||
+      value.all === true,
+    {
+      message: "Provide one of: ids, directoryId, or all=true",
+    },
+  );
 
 export const cleanupUnavailableResponseSchema = z.object({
   success: z.literal(true),
@@ -641,9 +651,17 @@ const compressionSuggestionSchema = z.object({
   estimated_savings_bytes: z.number(),
   estimated_savings_percent: z.number(),
   confidence: z.enum(["high", "medium", "low"]),
+  historical_sample_count: z.number(),
+  prediction_error_percent: z.number().nullable(),
   priority_score: z.number(),
   recommended_preset: z.string(),
   recommended_preset_name: z.string(),
+  expected_target_resolution: z.string(),
+  effective_resolution: z.string().nullable(),
+  profile_version: z.number(),
+  planned_video_bitrate: z.number(),
+  planned_max_bitrate: z.number(),
+  recommendation_tier: z.enum(["recommended", "marginal"]),
   reasons: z.array(z.string()),
   thumbnail_id: z.number().nullable().optional(),
   thumbnail_url: z.string().nullable().optional(),

@@ -23,13 +23,13 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard|conversions)$`,
+      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard|conversions|artwork)$`,
     ),
   },
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/conversions/(?:active|history(?:/overview)?|queue(?:/status)?|presets)$`,
+      `^${API_PREFIX}/conversions/(?:active|history(?:/(?:overview|insights|facets))?|queue(?:/status)?|presets)$`,
     ),
   },
   {
@@ -75,7 +75,15 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/creators/\\d+/(?:picture|videos|favorite/check|platforms|social-links|gallery)$`,
+      `^${API_PREFIX}/creators/\\d+/(?:picture|videos|favorite/check|platforms|social-links|gallery|aliases)$`,
+    ),
+  },
+  // Face references: read-only. The list is served from demo memory and the
+  // thumbnail from the creator's demo face asset; nothing writes.
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(
+      `^${API_PREFIX}/creators/\\d+/face-embeddings(?:/\\d+/thumbnail)?$`,
     ),
   },
   {
@@ -117,6 +125,33 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/thumbnails/\\d+(?:/image)?$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/artwork/\\d+/image$`),
+  },
+  // Enrichment review. Every handler short-circuits to demo memory before it
+  // reaches the database or the external enrichment service, so the writing
+  // methods here decide seeded proposals only and never leave the process.
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/suggestions$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(
+      `^${API_PREFIX}/enrichment/suggestions/\\d+/(?:accept|reject)$`,
+    ),
+  },
+  // Creators only: they are the sole entity type with seeded proposals, so
+  // scene / studio / tag stay blocked rather than reaching a live scan.
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/creator/\\d+/runs$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/creator/\\d+/run$`),
   },
   {
     methods: new Set(["GET", "PATCH"]),

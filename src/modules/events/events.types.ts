@@ -4,6 +4,24 @@ export interface NotificationVideo {
   file_name: string;
 }
 
+export type SseEventType =
+  | "artwork:generating"
+  | "artwork:ready"
+  | "artwork:error"
+  | (string & {});
+
+export interface ArtworkEventMessage {
+  videoId: number;
+  video_id: number;
+  videoTitle?: string;
+  video_title?: string;
+  fileName?: string;
+  file_name?: string;
+  variants?: Array<"card" | "poster" | "square" | "hero" | "title">;
+  progress?: number;
+  error?: string;
+}
+
 export function createVideoEventContext(video: NotificationVideo) {
   const videoTitle = video.title?.trim() || video.file_name;
 

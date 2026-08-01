@@ -1,5 +1,6 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "@/config/drizzle";
+import { env } from "@/config/env";
 import { creatorAliasesTable, creatorsTable } from "@/database/schema";
 import { NotFoundError, ConflictError, isUniqueViolation } from "@/utils/errors";
 import type {
@@ -75,6 +76,11 @@ export class CreatorsAliasesService {
   }
 
   async getAliases(creatorId: number): Promise<Alias[]> {
+    if (env.DEMO_MODE) {
+      const { demoMockService } = await import("@/utils/demo-mock");
+      return demoMockService.getCreatorAliases(creatorId) as Alias[];
+    }
+
     await this.verifyCreatorExists(creatorId);
 
     const aliases = await db

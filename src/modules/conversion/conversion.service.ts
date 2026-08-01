@@ -12,12 +12,19 @@ import { conversionQueue } from "./conversion.queue";
 import { conversionProcessorService } from "./conversion.processor.service";
 import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionHistoryService } from "./conversion.history.service";
+import { conversionInsightsService } from "./conversion.insights.service";
+import { conversionDemoService } from "./conversion.demo.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { logger } from "@/utils/logger";
 import { db } from "@/config/drizzle";
 import { and, inArray, eq } from "drizzle-orm";
 import { videosTable, conversionJobsTable } from "@/database/schema";
 import type {
+  ConversionHistoryFilters,
+  ConversionHistoryListOptions,
+  ConversionHistoryListResult,
+  ConversionHistoryOverview,
+  ConversionInsights,
   ConversionJob,
   CreateConversionJobInput,
   QueueJobPayload,
@@ -343,33 +350,45 @@ export class ConversionService {
     return conversionJobsService.getActiveConversions();
   }
 
-  async getHistory(options?: {
-    limit?: number;
-    offset?: number;
-    videoId?: number;
-    preset?: string;
-  }) {
-    if (env.DEMO_MODE) return [];
+  async getHistory(
+    options?: ConversionHistoryListOptions,
+  ): Promise<ConversionHistoryListResult> {
+    if (env.DEMO_MODE) return conversionDemoService.list(options);
     return conversionHistoryService.list(options);
   }
 
-  async getHistoryOverview(options?: { videoId?: number; preset?: string }) {
+  async getHistoryOverview(
+    filters?: ConversionHistoryFilters,
+  ): Promise<ConversionHistoryOverview> {
+    if (env.DEMO_MODE) return conversionDemoService.overview(filters);
+    return conversionHistoryService.getOverview(filters);
+  }
+
+  async getHistoryInsights(
+    filters?: ConversionHistoryFilters,
+  ): Promise<ConversionInsights> {
+    if (env.DEMO_MODE) return conversionDemoService.insights(filters);
+    return conversionInsightsService.getInsights(filters);
+  }
+
+  /** Distinct values available for the history filter controls. */
+  async getHistoryFacets(): Promise<{
+    presets: string[];
+    source_codecs: string[];
+  }> {
     if (env.DEMO_MODE) {
       return {
-        total_conversions: 0,
-        total_original_size_bytes: 0,
-        total_output_size_bytes: 0,
-        total_size_delta_bytes: 0,
-        total_saved_bytes: 0,
-        total_increased_bytes: 0,
-        saved_count: 0,
-        increased_count: 0,
-        unchanged_count: 0,
-        avg_size_change_percent: 0,
-        avg_conversion_duration_ms: 0,
+        presets: conversionDemoService.presets(),
+        source_codecs: conversionDemoService.sourceCodecs(),
       };
     }
-    return conversionHistoryService.getOverview(options);
+
+    const [presets, sourceCodecs] = await Promise.all([
+      conversionHistoryService.listPresets(),
+      conversionHistoryService.listSourceCodecs(),
+    ]);
+
+    return { presets, source_codecs: sourceCodecs };
   }
 
   /**

@@ -423,6 +423,8 @@ export async function buildServer() {
         await import("./modules/ratings/ratings.routes");
       const { thumbnailsRoutes, videoThumbnailsRoutes } =
         await import("./modules/thumbnails/thumbnails.routes");
+      const { artworkRoutes, videoArtworkRoutes } =
+        await import("./modules/artwork/artwork.routes");
       const { playlistsRoutes } =
         await import("./modules/playlists/playlists.routes");
       const { videoCollectionsRoutes } = await import(
@@ -478,6 +480,8 @@ export async function buildServer() {
       await instance.register(ratingsRoutes, { prefix: "/ratings" });
       await instance.register(videoThumbnailsRoutes, { prefix: "/videos" });
       await instance.register(thumbnailsRoutes, { prefix: "/thumbnails" });
+      await instance.register(videoArtworkRoutes, { prefix: "/videos" });
+      await instance.register(artworkRoutes, { prefix: "/artwork" });
       await instance.register(playlistsRoutes, { prefix: "/playlists" });
       await instance.register(videoCollectionsRoutes, {
         prefix: "/video-collections",
@@ -521,6 +525,11 @@ export async function buildServer() {
 
   // Start scheduler for automatic directory scanning
   if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
+    const { artworkService } = await import("./modules/artwork/artwork.service");
+    artworkService.resumePendingJobs().catch((err) => {
+      fastify.log.error(err, "Failed to resume pending artwork jobs");
+    });
+
     schedulerService.start().catch((err) => {
       fastify.log.error(err, "Failed to start scheduler");
     });

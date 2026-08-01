@@ -10,10 +10,17 @@ import { InternalServerError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import type { Video } from "@/modules/videos/videos.types";
 import type { ConversionPreset, CodecType } from "@/config/presets";
-import { MIN_HEIGHT_FOR_720P } from "@/config/presets";
-import type { FfmpegRunResult } from "./conversion.types";
-
-type EncodingMode = "hw" | "sw_decode" | "full_sw";
+import type {
+  ConversionEncodingMode,
+  FfmpegRunResult,
+} from "./conversion.types";
+import {
+  buildConversionBitratePlan,
+  calculateTargetResolution,
+  formatBitrate,
+  getMaxRate,
+  parseBitrateToBps,
+} from "./conversion.planning";
 
 export class FfmpegService {
   /**
@@ -28,22 +35,12 @@ export class FfmpegService {
     targetResolution: string | null,
     onProgress?: (progress: number) => void,
   ): Promise<FfmpegRunResult> {
-    const [scaleWidth, scaleHeight] =
-      targetResolution && targetResolution !== "original"
-        ? targetResolution.split("x")
-        : [null, null];
-    const targetWidth =
-      scaleWidth && scaleWidth !== "-2"
-        ? parseInt(scaleWidth, 10)
-        : scaleHeight && scaleHeight !== "-2"
-          ? parseInt(scaleHeight, 10)
-          : null;
-
-    const { bitrate, maxrate, bufsize } = this.calculateTargetBitrate(
+    const bitratePlan = buildConversionBitratePlan(
       video,
       preset,
-      targetWidth,
+      targetResolution,
     );
+    const { bitrate, maxrate, bufsize } = bitratePlan;
 
     let inputDuration = 0;
     try {
@@ -82,6 +79,8 @@ export class FfmpegService {
         durationSeconds: inputDuration,
         onProgress: emitProgress,
         logPath,
+        encodingMode: "hw",
+        bitratePlan,
       });
     } catch (error) {
       if (!this.shouldRetryWithFallback(error)) {
@@ -113,6 +112,8 @@ export class FfmpegService {
           durationSeconds: inputDuration,
           onProgress: emitProgress,
           logPath,
+          encodingMode: "sw_decode",
+          bitratePlan,
         });
       } catch (swDecodeError) {
         if (!this.shouldRetryWithFallback(swDecodeError)) {
@@ -143,6 +144,8 @@ export class FfmpegService {
           durationSeconds: inputDuration,
           onProgress: emitProgress,
           logPath,
+          encodingMode: "full_sw",
+          bitratePlan,
         });
       }
     }
@@ -156,7 +159,7 @@ export class FfmpegService {
     bitrate: string;
     maxrate: string;
     bufsize: string;
-    encodingMode: EncodingMode;
+    encodingMode: ConversionEncodingMode;
   }): string[] {
     const {
       inputPath,
@@ -307,8 +310,18 @@ export class FfmpegService {
     durationSeconds: number;
     onProgress: (progress: number) => void;
     logPath: string;
+    encodingMode: ConversionEncodingMode;
+    bitratePlan: ReturnType<typeof buildConversionBitratePlan>;
   }): Promise<FfmpegRunResult> {
-    const { jobId, args, durationSeconds, onProgress, logPath } = options;
+    const {
+      jobId,
+      args,
+      durationSeconds,
+      onProgress,
+      logPath,
+      encodingMode,
+      bitratePlan,
+    } = options;
 
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
@@ -354,6 +367,11 @@ export class FfmpegService {
             command,
             durationMs: Date.now() - startedAt,
             ffmpegOutput: stderrOutput,
+            encodingMode,
+            profileVersion: bitratePlan.profileVersion,
+            plannedVideoBitrate: bitratePlan.videoBitrateBps,
+            plannedMaxBitrate: bitratePlan.maxBitrateBps,
+            plannedQp: bitratePlan.qp,
           });
           return;
         }
@@ -411,43 +429,21 @@ export class FfmpegService {
    * Calculate target bitrate based on video and preset — public for reuse
    */
   calculateTargetBitrate(
-    video: Video,
+    video: Pick<Video, "width" | "height" | "bitrate">,
     preset: ConversionPreset,
     targetWidth: number | null,
   ): { bitrate: string; maxrate: string; bufsize: string } {
-    const codecType = preset.codec.replace("_vaapi", "") as
-      | "av1"
-      | "hevc"
-      | "h264";
-
-    const effectiveWidth =
-      targetWidth ?? video.width ?? preset.targetWidth ?? 1920;
-    const presetMaxBitrate = targetWidth
-      ? (preset.maxBitrate ?? this.getMaxRate(targetWidth, codecType))
-      : this.getMaxRate(effectiveWidth, codecType);
-
-    const presetMaxMbps = parseInt(presetMaxBitrate.replace("M", ""), 10);
-    const sourceBitrateMbps = video.bitrate
-      ? Math.round(video.bitrate / 1_000_000)
-      : null;
-
-    let targetBitrateMbps = sourceBitrateMbps
-      ? Math.min(presetMaxMbps, Math.round(sourceBitrateMbps * 1.1))
-      : presetMaxMbps;
-
-    targetBitrateMbps = Math.max(targetBitrateMbps, 1);
-
-    const maxrateMbps = Math.min(
-      presetMaxMbps,
-      Math.max(targetBitrateMbps, Math.round(targetBitrateMbps * 1.2)),
-    );
-
-    const maxrate = `${maxrateMbps}M`;
+    const targetResolution = targetWidth
+      ? (video.height ?? 0) > (video.width ?? 0)
+        ? `-2x${targetWidth}`
+        : `${targetWidth}x-2`
+      : "original";
+    const plan = buildConversionBitratePlan(video, preset, targetResolution);
 
     return {
-      bitrate: `${targetBitrateMbps}M`,
-      maxrate,
-      bufsize: this.getBufSize(maxrate),
+      bitrate: plan.bitrate,
+      maxrate: plan.maxrate,
+      bufsize: plan.bufsize,
     };
   }
 
@@ -459,7 +455,7 @@ export class FfmpegService {
     bitrate: string,
     maxrate: string,
     bufsize: string,
-    encodingMode: EncodingMode = "hw",
+    encodingMode: ConversionEncodingMode = "hw",
   ): string[] {
     if (encodingMode === "full_sw") {
       const swCodec = this.getSoftwareCodec(preset.codec);
@@ -547,51 +543,14 @@ export class FfmpegService {
    * Get max bitrate for resolution and codec — public for reuse
    */
   getMaxRate(width: number, codec: "av1" | "hevc" | "h264"): string {
-    // Bitrate caps based on resolution and codec efficiency
-    const rates: Record<string, Record<number, string>> = {
-      av1: {
-        3840: "25M",
-        2560: "15M",
-        1920: "6M",
-        1280: "4M",
-        854: "3M",
-      },
-      hevc: {
-        3840: "35M",
-        2560: "20M",
-        1920: "15M",
-        1280: "8M",
-        854: "4M",
-      },
-      h264: {
-        3840: "50M",
-        2560: "30M",
-        1920: "20M",
-        1280: "10M",
-        854: "5M",
-      },
-    };
-
-    const codecRates = rates[codec];
-    const widths = Object.keys(codecRates)
-      .map(Number)
-      .sort((a, b) => b - a);
-
-    for (const w of widths) {
-      if (width >= w) {
-        return codecRates[w];
-      }
-    }
-
-    return codecRates[widths[widths.length - 1]];
+    return getMaxRate(width, codec);
   }
 
   /**
    * Get buffer size (typically 2x maxrate) — public for reuse
    */
   getBufSize(maxRate: string): string {
-    const value = parseInt(maxRate.replace("M", ""), 10);
-    return `${value * 2}M`;
+    return formatBitrate(parseBitrateToBps(maxRate) * 2);
   }
 
   /**
@@ -641,38 +600,7 @@ export class FfmpegService {
     height: number | null,
     preset: ConversionPreset,
   ): string {
-    // If preset wants original, always keep original
-    if (preset.targetWidth === null) {
-      return "original";
-    }
-
-    // If we don't know video dimensions, use preset target
-    if (!width || !height) {
-      return `${preset.targetWidth}x-2`;
-    }
-
-    // If video is smaller than 720p, keep original
-    if (height < MIN_HEIGHT_FOR_720P) {
-      return "original";
-    }
-
-    const isPortrait = height > width;
-    const target = preset.targetWidth;
-
-    if (isPortrait) {
-      if (height <= target) {
-        return "original";
-      }
-      return `-2x${target}`;
-    }
-
-    // If video is smaller than target width, keep original
-    if (width <= target) {
-      return "original";
-    }
-
-    // Target width with auto height (aspect ratio preserved)
-    return `${target}x-2`;
+    return calculateTargetResolution(width, height, preset);
   }
 }
 

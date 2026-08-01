@@ -37,6 +37,14 @@ export class DemoMockService {
   private nextRatingId = 1_000_001;
   private demoLibrarySeeded = false;
 
+  // Enrichment. Suggestions are seeded from the demo file; decisions and runs
+  // are session state, so accepting a proposal sticks until the process
+  // restarts without ever reaching the database.
+  private enrichmentSuggestions: any[] = [];
+  private enrichmentDecisions: Map<number, string> = new Map();
+  private enrichmentRuns: any[] = [];
+  private nextEnrichmentRunId = 1;
+
   constructor() {
     this.loadData();
   }
@@ -83,6 +91,16 @@ export class DemoMockService {
         this.assertDemoAssetPath(
           media.filePath,
           `creators[${creatorIndex}].galleryMedia[${galleryIndex}].filePath`,
+        );
+      }
+      // Enrichment previews are served as images like any other demo asset, so
+      // they are held to the same containment rule.
+      for (const [suggestionIndex, suggestion] of (
+        creator.enrichmentSuggestions || []
+      ).entries()) {
+        this.assertDemoAssetPath(
+          suggestion.previewPath,
+          `creators[${creatorIndex}].enrichmentSuggestions[${suggestionIndex}].previewPath`,
         );
       }
     }
@@ -218,11 +236,69 @@ export class DemoMockService {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })),
-        face_embeddings: c.faceEmbeddings || [],
+        face_embeddings: (c.faceEmbeddings || []).map(
+          (embedding: any, embeddingIdx: number) => ({
+            ...embedding,
+            id: embeddingIdx + 1,
+            creator_id: idx + 1,
+            // The route derives the public image URL from this and strips the
+            // field before responding, so demo references travel exactly the
+            // same path as real ones rather than smuggling in a URL.
+            thumbnailPath: c.faceThumbnailPath || c.profilePicturePath || null,
+            is_primary: embedding.isPrimary ?? embeddingIdx === 0,
+          }),
+        ),
         is_favorite: false,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }));
+
+      // 3b. Flatten enrichment suggestions.
+      //
+      // Suggestion ids are addressed directly by the accept/reject routes, so
+      // they have to be unique across the whole demo library rather than per
+      // creator — hence a flat list numbered in one pass.
+      this.enrichmentSuggestions = [];
+
+      // Previews are addressed through the gallery image route that already
+      // serves these exact files, so a suggestion needs no endpoint of its own
+      // and inherits the gallery route's demo-mode audit.
+      const galleryUrlByPath = new Map<string, string>();
+      for (const creator of this.creators) {
+        for (const media of creator.gallery_media) {
+          galleryUrlByPath.set(media.file_path, media.url);
+        }
+      }
+
+      for (const [creatorIndex, creator] of (
+        this.data.creators || []
+      ).entries()) {
+        for (const suggestion of creator.enrichmentSuggestions || []) {
+          const id = this.enrichmentSuggestions.length + 1;
+          const previewUrl = suggestion.previewPath
+            ? (galleryUrlByPath.get(suggestion.previewPath) ?? null)
+            : null;
+          this.enrichmentSuggestions.push({
+            id,
+            entity_type: "creator",
+            entity_id: creatorIndex + 1,
+            creator_id: creatorIndex + 1,
+            type: suggestion.type,
+            field_key: suggestion.fieldKey ?? null,
+            value: suggestion.value,
+            source: suggestion.source,
+            source_url: suggestion.sourceUrl ?? null,
+            confidence: suggestion.confidence ?? null,
+            face_match_score: suggestion.faceMatchScore ?? null,
+            cached_preview_path: previewUrl,
+            status: "pending",
+            dedup_hash: `demo-${creatorIndex + 1}-${suggestion.type}-${id}`,
+            raw: suggestion.raw ?? null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
 
       // 4. Map Videos
       this.videos = (this.data.videos || []).map((v: any, idx: number) => {
@@ -888,6 +964,177 @@ export class DemoMockService {
   getCreatorGalleryMedia(id: number) {
     return this.getCreatorById(id).gallery_media;
   }
+
+  getCreatorAliases(id: number) {
+    return this.getCreatorById(id).aliases;
+  }
+
+  getCreatorFaceEmbeddings(id: number) {
+    return this.getCreatorById(id).face_embeddings;
+  }
+
+  /** Absolute-safe demo asset path for one embedding's thumbnail, or null. */
+  getCreatorFaceEmbeddingPath(creatorId: number, embeddingId: number | string) {
+    const creator = this.getCreatorById(creatorId);
+    const embedding = creator.face_embeddings.find(
+      (e: any) => String(e.id) === String(embeddingId),
+    );
+    // Face crops are not shipped separately; the creator's face thumbnail is
+    // the demo stand-in, which is what the real endpoint returns for a
+    // single-reference profile anyway.
+    return embedding?.thumbnailPath ?? null;
+  }
+
+  // --- Enrichment ---
+
+  private decoratedSuggestion(suggestion: any) {
+    return {
+      ...suggestion,
+      status: this.enrichmentDecisions.get(suggestion.id) ?? suggestion.status,
+    };
+  }
+
+  getEnrichmentSuggestions(filters: any = {}) {
+    this.loadData();
+    let list = this.enrichmentSuggestions.map((s) => this.decoratedSuggestion(s));
+
+    if (filters.entity_type) {
+      list = list.filter((s) => s.entity_type === filters.entity_type);
+    }
+    if (filters.entity_id !== undefined && filters.entity_id !== null) {
+      list = list.filter((s) => s.entity_id === Number(filters.entity_id));
+    }
+    if (filters.status) {
+      list = list.filter((s) => s.status === filters.status);
+    }
+    if (filters.type) {
+      list = list.filter((s) => s.type === filters.type);
+    }
+
+    // Same ordering as the real query: strongest face match, then confidence.
+    return list.sort(
+      (a, b) =>
+        (b.face_match_score ?? 0) - (a.face_match_score ?? 0) ||
+        (b.confidence ?? 0) - (a.confidence ?? 0) ||
+        a.id - b.id,
+    );
+  }
+
+  getEnrichmentSuggestionById(id: number) {
+    this.loadData();
+    const suggestion = this.enrichmentSuggestions.find((s) => s.id === id);
+    return suggestion ? this.decoratedSuggestion(suggestion) : null;
+  }
+
+  getEnrichmentRuns(entityType: string, entityId: number) {
+    return this.enrichmentRuns
+      .filter((r) => r.entity_type === entityType && r.entity_id === entityId)
+      .sort((a, b) => b.started_at.localeCompare(a.started_at));
+  }
+
+  /**
+   * A demo "scan". Discovers nothing new — the demo file is the whole
+   * universe — but it logs a run and reports how many proposals are still
+   * awaiting a decision, which is what the UI reads.
+   */
+  runEnrichmentScan(entityType: string, entityId: number, sources: string[]) {
+    this.loadData();
+    const pending = this.getEnrichmentSuggestions({
+      entity_type: entityType,
+      entity_id: entityId,
+      status: "pending",
+    });
+
+    const now = new Date().toISOString();
+    const run = {
+      id: this.nextEnrichmentRunId++,
+      entity_type: entityType,
+      entity_id: entityId,
+      creator_id: entityType === "creator" ? entityId : undefined,
+      status: "success",
+      sources_used: sources.length > 0 ? sources : ["theporndb"],
+      suggestion_count: pending.length,
+      errors: null,
+      started_at: now,
+      finished_at: now,
+    };
+    this.enrichmentRuns.push(run);
+    return run;
+  }
+
+  decideEnrichmentSuggestion(id: number, status: "accepted" | "rejected") {
+    this.loadData();
+    const suggestion = this.enrichmentSuggestions.find((s) => s.id === id);
+    if (!suggestion) throw new Error(`Suggestion not found with id: ${id}`);
+
+    this.enrichmentDecisions.set(id, status);
+
+    // Accepting writes through to the in-memory creator so the profile visibly
+    // changes, exactly as the real path does — but only ever in demo memory.
+    if (status === "accepted" && suggestion.entity_type === "creator") {
+      const creator = this.creators.find((c) => c.id === suggestion.entity_id);
+      if (creator) {
+        this.applyDemoSuggestion(creator, suggestion);
+        creator.updated_at = new Date().toISOString();
+      }
+    }
+
+    return this.decoratedSuggestion(suggestion);
+  }
+
+  private applyDemoSuggestion(creator: any, suggestion: any) {
+    switch (suggestion.type) {
+      case "bio":
+        creator.description = suggestion.value;
+        break;
+      case "alias": {
+        const exists = creator.aliases.some(
+          (a: any) => a.name === suggestion.value,
+        );
+        if (!exists) {
+          creator.aliases.push({
+            id: creator.aliases.length + 1,
+            creator_id: creator.id,
+            name: suggestion.value,
+            note: null,
+            created_at: new Date().toISOString(),
+          });
+        }
+        break;
+      }
+      case "social":
+        creator.social_links.push({
+          id: creator.social_links.length + 1,
+          creator_id: creator.id,
+          platform_name: suggestion.raw?.platform_name ?? suggestion.source,
+          url: suggestion.value,
+          created_at: new Date().toISOString(),
+        });
+        break;
+      case "platform":
+        creator.platforms.push({
+          id: creator.platforms.length + 1,
+          creator_id: creator.id,
+          platform_id: creator.platforms.length + 1,
+          platform_name: suggestion.raw?.platform_name ?? suggestion.source,
+          username: suggestion.raw?.username ?? "",
+          profile_url: suggestion.value,
+          is_primary: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        break;
+      case "field":
+        if (suggestion.field_key) {
+          creator[suggestion.field_key] = suggestion.value;
+        }
+        break;
+      default:
+        // `image` and `external_id` change no field the demo profile renders.
+        break;
+    }
+  }
+
 
   // --- Studio Methods ---
   getStudios(options: any = {}) {
