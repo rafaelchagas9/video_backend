@@ -20,6 +20,33 @@ describe("demo mode request policy", () => {
   it("allows established demo-backed reads and SQLite mutations", () => {
     expect(isDemoRequestAllowed("GET", "/api/videos?page=2")).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/videos/1/stream")).toBe(true);
+    expect(isDemoRequestAllowed("POST", "/api/videos/1/cast-sessions")).toBe(
+      true
+    );
+    expect(
+      isDemoRequestAllowed(
+        "GET",
+        `/api/videos/1/cast-sessions/${"a".repeat(64)}`
+      )
+    ).toBe(true);
+    expect(
+      isDemoRequestAllowed("GET", `/api/cast/${"a".repeat(64)}/index.m3u8`)
+    ).toBe(true);
+    expect(
+      isDemoRequestAllowed("GET", `/api/cast/${"a".repeat(64)}/master.m3u8`)
+    ).toBe(true);
+    expect(
+      isDemoRequestAllowed(
+        "GET",
+        `/api/cast/${"a".repeat(64)}/segment-000000.ts`
+      )
+    ).toBe(true);
+    expect(
+      isDemoRequestAllowed("GET", "/api/cast/not-a-token/index.m3u8")
+    ).toBe(false);
+    expect(
+      isDemoRequestAllowed("GET", `/api/cast/${"a".repeat(64)}/unexpected.json`)
+    ).toBe(false);
     expect(isDemoRequestAllowed("GET", "/api/videos/1/thumbnails.vtt")).toBe(
       true
     );

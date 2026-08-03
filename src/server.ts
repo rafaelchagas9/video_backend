@@ -17,11 +17,13 @@ import { env } from "./config/env";
 import { AppError } from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
+import { castTranscodingService } from "./modules/cast/cast-transcoding.service";
 import { logger } from "./utils/logger";
 import {
   captureTelemetryEvent,
   captureTelemetryException,
   getTelemetryDistinctId,
+  sanitizeTelemetryUrl,
   shouldTrackRequestMetrics,
   shutdownTelemetry,
 } from "./utils/telemetry";
@@ -115,7 +117,7 @@ export async function buildServer() {
         requestId: request.id,
         method: request.method,
         route: request.routeOptions.url,
-        url: request.url,
+        url: sanitizeTelemetryUrl(request.url),
         statusCode: reply.statusCode,
         durationMs,
         authenticated: Boolean(request.user),
@@ -126,6 +128,7 @@ export async function buildServer() {
 
   fastify.addHook("onClose", async () => {
     schedulerService.stop();
+    await castTranscodingService.stop();
 
     if (!env.DEMO_MODE) {
       const { conversionQueue } =
@@ -378,7 +381,7 @@ export async function buildServer() {
         {
           requestId: request.id,
           method: request.method,
-          url: request.url,
+          url: sanitizeTelemetryUrl(request.url),
           validationContext,
           validationIssueCount: formattedIssues.length,
           validationIssues: formattedIssues,
@@ -405,7 +408,7 @@ export async function buildServer() {
       {
         requestId: request.id,
         method: request.method,
-        url: request.url,
+        url: sanitizeTelemetryUrl(request.url),
         statusCode: 500,
       },
       getTelemetryDistinctId(request.user?.id)
@@ -446,6 +449,8 @@ export async function buildServer() {
       const { directoriesRoutes } =
         await import("./modules/directories/directories.routes");
       const { videosRoutes } = await import("./modules/videos/videos.routes");
+      const { castPlaybackRoutes, videoCastSessionRoutes } =
+        await import("./modules/cast/cast.routes");
       const { creatorsRoutes } =
         await import("./modules/creators/creators.routes");
       const { studiosRoutes } =
@@ -499,6 +504,8 @@ export async function buildServer() {
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
       await instance.register(videosRoutes, { prefix: "/videos" });
+      await instance.register(videoCastSessionRoutes, { prefix: "/videos" });
+      await instance.register(castPlaybackRoutes, { prefix: "/cast" });
       await instance.register(creatorsRoutes, { prefix: "/creators" });
       await instance.register(studiosRoutes, { prefix: "/studios" });
       await instance.register(tagsRoutes, { prefix: "/tags" });
@@ -548,6 +555,8 @@ export async function buildServer() {
     { prefix: API_PREFIX }
   );
 
+  await castTranscodingService.start();
+
   // Start scheduler for automatic directory scanning
   if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
     const { artworkService } =
@@ -577,7 +586,7 @@ export async function buildServer() {
       error: {
         message: "Route not found",
         statusCode: 404,
-        path: request.url,
+        path: sanitizeTelemetryUrl(request.url),
       },
     });
   });

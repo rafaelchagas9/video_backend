@@ -52,6 +52,10 @@ allowed DELETE /api/videos/{id}
 allowed POST /api/videos/{id}/verify http-contract
 allowed POST /api/videos/{id}/refresh http-contract
 allowed GET /api/videos/{id}/stream
+allowed POST /api/videos/{id}/cast-sessions
+allowed GET /api/videos/{id}/cast-sessions/{sessionId}
+allowed DELETE /api/videos/{id}/cast-sessions/{sessionId}
+allowed GET /api/cast/{token}/{asset}
 allowed GET /api/videos/{id}/creators
 allowed POST /api/videos/{id}/creators http-contract
 allowed DELETE /api/videos/{id}/creators/{creator_id} http-contract

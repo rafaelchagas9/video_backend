@@ -126,6 +126,22 @@ const envSchema = z.object({
 
   // Streaming
   STREAM_MAX_CHUNK_MB: z.string().default("8").transform(Number),
+  CAST_TRANSCODE_DIR: z.string().default("./data/cast-transcodes"),
+  CAST_SESSION_IDLE_TTL_MINUTES: z
+    .string()
+    .default("10")
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  CAST_SESSION_CLEANUP_INTERVAL_SECONDS: z
+    .string()
+    .default("60")
+    .transform(Number)
+    .pipe(z.number().int().min(5)),
+  CAST_HLS_STARTUP_BUFFER_SECONDS: z
+    .string()
+    .default("16")
+    .transform(Number)
+    .pipe(z.number().int().min(8).max(120)),
 
   // Performance profiling
   PERF_PROFILING_ENABLED: z

@@ -19,7 +19,12 @@ type ServerModule = typeof import("@/server");
 type AppInstance = Awaited<ReturnType<ServerModule["buildServer"]>>;
 
 function concretePath(path: string, entityType = "creator"): string {
-  return path.replace("{entityType}", entityType).replaceAll(/\{[^}]+\}/g, "1");
+  return path
+    .replace("{entityType}", entityType)
+    .replace("{sessionId}", "a".repeat(64))
+    .replace("{token}", "b".repeat(64))
+    .replace("{asset}", "index.m3u8")
+    .replaceAll(/\{[^}]+\}/g, "1");
 }
 
 function fastifyPath(path: string): string {
@@ -87,7 +92,7 @@ describe("demo mode runtime route coverage", () => {
     env.DEMO_RESET_MODE = originalConfig.demoResetMode;
   });
 
-  it("requires an explicit manifest record for all 270 primary operations", () => {
+  it("requires an explicit manifest record for all 274 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -98,8 +103,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(270);
-    expect(manifestKeys).toHaveLength(270);
+    expect(runtimeOperationKeys).toHaveLength(274);
+    expect(manifestKeys).toHaveLength(274);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -127,7 +132,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 270,
+      allowed: 274,
       blocked: 0,
       conditional: 0,
     });
@@ -157,11 +162,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 111 generated HEAD counterparts", () => {
+  it("registers and classifies all 113 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(111);
+    expect(getScenarios).toHaveLength(113);
 
     for (const scenario of getScenarios) {
       expect(

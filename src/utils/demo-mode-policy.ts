@@ -31,6 +31,20 @@ const SAFE_API_REQUESTS: Array<{
     ),
   },
   {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/videos/\\d+/cast-sessions$`),
+  },
+  {
+    methods: new Set(["GET", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/videos/\\d+/cast-sessions/[a-f0-9]{64}$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(
+      `^${API_PREFIX}/cast/[a-f0-9]{64}/(?:master\\.m3u8|index\\.m3u8|init\\.mp4|segment-\\d{6}\\.(?:m4s|ts))$`
+    ),
+  },
+  {
     methods: new Set(["GET"]),
     path: new RegExp(
       `^${API_PREFIX}/conversions/(?:active|history(?:/(?:overview|insights|facets))?|queue(?:/status)?|presets)$`

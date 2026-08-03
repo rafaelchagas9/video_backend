@@ -39,7 +39,7 @@ posthogClient?.register({
 
 posthogClient?.on("error", (error) => {
   process.stderr.write(
-    `[posthog] Failed to send telemetry: ${formatUnknownError(error)}\n`,
+    `[posthog] Failed to send telemetry: ${formatUnknownError(error)}\n`
   );
 });
 
@@ -74,7 +74,7 @@ function serializeValue(value: unknown): unknown {
 
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, serializeValue(entry)]),
+      Object.entries(value).map(([key, entry]) => [key, serializeValue(entry)])
     );
   }
 
@@ -82,14 +82,19 @@ function serializeValue(value: unknown): unknown {
 }
 
 function serializeProperties(
-  properties: TelemetryProperties,
+  properties: TelemetryProperties
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(properties).map(([key, value]) => [key, serializeValue(value)]),
+    Object.entries(properties).map(([key, value]) => [
+      key,
+      serializeValue(value),
+    ])
   );
 }
 
-function buildProperties(properties: TelemetryProperties = {}): TelemetryProperties {
+function buildProperties(
+  properties: TelemetryProperties = {}
+): TelemetryProperties {
   return {
     service: SERVICE_NAME,
     environment: env.NODE_ENV,
@@ -102,7 +107,9 @@ export function isTelemetryEnabled(): boolean {
   return posthogClient !== null;
 }
 
-export function getTelemetryDistinctId(userId?: string | number | null): string {
+export function getTelemetryDistinctId(
+  userId?: string | number | null
+): string {
   if (userId === null || userId === undefined || userId === "") {
     return SERVER_DISTINCT_ID;
   }
@@ -110,10 +117,14 @@ export function getTelemetryDistinctId(userId?: string | number | null): string 
   return `user:${userId}`;
 }
 
+export function sanitizeTelemetryUrl(url: string): string {
+  return url.replace(/^(\/api\/cast\/)[a-f0-9]{64}(\/[^?]*)/, "$1:token$2");
+}
+
 export function captureTelemetryEvent(
   event: string,
   properties: TelemetryProperties = {},
-  distinctId = SERVER_DISTINCT_ID,
+  distinctId = SERVER_DISTINCT_ID
 ): void {
   if (!posthogClient) {
     return;
@@ -129,13 +140,17 @@ export function captureTelemetryEvent(
 export function captureTelemetryException(
   error: unknown,
   properties: TelemetryProperties = {},
-  distinctId = SERVER_DISTINCT_ID,
+  distinctId = SERVER_DISTINCT_ID
 ): void {
   if (!posthogClient) {
     return;
   }
 
-  posthogClient.captureException(error, distinctId, buildProperties(properties));
+  posthogClient.captureException(
+    error,
+    distinctId,
+    buildProperties(properties)
+  );
 }
 
 function normalizeLogArgs(args: unknown[]): {
@@ -193,7 +208,7 @@ export function captureTelemetryLog(level: LogLevel, args: unknown[]): void {
       message,
       ...properties,
     },
-    SERVER_DISTINCT_ID,
+    SERVER_DISTINCT_ID
   );
 }
 
@@ -206,13 +221,9 @@ export function shouldTrackRequestMetrics(request: FastifyRequest): boolean {
     return false;
   }
 
-  return ![
-    "/health",
-    "/docs",
-    "/docs/",
-    "/ws",
-    "/api/events/stream",
-  ].some((path) => request.url === path || request.url.startsWith(`${path}/`));
+  return !["/health", "/docs", "/docs/", "/ws", "/api/events/stream"].some(
+    (path) => request.url === path || request.url.startsWith(`${path}/`)
+  );
 }
 
 export async function shutdownTelemetry(): Promise<void> {
