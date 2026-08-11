@@ -10,24 +10,47 @@ export interface TimelineSegment {
   start: number; // seconds
   end: number; // seconds
   speed?: number; // default 1.0
+  /** Effects applied to this segment before timeline concatenation. */
+  transform?: EditTransformConfig;
+  /** Audio effects applied to this segment before timeline concatenation. */
+  audio?: EditAudioConfig;
+}
+
+export interface EditCropTransform {
+  /** Normalized horizontal origin (0-1). */
+  x: number;
+  /** Normalized vertical origin (0-1). */
+  y: number;
+  /** Normalized crop width (0-1). */
+  width: number;
+  /** Normalized crop height (0-1). */
+  height: number;
+}
+
+export interface EditTransformConfig {
+  crop?: EditCropTransform;
+  rotate?: 0 | 90 | 180 | 270;
+}
+
+export interface EditAudioConfig {
+  muted?: boolean;
+  volume?: number;
+  fade_in_seconds?: number;
+  fade_out_seconds?: number;
 }
 
 export interface EditTimelineConfig {
-  snap_to_clips?: boolean;
   segments: TimelineSegment[];
+  transform?: EditTransformConfig;
+  audio?: EditAudioConfig;
 }
 
 export interface EditOutputConfig {
   directory_id: number;
   file_name: string;
-  format: string; // 'mkv'
-  video_codec: string; // 'av1'
-  audio_codec: string; // 'copy' | 'aac'
-  preserve?: {
-    resolution?: boolean;
-    bitrate?: boolean;
-    frame_rate?: boolean;
-  };
+  format: "mkv";
+  video_codec: "av1";
+  audio_codec: "opus" | "aac";
 }
 
 export interface EditJob {
@@ -55,4 +78,21 @@ export interface EditQueuePayload {
   videoId: number;
   outputConfig: EditOutputConfig;
   timelineConfig: EditTimelineConfig;
+}
+
+export interface EditJobListOptions {
+  page: number;
+  limit: number;
+  videoId?: number;
+  status?: EditJobStatus;
+}
+
+export interface EditJobListResult {
+  data: EditJob[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }

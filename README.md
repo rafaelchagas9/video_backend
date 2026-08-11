@@ -12,7 +12,7 @@ Built with Bun + Fastify + PostgreSQL.
 - **Media Processing** — Thumbnails (configurable timestamp/position), Vidstack-compatible sprite storyboards (VTT), unified frame extraction, video transcoding (VAAPI GPU acceleration, job queue)
 - **Auto-Tagging** — Rule engine with conditions (path pattern, duration, resolution, codec, file size) and actions (add/remove tags, creators, studios)
 - **Face Recognition** — Python/InsightFace microservice for face detection, 512-dim embedding extraction, auto-matching to known creators, similarity search
-- **Video Editing** — Timeline-based trimming jobs with configurable output codecs
+- **Video Editing** — Single-source trim/split/reorder, per-segment speed, crop/rotation, global audio controls, and asynchronous MKV/AV1 export jobs
 - **Streaming** — HTTP range-request support, chunked delivery
 - **Real-Time** — WebSocket multiplayer remote control system (pairing, sessions, display/remote devices), SSE event stream
 - **Multiplayer Remote** — Pairing codes, display device management, remote control commands (playback, audio, layout, filters)
@@ -132,6 +132,21 @@ ratings, bookmarks, and watch statistics for pagination and frontend testing.
 Creator and studio artwork, channels, social links, galleries, hierarchical
 child tags, storyboard sprite sheets, and WebVTT previews are generated locally.
 
+### Demo video editing
+
+The editing API remains fully inside the demo SQLite/assets boundary: it does
+not use the production database, Redis, or FFmpeg. This makes it suitable for
+frontend development without exposing the personal video library. Demo jobs
+advance deterministically as they are polled: `queued` → `running` (25%) →
+`running` (70%) → `completed` (100%). A completed response includes a playable
+demo `video_id` and `/api/videos/:id/stream` URL.
+
+To exercise the editor's error UI, create a job whose output basename starts
+with `demo-fail-`. It follows the same progress sequence and then finishes with
+a deterministic `RENDER_FAILED` error. Cancellation is available while a job
+is queued or running, and jobs can be rediscovered after a frontend reload with
+`GET /api/edits/jobs`.
+
 ## Project Structure
 
 ```
@@ -203,9 +218,66 @@ Face recognition requires a separate Python microservice at `face-service/` (Ins
 
 ## API
 
-All routes are prefixed with `/api/v1` and documented via Swagger at `/docs`.
+All application routes are prefixed with `/api` and documented via Swagger at
+`/docs`.
 
 Health check: `GET /health`
+
+### Video editing API
+
+The basic editor operates on one source video. It supports trimming, splitting
+and reordering source ranges; speed from 0.1× to 10× per segment; one normalized
+crop and 0/90/180/270-degree rotation applied after the timeline; plus global
+mute, volume (0–4), and audio fades. It intentionally does not advertise
+multi-source timelines, transitions, text overlays, subtitle editing, or audio
+mixing.
+
+The current output contract is explicit: Matroska (`mkv`) with AV1 video and
+either Opus (default) or AAC audio. A filename is a safe basename; `.mkv` is
+added when omitted. Existing destinations cause a conflict instead of being
+overwritten.
+
+1. Read `GET /api/videos/:id/editing-metadata` for source properties,
+   storyboard URL, audio presence/codec, and the machine-readable capability
+   declaration.
+2. Submit `POST /api/videos/:id/edits`. A valid request returns `202 Accepted`
+   and a `Location: /api/edits/jobs/:jobId` header.
+3. Poll the Location or recover jobs with the paginated
+   `GET /api/edits/jobs?page=1&limit=20`. Recovery can be filtered by
+   `video_id` and/or `status`.
+4. Cancel queued or running work with
+   `POST /api/edits/jobs/:jobId/cancel`. Completed results expose the canonical
+   `/api/videos/:videoId/stream` URL.
+
+Example request:
+
+```json
+{
+  "output": {
+    "directory_id": 1,
+    "file_name": "edited-highlight",
+    "format": "mkv",
+    "video_codec": "av1",
+    "audio_codec": "opus"
+  },
+  "timeline": {
+    "segments": [
+      { "start": 12.5, "end": 24, "speed": 1 },
+      { "start": 40, "end": 46, "speed": 0.5 }
+    ],
+    "transform": {
+      "crop": { "x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8 },
+      "rotate": 90
+    },
+    "audio": {
+      "muted": false,
+      "volume": 1,
+      "fade_in_seconds": 0.5,
+      "fade_out_seconds": 1
+    }
+  }
+}
+```
 
 ### First-Time Setup
 

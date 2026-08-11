@@ -109,6 +109,7 @@ describe("demo mode request policy", () => {
     expect(isDemoRequestAllowed("POST", "/api/conversions/queue/clear")).toBe(
       true
     );
+    expect(isDemoRequestAllowed("GET", "/api/edits/jobs")).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/conversions/1")).toBe(true);
     expect(isDemoRequestAllowed("POST", "/api/videos/1/faces/extract")).toBe(
       true

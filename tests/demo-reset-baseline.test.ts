@@ -166,6 +166,14 @@ describe("immutable demo SQLite baseline reset", () => {
       id: 777,
       status: "pending",
     });
+    demo.demoRepository.putResource("edit-job", 888, {
+      id: 888,
+      status: "running",
+      progress: 70,
+    });
+    demo.demoRepository.putResource("edit-job-simulation", 888, {
+      outcome: "success",
+    });
 
     demo.resetDemoRuntimeState();
 
@@ -247,6 +255,10 @@ describe("immutable demo SQLite baseline reset", () => {
         .get()!.count
     ).toBe(original.artworkAssetCount);
     expect(demo.demoRepository.getResource("conversion-job", 777)).toBeNull();
+    expect(demo.demoRepository.getResource("edit-job", 888)).toBeNull();
+    expect(
+      demo.demoRepository.getResource("edit-job-simulation", 888)
+    ).toBeNull();
   });
 
   it("preserves mutations across reopen until an explicit reset", () => {

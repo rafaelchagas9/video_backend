@@ -2263,8 +2263,29 @@ describe("Fastify app integration", () => {
         },
       },
     });
-    expect(editCreate.statusCode).toBe(200);
+    expect(editCreate.statusCode).toBe(202);
+    expect(editCreate.headers.location).toBe("/api/edits/jobs/1");
     expect(editCreate.json().data.status).toBe("queued");
+
+    const editJobs = await ctx!.authInject({
+      method: "GET",
+      url: `/api/edits/jobs?video_id=${fixture.videoId}&status=completed`,
+    });
+    expect(editJobs.statusCode).toBe(200);
+    expect(editJobs.json()).toMatchObject({
+      data: [
+        {
+          job_id: 1,
+          video_id: 1,
+          status: "completed",
+          output: {
+            video_id: 2,
+            stream_url: "/api/videos/2/stream",
+          },
+        },
+      ],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
 
     const editStatus = await ctx!.authInject({
       method: "GET",
@@ -2272,6 +2293,32 @@ describe("Fastify app integration", () => {
     });
     expect(editStatus.statusCode).toBe(200);
     expect(editStatus.json().data.status).toBe("completed");
+    expect(editStatus.json().data.output.stream_url).toBe(
+      "/api/videos/2/stream",
+    );
+
+    const editingPaths = ctx!.app.swagger().paths as Record<
+      string,
+      Record<string, { responses?: Record<string, unknown> }>
+    >;
+    expect(editingPaths["/api/videos/{id}/edits"]?.post?.responses).toEqual(
+      expect.objectContaining({
+        "202": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "404": expect.anything(),
+        "409": expect.anything(),
+        "500": expect.anything(),
+      }),
+    );
+    expect(editingPaths["/api/edits/jobs"]?.get?.responses).toEqual(
+      expect.objectContaining({
+        "200": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "500": expect.anything(),
+      }),
+    );
 
     const editCancel = await ctx!.authInject({
       method: "POST",

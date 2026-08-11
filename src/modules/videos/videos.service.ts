@@ -19,7 +19,12 @@ import {
   faceImagesTable,
   artworkAssetsTable,
 } from "@/database/schema";
-import { BadRequestError, NotFoundError } from "@/utils/errors";
+import {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+  isUniqueViolation,
+} from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import { logger } from "@/utils/logger";
 import { existsSync, statSync } from "fs";
@@ -96,6 +101,17 @@ export class VideosService {
       file_path: video.filePath,
       is_available: video.isAvailable,
     };
+  }
+
+  /** Find a production catalog entry by its exact local path. */
+  async findByFilePath(filePath: string): Promise<Video | null> {
+    if (env.DEMO_MODE) return null;
+    const [row] = await db
+      .select({ id: videosTable.id })
+      .from(videosTable)
+      .where(eq(videosTable.filePath, filePath))
+      .limit(1);
+    return row ? this.findById(row.id) : null;
   }
 
   /**
@@ -915,6 +931,100 @@ export class VideosService {
     );
 
     return this.findById(videoId);
+  }
+
+  /**
+   * Register a newly-created local video without waiting for the next directory
+   * scan. Callers retain ownership of the physical file if registration fails.
+   */
+  async registerLocalFile(
+    filePath: string,
+    directoryId: number,
+    options: { generateThumbnail?: boolean } = {}
+  ): Promise<Video> {
+    if (env.DEMO_MODE) {
+      throw new BadRequestError(
+        "Local file registration is unavailable in demo mode"
+      );
+    }
+    if (!existsSync(filePath)) {
+      throw new BadRequestError("Video file not found on disk");
+    }
+
+    const fileStats = statSync(filePath);
+    if (!fileStats.isFile()) {
+      throw new BadRequestError("Video path is not a regular file");
+    }
+    const [fileHash, metadata] = await Promise.all([
+      computeFileHash(filePath),
+      metadataService.extractMetadata(filePath),
+    ]);
+
+    try {
+      const [inserted] = await db
+        .insert(videosTable)
+        .values({
+          filePath,
+          fileName: basename(filePath),
+          directoryId,
+          fileSizeBytes: fileStats.size,
+          fileHash,
+          durationSeconds: metadata.duration_seconds,
+          width: metadata.width,
+          height: metadata.height,
+          codec: metadata.codec,
+          bitrate: metadata.bitrate,
+          fps: metadata.fps,
+          audioCodec: metadata.audio_codec,
+          isAvailable: true,
+          lastVerifiedAt: new Date(),
+        })
+        .returning({ id: videosTable.id });
+      if (!inserted) throw new Error("Failed to register rendered video");
+
+      if (options.generateThumbnail !== false) {
+        thumbnailsService.generate(inserted.id).catch((error) => {
+          logger.warn(
+            { error, videoId: inserted.id },
+            "Failed to generate thumbnail for rendered video"
+          );
+        });
+      }
+      logger.info(
+        { videoId: inserted.id, filePath },
+        "Rendered video registered"
+      );
+      return this.findById(inserted.id);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ConflictError("Video file path is already registered");
+      }
+      throw error;
+    }
+  }
+
+  /** Remove only a catalog row, used to roll back an interrupted publication. */
+  async removeCatalogRecord(
+    videoId: number,
+    expectedFilePath: string
+  ): Promise<boolean> {
+    if (env.DEMO_MODE) return false;
+    const [deleted] = await db
+      .delete(videosTable)
+      .where(
+        and(
+          eq(videosTable.id, videoId),
+          eq(videosTable.filePath, expectedFilePath)
+        )
+      )
+      .returning({ id: videosTable.id });
+    if (deleted) {
+      logger.info(
+        { videoId, filePath: expectedFilePath },
+        "Rolled back rendered video catalog entry"
+      );
+    }
+    return Boolean(deleted);
   }
 }
 

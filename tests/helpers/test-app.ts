@@ -422,16 +422,38 @@ function installExternalServiceMocks(): void {
       })),
       getById: mock(async (id: number) => ({
         id,
+        videoId: 1,
         status: "completed",
         progress: 100,
         startedAt: TEST_NOW,
         completedAt: TEST_NOW,
+        createdAt: TEST_NOW,
         outputVideoId: 2,
         outputConfig: {
           directory_id: 1,
           file_name: "edited.mkv",
         },
         errorMessage: null,
+      })),
+      list: mock(async () => ({
+        data: [
+          {
+            id: 1,
+            videoId: 1,
+            status: "completed",
+            progress: 100,
+            startedAt: TEST_NOW,
+            completedAt: TEST_NOW,
+            createdAt: TEST_NOW,
+            outputVideoId: 2,
+            outputConfig: {
+              directory_id: 1,
+              file_name: "edited.mkv",
+            },
+            errorMessage: null,
+          },
+        ],
+        pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
       })),
       cancel: mock(async (id: number) => ({
         id,
@@ -590,6 +612,7 @@ function installExternalServiceMocks(): void {
     captureTelemetryException: mock(() => undefined),
     captureTelemetryLog: mock(() => undefined),
     getTelemetryDistinctId: mock(() => "test-user"),
+    sanitizeTelemetryUrl: mock((url: string) => url),
     shouldCaptureLog: mock(() => false),
     shouldTrackRequestMetrics: mock(() => false),
     shutdownTelemetry: mock(async () => undefined),

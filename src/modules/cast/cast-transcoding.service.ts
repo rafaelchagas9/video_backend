@@ -127,6 +127,14 @@ const ENCODING_ATTEMPTS: CastEncodingMode[] = [
   "software",
 ];
 
+export function getCastTranscodeRoot(): string {
+  if (!env.DEMO_MODE) return resolve(env.CAST_TRANSCODE_DIR);
+  return resolveDemoAssetPath(
+    join(env.DEMO_ASSETS_DIR, "runtime", "cast-transcodes"),
+    { mustExist: false }
+  );
+}
+
 export class CastTranscodingService {
   private sessions = new Map<string, CastSessionRecord>();
   private sessionIdsByRequestKey = new Map<string, string>();
@@ -135,9 +143,9 @@ export class CastTranscodingService {
 
   async start(): Promise<void> {
     if (this.started) return;
-    this.started = true;
-    await mkdir(env.CAST_TRANSCODE_DIR, { recursive: true });
+    await mkdir(getCastTranscodeRoot(), { recursive: true });
     await this.removeStaleDirectories();
+    this.started = true;
 
     this.cleanupTimer = setInterval(() => {
       void this.cleanupIdleSessions();
@@ -189,7 +197,7 @@ export class CastTranscodingService {
     }
 
     const id = randomBytes(32).toString("hex");
-    const outputDir = join(resolve(env.CAST_TRANSCODE_DIR), id);
+    const outputDir = join(getCastTranscodeRoot(), id);
     await mkdir(outputDir, { recursive: true });
 
     const session: CastSessionRecord = {
@@ -678,7 +686,7 @@ export class CastTranscodingService {
   private async removeStaleDirectories(): Promise<void> {
     let entries;
     try {
-      entries = await readdir(env.CAST_TRANSCODE_DIR, { withFileTypes: true });
+      entries = await readdir(getCastTranscodeRoot(), { withFileTypes: true });
     } catch {
       return;
     }
@@ -689,7 +697,7 @@ export class CastTranscodingService {
             entry.isDirectory() && SESSION_TOKEN_PATTERN.test(entry.name)
         )
         .map((entry) =>
-          rm(join(env.CAST_TRANSCODE_DIR, entry.name), {
+          rm(join(getCastTranscodeRoot(), entry.name), {
             recursive: true,
             force: true,
           })

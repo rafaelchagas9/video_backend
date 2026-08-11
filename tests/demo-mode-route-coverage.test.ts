@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { rmSync } from "fs";
+import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { isDemoRequestAllowed } from "@/utils/demo-mode-policy";
 import { DEMO_ROUTE_SCENARIOS } from "./helpers/demo-route-manifest";
 
@@ -12,6 +12,8 @@ process.env.POSTHOG_API_KEY = "";
 process.env.POSTHOG_CAPTURE_REQUEST_METRICS = "false";
 
 const databasePath = `/tmp/conversor-video-demo-route-coverage-${process.pid}.sqlite`;
+const productionCastRoot = `/tmp/conversor-video-demo-route-cast-${process.pid}`;
+const productionCastSession = `${productionCastRoot}/${"c".repeat(64)}`;
 
 const PRIMARY_METHODS = ["get", "post", "put", "patch", "delete"] as const;
 const POLICY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
@@ -37,6 +39,7 @@ describe("demo mode runtime route coverage", () => {
   let originalConfig: {
     demoMode: boolean;
     demoResetMode: "on-start" | "manual";
+    castTranscodeDir: string;
   };
 
   beforeAll(async () => {
@@ -44,9 +47,16 @@ describe("demo mode runtime route coverage", () => {
     originalConfig = {
       demoMode: env.DEMO_MODE,
       demoResetMode: env.DEMO_RESET_MODE,
+      castTranscodeDir: env.CAST_TRANSCODE_DIR,
     };
     env.DEMO_MODE = true;
     env.DEMO_RESET_MODE = "manual";
+    env.CAST_TRANSCODE_DIR = productionCastRoot;
+    rmSync(productionCastRoot, { recursive: true, force: true });
+    mkdirSync(productionCastSession, { recursive: true });
+    writeFileSync(`${productionCastSession}/sentinel.txt`, "private");
+    const old = new Date(0);
+    utimesSync(productionCastSession, old, old);
 
     const { importDemoJsonFile, setDemoDatabasePathForTests } =
       await import("@/database/demo");
@@ -90,9 +100,16 @@ describe("demo mode runtime route coverage", () => {
     const { env } = await import("@/config/env");
     env.DEMO_MODE = originalConfig.demoMode;
     env.DEMO_RESET_MODE = originalConfig.demoResetMode;
+    env.CAST_TRANSCODE_DIR = originalConfig.castTranscodeDir;
+    rmSync(productionCastRoot, { recursive: true, force: true });
   });
 
-  it("requires an explicit manifest record for all 274 primary operations", () => {
+  it("does not scan or mutate the configured production Cast workspace", () => {
+    expect(existsSync(productionCastSession)).toBe(true);
+    expect(existsSync(`${productionCastSession}/sentinel.txt`)).toBe(true);
+  });
+
+  it("requires an explicit manifest record for all 275 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -103,8 +120,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(274);
-    expect(manifestKeys).toHaveLength(274);
+    expect(runtimeOperationKeys).toHaveLength(275);
+    expect(manifestKeys).toHaveLength(275);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -132,7 +149,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 274,
+      allowed: 275,
       blocked: 0,
       conditional: 0,
     });
@@ -140,7 +157,7 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(165);
+    ).toHaveLength(166);
   });
 
   it("allows only reviewed methods across every concrete manifest path", () => {
@@ -162,11 +179,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 113 generated HEAD counterparts", () => {
+  it("registers and classifies all 114 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(113);
+    expect(getScenarios).toHaveLength(114);
 
     for (const scenario of getScenarios) {
       expect(
@@ -502,12 +519,12 @@ describe("demo mode runtime route coverage", () => {
           file_name: "demo-edit.mkv",
           format: "mkv",
           video_codec: "av1",
-          audio_codec: "copy",
+          audio_codec: "opus",
         },
         timeline: { segments: [{ start: 0, end: 10, speed: 1 }] },
       },
     });
-    expect(create.statusCode).toBe(200);
+    expect(create.statusCode).toBe(202);
     const jobId = create.json().data.job_id;
 
     const status = await app.inject({
@@ -515,7 +532,10 @@ describe("demo mode runtime route coverage", () => {
       url: `/api/edits/jobs/${jobId}`,
     });
     expect(status.statusCode).toBe(200);
-    expect(status.json().data.status).toBe("queued");
+    expect(status.json().data).toMatchObject({
+      status: "running",
+      progress: 25,
+    });
 
     const cancel = await app.inject({
       method: "POST",

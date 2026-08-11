@@ -2,35 +2,79 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import ffmpeg from "fluent-ffmpeg";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
-import { editsService } from "./edits.service";
 import { videosService } from "@/modules/videos/videos.service";
 import { storyboardsService } from "@/modules/storyboards/storyboards.service";
 import { idParamSchema } from "@/modules/videos/videos.schemas";
+import { env } from "@/config/env";
+import { editsService } from "./edits.service";
+import { editsDemoService } from "./edits.demo.service";
+import type { EditJob } from "./edits.types";
 import {
+  cancelEditJobResponseSchema,
   createEditJobBodySchema,
+  editingCapabilities,
+  editingMetadataResponseSchema,
+  editErrorResponseSchema,
+  editJobListResponseSchema,
   editJobResponseSchema,
   jobStatusResponseSchema,
-  editingMetadataResponseSchema,
-  editJobStatusSchema,
+  listEditJobsQuerySchema,
 } from "./edits.schemas";
-import { z } from "zod";
-import { env } from "@/config/env";
-import { editsDemoService } from "./edits.demo.service";
+
+const standardErrorResponses = {
+  400: editErrorResponseSchema,
+  401: editErrorResponseSchema,
+  404: editErrorResponseSchema,
+  409: editErrorResponseSchema,
+  500: editErrorResponseSchema,
+};
+
+function serializeJobStatus(job: EditJob) {
+  const streamUrl = job.outputVideoId
+    ? `/api/videos/${job.outputVideoId}/stream`
+    : undefined;
+
+  return {
+    job_id: job.id,
+    status: job.status,
+    progress: job.progress,
+    started_at: job.startedAt,
+    completed_at: job.completedAt,
+    output:
+      job.status === "completed"
+        ? {
+            directory_id: job.outputConfig.directory_id,
+            video_id: job.outputVideoId,
+            file_name: job.outputConfig.file_name,
+            stream_url: streamUrl,
+          }
+        : undefined,
+    error:
+      job.status === "failed"
+        ? {
+            code: "RENDER_FAILED",
+            message: "Video rendering failed",
+          }
+        : undefined,
+  };
+}
 
 export async function videoEditsRoutes(fastify: FastifyInstance) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
-  // 2. Fetch Video Metadata For Editor
   app.get(
     "/:id/editing-metadata",
     {
       preHandler: authenticateUser,
       schema: {
         tags: ["edits"],
-        summary: "Get editing metadata",
+        summary: "Get editing metadata and capabilities",
+        description:
+          "Returns source metadata, storyboard availability, and the exact editing operations accepted by the render API.",
         params: idParamSchema,
         response: {
           200: editingMetadataResponseSchema,
+          ...standardErrorResponses,
         },
       },
     },
@@ -38,45 +82,51 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
 
       if (env.DEMO_MODE) {
+        const metadata = await editsDemoService.editingMetadata(id);
         return {
-          success: true,
-          data: await editsDemoService.editingMetadata(id),
+          success: true as const,
+          data: {
+            ...metadata,
+            capabilities: editingCapabilities,
+          },
         };
       }
 
       const video = await videosService.findById(id);
-
-      // Get audio metadata via ffprobe
       const audioMeta = await new Promise<{
+        present: boolean;
+        codec: string | null;
         channels: number | null;
         sample_rate: number | null;
       }>((resolve) => {
         ffmpeg.ffprobe(video.file_path, (err, metadata) => {
           if (err) {
-            resolve({ channels: null, sample_rate: null });
+            resolve({
+              present: video.audio_codec !== null,
+              codec: video.audio_codec,
+              channels: null,
+              sample_rate: null,
+            });
             return;
           }
-          const audio = metadata.streams.find((s) => s.codec_type === "audio");
+          const audio = metadata.streams.find(
+            (stream) => stream.codec_type === "audio"
+          );
           resolve({
+            present: Boolean(audio),
+            codec: audio?.codec_name ?? video.audio_codec,
             channels: audio?.channels ?? null,
             sample_rate: audio?.sample_rate
-              ? parseInt(audio.sample_rate.toString())
+              ? Number.parseInt(audio.sample_rate.toString(), 10)
               : null,
           });
         });
       });
 
-      // Get storyboard VTT
       const storyboard = await storyboardsService.findByVideoId(id);
 
-      // Construct VTT URL (assuming endpoint /api/videos/:id/thumbnails.vtt)
-      // Actually storyboards.routes.ts exposes: /videos/:id/thumbnails.vtt
-      const storyboardVtt = storyboard
-        ? `/api/videos/${id}/thumbnails.vtt`
-        : null;
-
       return {
-        success: true,
+        success: true as const,
         data: {
           id: video.id,
           title: video.title,
@@ -88,13 +138,15 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
           },
           bitrate: video.bitrate,
           audio: audioMeta,
-          storyboard_vtt: storyboardVtt,
+          storyboard_vtt: storyboard
+            ? `/api/videos/${id}/thumbnails.vtt`
+            : null,
+          capabilities: editingCapabilities,
         },
       };
     }
   );
 
-  // 3. Create Render Job
   app.post(
     "/:id/edits",
     {
@@ -102,33 +154,39 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ["edits"],
         summary: "Create edit job",
+        description:
+          "Validates and queues a single-source video edit. The Location header identifies the polling resource.",
         params: idParamSchema,
         body: createEditJobBodySchema,
         response: {
-          200: editJobResponseSchema,
+          202: editJobResponseSchema,
+          ...standardErrorResponses,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { id } = request.params;
-      // Verify video exists
       await videosService.findById(id);
 
       const job = await editsService.create(id, request.body);
+      const location = `/api/edits/jobs/${job.id}`;
 
-      return {
-        success: true,
-        data: {
-          job_id: job.id,
-          status: job.status,
-          video_id: job.videoId,
-          output: {
-            directory_id: job.outputConfig.directory_id,
-            file_name: job.outputConfig.file_name,
+      return reply
+        .code(202)
+        .header("Location", location)
+        .send({
+          success: true as const,
+          data: {
+            job_id: job.id,
+            status: job.status,
+            video_id: job.videoId,
+            output: {
+              directory_id: job.outputConfig.directory_id,
+              file_name: job.outputConfig.file_name,
+            },
           },
-        },
-        message: "Render job queued",
-      };
+          message: "Render job queued",
+        });
     }
   );
 }
@@ -136,60 +194,72 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
 export async function editsRoutes(fastify: FastifyInstance) {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
-  // 4. Check Render Job Status
+  app.get(
+    "/jobs",
+    {
+      preHandler: authenticateUser,
+      schema: {
+        tags: ["edits"],
+        summary: "List edit jobs",
+        description:
+          "Returns recent edit jobs for reload recovery, optionally filtered by source video or status.",
+        querystring: listEditJobsQuerySchema,
+        response: {
+          200: editJobListResponseSchema,
+          400: editErrorResponseSchema,
+          401: editErrorResponseSchema,
+          500: editErrorResponseSchema,
+        },
+      },
+    },
+    async (request) => {
+      const { page, limit, video_id: videoId, status } = request.query;
+      const result = await editsService.list({
+        page,
+        limit,
+        videoId,
+        status,
+      });
+
+      return {
+        success: true as const,
+        data: result.data.map((job) => ({
+          ...serializeJobStatus(job),
+          video_id: job.videoId,
+          created_at: job.createdAt,
+        })),
+        pagination: result.pagination,
+      };
+    }
+  );
+
   app.get(
     "/jobs/:id",
     {
       preHandler: authenticateUser,
       schema: {
         tags: ["edits"],
-        summary: "Get job status",
+        summary: "Get edit job status",
         params: idParamSchema,
         response: {
           200: jobStatusResponseSchema,
+          400: editErrorResponseSchema,
+          401: editErrorResponseSchema,
+          404: editErrorResponseSchema,
+          500: editErrorResponseSchema,
         },
       },
     },
     async (request) => {
-      const { id } = request.params;
-      const job = await editsService.getById(id);
-
-      // Determine stream URL if completed and registered
-      // For now, if we have outputVideoId, we assume it's /videos/:id/stream (standard pattern)
-      const streamUrl = job.outputVideoId
-        ? `/videos/${job.outputVideoId}/stream`
-        : undefined;
+      const job = await editsService.getById(request.params.id);
 
       return {
-        success: true,
-        data: {
-          job_id: job.id,
-          status: job.status,
-          progress: job.progress,
-          started_at: job.startedAt,
-          completed_at: job.completedAt,
-          output:
-            job.status === "completed"
-              ? {
-                  directory_id: job.outputConfig.directory_id,
-                  video_id: job.outputVideoId,
-                  file_name: job.outputConfig.file_name,
-                  stream_url: streamUrl,
-                }
-              : undefined,
-          error:
-            job.status === "failed"
-              ? {
-                  code: "RENDER_FAILED",
-                  message: job.errorMessage || "Unknown error",
-                }
-              : undefined,
-        },
+        success: true as const,
+        data: serializeJobStatus(job),
       };
     }
   );
 
-  // 5. Cancel Render Job
   app.post(
     "/jobs/:id/cancel",
     {
@@ -197,24 +267,20 @@ export async function editsRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ["edits"],
         summary: "Cancel edit job",
+        description:
+          "Cancels a queued or running job. Repeating cancellation for a terminal job is idempotent.",
         params: idParamSchema,
         response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.object({
-              job_id: z.number(),
-              status: editJobStatusSchema,
-            }),
-          }),
+          200: cancelEditJobResponseSchema,
+          ...standardErrorResponses,
         },
       },
     },
     async (request) => {
-      const { id } = request.params;
-      const job = await editsService.cancel(id);
+      const job = await editsService.cancel(request.params.id);
 
       return {
-        success: true,
+        success: true as const,
         data: {
           job_id: job.id,
           status: job.status,

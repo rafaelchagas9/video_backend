@@ -275,6 +275,7 @@ allowed GET /api/videos/{id}/faces/status http-contract
 allowed DELETE /api/faces/queue http-contract
 allowed GET /api/videos/{id}/editing-metadata
 allowed POST /api/videos/{id}/edits
+allowed GET /api/edits/jobs
 allowed GET /api/edits/jobs/{id}
 allowed POST /api/edits/jobs/{id}/cancel
 allowed POST /api/multiplayer-remote/display-devices http-contract
@@ -341,6 +342,7 @@ const HTTP_CONTRACT_OPERATIONS = new Set([
   "POST /api/enrichment/suggestions/{id}/reject",
   "GET /api/videos/{id}/editing-metadata",
   "POST /api/videos/{id}/edits",
+  "GET /api/edits/jobs",
   "GET /api/edits/jobs/{id}",
   "POST /api/edits/jobs/{id}/cancel",
 ]);

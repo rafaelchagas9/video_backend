@@ -295,7 +295,7 @@ describe("SQLite demo operations services", () => {
     ).toBe("Demo biography suggestion");
   });
 
-  it("persists edit jobs without invoking render infrastructure", async () => {
+  it("persists edit job progress without invoking render infrastructure", async () => {
     const service = new EditsDemoService();
     const metadata = await service.editingMetadata(1);
     expect(metadata).toMatchObject({ id: 1, title: "Demo Sample" });
@@ -306,12 +306,15 @@ describe("SQLite demo operations services", () => {
         file_name: "demo-edit.mkv",
         format: "mkv",
         video_codec: "av1",
-        audio_codec: "copy",
+        audio_codec: "opus",
       },
       timeline: { segments: [{ start: 0, end: 10 }] },
     });
     expect(job.status).toBe("queued");
-    expect(await new EditsDemoService().getById(job.id)).toEqual(job);
+    expect(await new EditsDemoService().getById(job.id)).toMatchObject({
+      status: "running",
+      progress: 25,
+    });
     expect((await service.cancel(job.id)).status).toBe("cancelled");
   });
 

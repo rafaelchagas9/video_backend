@@ -289,6 +289,10 @@ const SAFE_API_REQUESTS: Array<{
   },
   {
     methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/edits/jobs$`),
+  },
+  {
+    methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/edits/jobs/\\d+$`),
   },
   {

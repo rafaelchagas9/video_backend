@@ -136,7 +136,7 @@ export async function buildServer() {
       const { editsQueue } = await import("./modules/edits/edits.queue");
 
       conversionQueue.stop();
-      editsQueue.stop();
+      await editsQueue.stop();
     }
     eventsService.closeAll("server shutdown");
     multiplayerRemoteWebSocketService.closeAll("server shutdown");
@@ -555,7 +555,12 @@ export async function buildServer() {
     { prefix: API_PREFIX }
   );
 
-  await castTranscodingService.start();
+  // In demo mode Cast initializes lazily on the first Cast request. Its demo
+  // transcodes are constrained to DEMO_ASSETS_DIR/runtime; generic server
+  // startup must not inspect or mutate the configured production workspace.
+  if (!env.DEMO_MODE) {
+    await castTranscodingService.start();
+  }
 
   // Start scheduler for automatic directory scanning
   if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
