@@ -6,7 +6,6 @@ import { spawn } from "child_process";
 import { unlink, mkdir, appendFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/config/env";
-import { InternalServerError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import type { Video } from "@/modules/videos/videos.types";
 import type { ConversionPreset, CodecType } from "@/config/presets";
@@ -22,6 +21,73 @@ import {
   parseBitrateToBps,
 } from "./conversion.planning";
 
+export class FfmpegProcessError extends Error {
+  readonly name = "FfmpegProcessError";
+
+  constructor(
+    message: string,
+    readonly encodingMode: ConversionEncodingMode,
+    readonly exitCode: number | null,
+    readonly stderrOutput: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    Object.setPrototypeOf(this, FfmpegProcessError.prototype);
+  }
+}
+
+export type FfmpegFailureKind =
+  | "rate_limit"
+  | "disk_full"
+  | "permission_denied"
+  | "invalid_input"
+  | "hardware_acceleration"
+  | "filter_graph"
+  | "encoder"
+  | "unknown";
+
+/** Reduce volatile FFmpeg stderr to a bounded, non-sensitive grouping key. */
+export function classifyFfmpegFailure(output: string): FfmpegFailureKind {
+  const normalized = output.toLowerCase();
+
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests")
+  ) {
+    return "rate_limit";
+  }
+  if (normalized.includes("no space left on device")) return "disk_full";
+  if (normalized.includes("permission denied")) return "permission_denied";
+  if (
+    normalized.includes("invalid data found") ||
+    normalized.includes("could not find codec parameters")
+  ) {
+    return "invalid_input";
+  }
+  if (
+    normalized.includes("vaapi") ||
+    normalized.includes("hardware accelerator") ||
+    normalized.includes("hwaccel")
+  ) {
+    return "hardware_acceleration";
+  }
+  if (
+    normalized.includes("filter graph") ||
+    normalized.includes("reinitializing filters") ||
+    normalized.includes("impossible to convert between the formats")
+  ) {
+    return "filter_graph";
+  }
+  if (
+    normalized.includes("encoder") ||
+    normalized.includes("encoding failed")
+  ) {
+    return "encoder";
+  }
+
+  return "unknown";
+}
+
 export class FfmpegService {
   /**
    * Run FFmpeg with VAAPI GPU acceleration
@@ -33,12 +99,12 @@ export class FfmpegService {
     outputPath: string,
     preset: ConversionPreset,
     targetResolution: string | null,
-    onProgress?: (progress: number) => void,
+    onProgress?: (progress: number) => void
   ): Promise<FfmpegRunResult> {
     const bitratePlan = buildConversionBitratePlan(
       video,
       preset,
-      targetResolution,
+      targetResolution
     );
     const { bitrate, maxrate, bufsize } = bitratePlan;
 
@@ -89,7 +155,7 @@ export class FfmpegService {
 
       logger.warn(
         { jobId },
-        "Retrying conversion with software decode fallback",
+        "Retrying conversion with software decode fallback"
       );
 
       await unlink(outputPath).catch(() => {});
@@ -122,7 +188,7 @@ export class FfmpegService {
 
         logger.warn(
           { jobId },
-          "Retrying conversion with full software encoding fallback",
+          "Retrying conversion with full software encoding fallback"
         );
 
         await unlink(outputPath).catch(() => {});
@@ -185,7 +251,7 @@ export class FfmpegService {
         "-hwaccel_device",
         "va",
         "-hwaccel_output_format",
-        "vaapi",
+        "vaapi"
       );
     } else {
       args.push("-threads", "0");
@@ -199,7 +265,7 @@ export class FfmpegService {
 
     const scaleFilter = this.getScaleFilter(
       targetResolution,
-      encodingMode === "hw",
+      encodingMode === "hw"
     );
 
     if (encodingMode === "hw") {
@@ -232,7 +298,7 @@ export class FfmpegService {
         bitrate,
         maxrate,
         bufsize,
-        encodingMode,
+        encodingMode
       ),
       "-c:a",
       "libopus",
@@ -243,7 +309,7 @@ export class FfmpegService {
       "-y",
       "-progress",
       "pipe:1",
-      outputPath,
+      outputPath
     );
 
     return args;
@@ -251,7 +317,7 @@ export class FfmpegService {
 
   private getScaleFilter(
     targetResolution: string | null,
-    useHardware: boolean,
+    useHardware: boolean
   ): string | null {
     if (!targetResolution || targetResolution === "original") {
       return null;
@@ -345,7 +411,7 @@ export class FfmpegService {
         const currentSeconds = parseInt(timeMatch[1], 10) / 1000000;
         const progress = Math.min(
           99,
-          Math.round((currentSeconds / durationSeconds) * 100),
+          Math.round((currentSeconds / durationSeconds) * 100)
         );
 
         onProgress(progress);
@@ -376,16 +442,27 @@ export class FfmpegService {
           return;
         }
 
-        const ffmpegError = new Error(
-          `FFmpeg exited with code ${code}. ${stderrOutput.slice(-500).trim()}`,
-        ) as Error & { stderrOutput?: string; code?: number | null };
-        ffmpegError.stderrOutput = stderrOutput;
-        ffmpegError.code = code;
-        reject(ffmpegError);
+        const failureKind = classifyFfmpegFailure(stderrOutput);
+        reject(
+          new FfmpegProcessError(
+            `FFmpeg conversion failed (${failureKind}) with exit code ${code ?? "unknown"}`,
+            encodingMode,
+            code,
+            stderrOutput
+          )
+        );
       });
 
       ffmpeg.on("error", (error) => {
-        reject(new InternalServerError(`FFmpeg error: ${error.message}`));
+        reject(
+          new FfmpegProcessError(
+            "FFmpeg conversion process failed to start",
+            encodingMode,
+            null,
+            stderrOutput,
+            { cause: error }
+          )
+        );
       });
     });
   }
@@ -402,10 +479,10 @@ export class FfmpegService {
 
     return (
       combinedOutput.includes(
-        "reconfiguring filter graph because hwaccel changed",
+        "reconfiguring filter graph because hwaccel changed"
       ) ||
       combinedOutput.includes(
-        "reconfiguring filter graph because video parameters changed",
+        "reconfiguring filter graph because video parameters changed"
       ) ||
       combinedOutput.includes("impossible to convert between the formats") ||
       combinedOutput.includes("error reinitializing filters") ||
@@ -431,7 +508,7 @@ export class FfmpegService {
   calculateTargetBitrate(
     video: Pick<Video, "width" | "height" | "bitrate">,
     preset: ConversionPreset,
-    targetWidth: number | null,
+    targetWidth: number | null
   ): { bitrate: string; maxrate: string; bufsize: string } {
     const targetResolution = targetWidth
       ? (video.height ?? 0) > (video.width ?? 0)
@@ -455,7 +532,7 @@ export class FfmpegService {
     bitrate: string,
     maxrate: string,
     bufsize: string,
-    encodingMode: ConversionEncodingMode = "hw",
+    encodingMode: ConversionEncodingMode = "hw"
   ): string[] {
     if (encodingMode === "full_sw") {
       const swCodec = this.getSoftwareCodec(preset.codec);
@@ -598,7 +675,7 @@ export class FfmpegService {
   calculateTargetResolution(
     width: number | null,
     height: number | null,
-    preset: ConversionPreset,
+    preset: ConversionPreset
   ): string {
     return calculateTargetResolution(width, height, preset);
   }

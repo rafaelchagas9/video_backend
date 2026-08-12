@@ -60,6 +60,7 @@ See `.env.example` for all options. Key variables:
 | `DEMO_DATABASE_PATH`           | Isolated demo SQLite file (default `demo_mode/demo.sqlite`) |
 | `DEMO_ASSETS_DIR`              | Root allowed for demo media assets (default `demo_mode`)    |
 | `DEMO_RESET_MODE`              | Reset mutable demo state `on-start` or only `manual`        |
+| `POSTHOG_SERVICE_VERSION`      | Deployed version or Git SHA attached to telemetry           |
 
 ## Commands
 
@@ -68,6 +69,7 @@ See `.env.example` for all options. Key variables:
 | `bun dev`                   | Dev server with auto-reload                                      |
 | `bun start`                 | Production server                                                |
 | `bun run build`             | Compile TS to JS                                                 |
+| `bun run posthog:sourcemaps` | Inject and upload backend source maps (explicit CI auth only)    |
 | `bun run start:prod`        | Production from compiled build                                   |
 | `bun run validate:env`      | Validate environment variables                                   |
 | `bun run check:deps`        | Check PostgreSQL, FFmpeg, directories                            |
@@ -85,6 +87,17 @@ See `.env.example` for all options. Key variables:
 | `bun db:apply-migration`    | Run custom migration script                                      |
 | `bunx eslint .`             | Lint                                                             |
 | `bunx tsc --noEmit`         | Type check                                                       |
+
+`bun run build` emits an external source map for meaningful production stack
+traces. Source-map upload is intentionally not part of the normal build because
+maps contain source context. To publish a PostHog release deliberately, set
+`POSTHOG_CLI_HOST`, `POSTHOG_CLI_PROJECT_ID`, `POSTHOG_SERVICE_VERSION`
+(the exact deployed Git SHA), and a personal
+`POSTHOG_CLI_API_KEY` with `error tracking write` and `organization read`, then
+run `bun run posthog:sourcemaps`. Set `POSTHOG_SERVICE_VERSION` to the deployed
+release or Git SHA; the same value is injected into the bundle, attached to the
+upload, and emitted as telemetry resource metadata. The runtime
+`POSTHOG_API_KEY` project token must never be used as the CLI credential.
 
 ## Demo Mode
 

@@ -65,6 +65,8 @@ export interface RunEnrichmentOptions {
   sources?: string[];
   search_name?: string;
   limit?: number;
+  /** StashDB/ThePornDB entity URL or a raw ID scoped by `sources`. */
+  external_ref?: string;
 }
 
 /** snake_case DTO for a stored suggestion (API response shape). */

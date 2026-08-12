@@ -14,7 +14,11 @@ import {
   jsonSchemaTransform,
 } from "fastify-type-provider-zod";
 import { env } from "./config/env";
-import { AppError } from "./utils/errors";
+import {
+  AppError,
+  getHttpErrorStatusCode,
+  shouldCaptureHttpError,
+} from "./utils/errors";
 import { API_PREFIX } from "./config/constants";
 import { schedulerService } from "./modules/scheduler/scheduler.service";
 import { castTranscodingService } from "./modules/cast/cast-transcoding.service";
@@ -22,6 +26,7 @@ import { logger } from "./utils/logger";
 import {
   captureTelemetryEvent,
   captureTelemetryException,
+  captureTelemetryLog,
   getTelemetryDistinctId,
   sanitizeTelemetryUrl,
   shouldTrackRequestMetrics,
@@ -124,6 +129,18 @@ export async function buildServer() {
       },
       getTelemetryDistinctId(request.user?.id)
     );
+
+    captureTelemetryLog("info", [
+      {
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url,
+        statusCode: reply.statusCode,
+        durationMs,
+        authenticated: Boolean(request.user),
+      },
+      "HTTP request completed",
+    ]);
   });
 
   fastify.addHook("onClose", async () => {
@@ -135,7 +152,7 @@ export async function buildServer() {
         await import("./modules/conversion/conversion.queue");
       const { editsQueue } = await import("./modules/edits/edits.queue");
 
-      conversionQueue.stop();
+      await conversionQueue.stop();
       await editsQueue.stop();
     }
     eventsService.closeAll("server shutdown");
@@ -347,13 +364,32 @@ export async function buildServer() {
   // Global error handler (must be registered BEFORE routes)
   fastify.setErrorHandler((error, request, reply) => {
     const validationError = error as ValidationErrorLike;
+    const statusCode = getHttpErrorStatusCode(error);
 
     if (error instanceof AppError) {
-      return reply.status(error.statusCode).send({
+      if (shouldCaptureHttpError(error)) {
+        captureTelemetryException(
+          error,
+          {
+            requestId: request.id,
+            method: request.method,
+            url: sanitizeTelemetryUrl(request.url),
+            statusCode,
+            source: "http_request",
+          },
+          getTelemetryDistinctId(request.user?.id)
+        );
+        fastify.log.error(error);
+      }
+
+      return reply.status(statusCode).send({
         success: false,
         error: {
-          message: error.message,
-          statusCode: error.statusCode,
+          message:
+            statusCode >= 500 && env.NODE_ENV !== "development"
+              ? "Internal server error"
+              : error.message,
+          statusCode,
         },
       });
     }
@@ -402,33 +438,45 @@ export async function buildServer() {
       });
     }
 
-    // Log unexpected errors
-    captureTelemetryException(
-      error,
-      {
-        requestId: request.id,
-        method: request.method,
-        url: sanitizeTelemetryUrl(request.url),
-        statusCode: 500,
-      },
-      getTelemetryDistinctId(request.user?.id)
-    );
+    if (shouldCaptureHttpError(error)) {
+      captureTelemetryException(
+        error,
+        {
+          requestId: request.id,
+          method: request.method,
+          url: sanitizeTelemetryUrl(request.url),
+          statusCode,
+          source: "http_request",
+        },
+        getTelemetryDistinctId(request.user?.id)
+      );
 
-    fastify.log.error(error);
+      fastify.log.error(error);
+    } else {
+      fastify.log.warn(
+        {
+          requestId: request.id,
+          method: request.method,
+          url: sanitizeTelemetryUrl(request.url),
+          statusCode,
+        },
+        "Request rejected"
+      );
+    }
 
     // Don't expose internal errors in production
     const message =
-      env.NODE_ENV === "development"
+      statusCode < 500 || env.NODE_ENV === "development"
         ? error instanceof Error
           ? error.message
           : String(error)
         : "Internal server error";
 
-    return reply.status(500).send({
+    return reply.status(statusCode).send({
       success: false,
       error: {
         message,
-        statusCode: 500,
+        statusCode,
       },
     });
   });
@@ -567,10 +615,18 @@ export async function buildServer() {
     const { artworkService } =
       await import("./modules/artwork/artwork.service");
     artworkService.resumePendingJobs().catch((err) => {
+      captureTelemetryException(err, {
+        source: "startup_job",
+        job: "resume_pending_artwork",
+      });
       fastify.log.error(err, "Failed to resume pending artwork jobs");
     });
 
     schedulerService.start().catch((err) => {
+      captureTelemetryException(err, {
+        source: "startup_job",
+        job: "scheduler_start",
+      });
       fastify.log.error(err, "Failed to start scheduler");
     });
 

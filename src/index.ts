@@ -4,7 +4,7 @@ import { logger } from "./utils/logger";
 import { eventsService } from "./modules/events/events.service";
 import { multiplayerRemoteWebSocketService } from "./modules/multiplayer-remote/multiplayer-remote.websocket";
 import {
-  captureTelemetryException,
+  captureTelemetryExceptionImmediate,
   shutdownTelemetry,
 } from "./utils/telemetry";
 
@@ -31,39 +31,46 @@ function createShutdownHandler(server: AppServer): (signal: NodeJS.Signals) => v
         { signal, timeoutMs: SHUTDOWN_TIMEOUT_MS },
         "Graceful shutdown timed out",
       );
-      process.exit(1);
+      void shutdownTelemetry().finally(() => process.exit(1));
     }, SHUTDOWN_TIMEOUT_MS);
 
-    void server
-      .close()
-      .then(() => {
+    void (async () => {
+      try {
+        await server.close();
         logger.info({ signal }, "Server shutdown complete");
+        await shutdownTelemetry();
         process.exit(0);
-      })
-      .catch((error) => {
-        captureTelemetryException(error, { source: "shutdown", signal });
+      } catch (error) {
         logger.error({ error, signal }, "Server shutdown failed");
+        await captureTelemetryExceptionImmediate(error, {
+          source: "shutdown",
+          signal,
+        });
+        await shutdownTelemetry();
         process.exit(1);
-      })
-      .finally(() => {
+      } finally {
         clearTimeout(timeout);
-      });
+      }
+    })();
   };
 }
 
 function registerProcessTelemetryHandlers(): void {
   process.on("unhandledRejection", (error) => {
-    captureTelemetryException(error, { source: "process.unhandledRejection" });
     logger.error({ error }, "Unhandled promise rejection");
+    void captureTelemetryExceptionImmediate(error, {
+      source: "process.unhandledRejection",
+    });
   });
 
   process.on("uncaughtException", (error) => {
-    captureTelemetryException(error, { source: "process.uncaughtException" });
     logger.fatal({ error }, "Uncaught exception");
 
-    void shutdownTelemetry().finally(() => {
-      process.exit(1);
-    });
+    void captureTelemetryExceptionImmediate(error, {
+      source: "process.uncaughtException",
+    })
+      .then(() => shutdownTelemetry())
+      .finally(() => process.exit(1));
   });
 }
 
@@ -94,8 +101,8 @@ async function main() {
     );
     logger.info(`URL: ${env.BASE_URL}`);
   } catch (error) {
-    captureTelemetryException(error, { source: "startup" });
     logger.error(error);
+    await captureTelemetryExceptionImmediate(error, { source: "startup" });
     await shutdownTelemetry();
     process.exit(1);
   }

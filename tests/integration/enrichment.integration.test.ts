@@ -120,6 +120,10 @@ const EXACT_ID_CANDIDATES_BY_ENTITY: Record<string, (externalId: string) => unkn
     { type: "field", field_key: "description", value: "Auto tag details", source: "stashdb", confidence: 1 },
     { type: "alias", value: "Auto Tag Alias", source: "stashdb", confidence: 1 },
   ],
+  scene: (externalId) => [
+    { type: "external_id", value: externalId, source: "stashdb", confidence: 1 },
+    { type: "field", field_key: "title", value: "Exact scene", source: "stashdb", confidence: 1 },
+  ],
 };
 
 const enrichmentRequests: Array<{
@@ -236,6 +240,69 @@ describe("enrichment loop (all entity types)", () => {
     expect(latestRequest.sources).toEqual(["theporndb", "stashdb"]);
     expect(latestRequest.limit).toBe(7);
     expect(runRes.json().data.sources_used).toEqual(["theporndb", "stashdb"]);
+  });
+
+  it("forwards an exact performer URL using its inferred source", async () => {
+    const created = await ctx!.authInject({
+      method: "POST",
+      url: "/api/creators",
+      payload: { name: "Generic Performer" },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const runRes = await ctx!.authInject({
+      method: "POST",
+      url: `/api/enrichment/creator/${created.json().data.id}/run`,
+      payload: {
+        sources: ["stashdb"],
+        external_ref:
+          "https://theporndb.net/performers/tpdb-exact-performer?tab=images",
+      },
+    });
+
+    expect(runRes.statusCode).toBe(200);
+    const latestRequest = enrichmentRequests.at(-1)!;
+    expect(latestRequest.sources).toEqual(["theporndb"]);
+    expect(latestRequest.external_ids).toEqual([
+      { source: "theporndb", external_id: "tpdb-exact-performer" },
+    ]);
+  });
+
+  it("forwards a raw exact scene ID using the selected source", async () => {
+    const { videoId } = await seedVideoFixture();
+    const runRes = await ctx!.authInject({
+      method: "POST",
+      url: `/api/enrichment/scene/${videoId}/run`,
+      payload: {
+        source: "stashdb",
+        external_ref: "stashdb-exact-scene",
+      },
+    });
+
+    expect(runRes.statusCode).toBe(200);
+    const latestRequest = enrichmentRequests.at(-1)!;
+    expect(latestRequest.sources).toEqual(["stashdb"]);
+    expect(latestRequest.external_ids).toEqual([
+      { source: "stashdb", external_id: "stashdb-exact-scene" },
+    ]);
+  });
+
+  it("rejects an exact URL for the wrong entity without calling enrichment", async () => {
+    const { videoId } = await seedVideoFixture();
+    const requestCount = enrichmentRequests.length;
+    const runRes = await ctx!.authInject({
+      method: "POST",
+      url: `/api/enrichment/scene/${videoId}/run`,
+      payload: {
+        external_ref: "https://stashdb.org/performers/not-a-scene",
+      },
+    });
+
+    expect(runRes.statusCode).toBe(400);
+    expect(runRes.json().error.message).toContain(
+      "Enrichment URL targets creator, not scene",
+    );
+    expect(enrichmentRequests).toHaveLength(requestCount);
   });
 
   it("creator: runs, stores, accepts and rejects", async () => {

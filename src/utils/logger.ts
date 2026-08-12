@@ -2,8 +2,16 @@ import pino from "pino";
 import { env } from "@/config/env";
 import { captureTelemetryLog } from "@/utils/telemetry";
 
+export const serializeLoggerError = pino.stdSerializers.err;
+
 const loggerConfig = {
   level: env.NODE_ENV === "development" ? "debug" : "info",
+  serializers: {
+    // `err` is Pino's conventional key, but the application historically uses
+    // both `err` and `error`. Serialize both so local logs keep the full stack.
+    err: serializeLoggerError,
+    error: serializeLoggerError,
+  },
   transport:
     env.NODE_ENV === "development"
       ? {

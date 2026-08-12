@@ -32,6 +32,10 @@ import type {
   RawFaceDetection,
 } from "./face-recognition.types";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
+import {
+  assertValidFaceEmbedding,
+  FACE_EMBEDDING_DIMENSION,
+} from "./face-recognition.embedding";
 
 export class FaceRecognitionService {
   private creatorFacesDir: string;
@@ -87,6 +91,7 @@ export class FaceRecognitionService {
     }
 
     const face = result.faces[0];
+    assertValidFaceEmbedding(face.embedding, "Creator reference embedding");
     const embedding = JSON.stringify(face.embedding);
 
     let thumbnailPath: string | null = null;
@@ -348,6 +353,8 @@ export class FaceRecognitionService {
         limit,
         threshold
       );
+    assertValidFaceEmbedding(embedding, "Similarity query embedding");
+
     // Convert embedding to vector format for pgvector
     const embeddingString = `[${embedding.join(",")}]`;
 
@@ -355,16 +362,30 @@ export class FaceRecognitionService {
     // The <=> operator computes cosine distance (1 - cosine_similarity)
     // We convert distance to similarity: similarity = 1 - distance
     const query = sql`
+      WITH comparable_embeddings AS MATERIALIZED (
+        SELECT
+          cfe.id as reference_embedding_id,
+          cfe.creator_id,
+          c.name as creator_name,
+          cfe.source_type as reference_source_type,
+          CASE
+            WHEN vector_dims(cfe.embedding::vector) = ${FACE_EMBEDDING_DIMENSION}
+            THEN cfe.embedding::vector <=> ${embeddingString}::vector
+            ELSE NULL
+          END as distance
+        FROM ${creatorFaceEmbeddingsTable} cfe
+        JOIN ${creatorsTable} c ON c.id = cfe.creator_id
+      )
       SELECT
-        cfe.id as reference_embedding_id,
-        cfe.creator_id,
-        c.name as creator_name,
-        cfe.source_type as reference_source_type,
-        1 - (cfe.embedding::vector <=> ${embeddingString}::vector) as similarity
-      FROM ${creatorFaceEmbeddingsTable} cfe
-      JOIN ${creatorsTable} c ON c.id = cfe.creator_id
-      WHERE 1 - (cfe.embedding::vector <=> ${embeddingString}::vector) >= ${threshold}
-      ORDER BY cfe.embedding::vector <=> ${embeddingString}::vector
+        reference_embedding_id,
+        creator_id,
+        creator_name,
+        reference_source_type,
+        1 - distance as similarity
+      FROM comparable_embeddings
+      WHERE distance IS NOT NULL
+        AND 1 - distance >= ${threshold}
+      ORDER BY distance
       LIMIT ${limit}
     `;
 
@@ -443,6 +464,7 @@ export class FaceRecognitionService {
         }
       } catch (error) {
         logger.error({ error }, "Failed to compute match");
+        throw error;
       }
     }
 

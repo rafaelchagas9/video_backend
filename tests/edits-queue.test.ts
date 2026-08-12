@@ -58,6 +58,9 @@ mock.module("@/utils/logger", () => ({
     warn: mock(() => undefined),
   },
 }));
+mock.module("@/utils/telemetry", () => ({
+  captureTelemetryException: mock(() => undefined),
+}));
 
 const claimForProcessing = mock(async () => false);
 const getById = mock(async () => {
@@ -101,6 +104,7 @@ mock.module("@/modules/thumbnails/thumbnails.service", () => ({
   thumbnailsService: { generate: mock(async () => undefined) },
 }));
 mock.module("@/modules/conversion/conversion.ffmpeg.service", () => ({
+  classifyFfmpegFailure: mock(() => "unknown"),
   ffmpegService: {
     getMaxRate: mock(() => "5M"),
     calculateTargetBitrate: mock(() => ({

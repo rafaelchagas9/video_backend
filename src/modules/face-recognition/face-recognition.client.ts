@@ -11,6 +11,27 @@ import type {
 } from "./face-recognition.types";
 import { env } from "@/config/env";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
+import { assertValidFaceEmbedding } from "./face-recognition.embedding";
+
+function validateDetectFacesResponse(data: unknown): DetectFacesResponse {
+  if (!data || typeof data !== "object") {
+    throw new Error("Face service returned an invalid response");
+  }
+
+  const response = data as DetectFacesResponse;
+  if (!Array.isArray(response.faces)) {
+    throw new Error("Face service response is missing the faces array");
+  }
+
+  for (const [index, face] of response.faces.entries()) {
+    assertValidFaceEmbedding(
+      face?.embedding,
+      `Face service embedding at index ${index}`
+    );
+  }
+
+  return response;
+}
 
 function demoDetection(): DetectFacesResponse {
   return {
@@ -106,15 +127,19 @@ export class FaceRecognitionClient {
       }
 
       const data = await response.json();
-      return data as DetectFacesResponse;
+      return validateDetectFacesResponse(data);
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === "AbortError") {
-          throw new Error(`Face detection timeout after ${this.timeout}ms`);
+          throw new Error(`Face detection timeout after ${this.timeout}ms`, {
+            cause: error,
+          });
         }
         throw error;
       }
-      throw new Error("Face detection failed with unknown error");
+      throw new Error("Face detection failed with unknown error", {
+        cause: error,
+      });
     }
   }
 
@@ -163,10 +188,12 @@ export class FaceRecognitionClient {
       }
 
       const data = await response.json();
-      return data as DetectFacesResponse;
+      return validateDetectFacesResponse(data);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(`Face detection timeout after ${this.timeout}ms`);
+        throw new Error(`Face detection timeout after ${this.timeout}ms`, {
+          cause: error,
+        });
       }
       logger.error({ error, imagePath }, "Failed to detect faces from file");
       throw error;

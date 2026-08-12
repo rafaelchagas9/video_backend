@@ -48,6 +48,7 @@ import { tagsService } from "@/modules/tags/tags.service";
 import { platformsService } from "@/modules/platforms/platforms.service";
 import { getEnrichmentClient } from "./enrichment.client";
 import { enrichmentDemoService } from "./enrichment.demo.service";
+import { parseExactExternalReference } from "./enrichment.reference";
 import type {
   Candidate,
   EnrichRequest,
@@ -204,13 +205,32 @@ export class EnrichmentService {
     entityId: number,
     options: RunEnrichmentOptions = {}
   ): Promise<EnrichRequest> {
+    const exactReference = options.external_ref
+      ? parseExactExternalReference(
+          options.external_ref,
+          entityType,
+          options.sources,
+        )
+      : null;
     const applyRunOptions = (request: EnrichRequest): EnrichRequest => ({
       ...request,
       name: options.search_name ?? request.name,
       ...(options.search_name !== undefined
         ? { title: options.search_name }
         : {}),
-      ...(options.sources !== undefined ? { sources: options.sources } : {}),
+      ...(exactReference
+        ? {
+            sources: [exactReference.source],
+            external_ids: [
+              {
+                source: exactReference.source,
+                external_id: exactReference.externalId,
+              },
+            ],
+          }
+        : options.sources !== undefined
+          ? { sources: options.sources }
+          : {}),
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
     });
 

@@ -52,6 +52,6 @@ describe("Cast HLS helpers", () => {
       sanitizeTelemetryUrl(
         `/api/cast/${"a".repeat(64)}/segment-000001.ts?probe=1`
       )
-    ).toBe("/api/cast/:token/segment-000001.ts?probe=1");
+    ).toBe("/api/cast/:token/segment-000001.ts");
   });
 });

@@ -19,6 +19,7 @@ export const runEnrichmentBodySchema = z
     source: enrichmentSourceEnum.optional(),
     search_name: z.string().trim().min(1).max(255).optional(),
     limit: z.coerce.number().int().min(1).max(25).optional(),
+    external_ref: z.string().trim().min(1).max(2048).optional(),
   })
   .strict()
   .nullish();

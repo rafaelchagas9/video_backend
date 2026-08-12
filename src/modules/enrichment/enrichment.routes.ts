@@ -34,6 +34,7 @@ export async function enrichmentRoutes(
         body: runEnrichmentBodySchema,
         response: {
           200: runResponseSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
           502: errorResponseSchema,
@@ -50,6 +51,7 @@ export async function enrichmentRoutes(
             body.sources ?? (body.source !== undefined ? [body.source] : undefined),
           search_name: body.search_name,
           limit: body.limit,
+          external_ref: body.external_ref,
         },
       );
       return reply.send({

@@ -4,8 +4,11 @@ import {
   AppError,
   ConflictError,
   getPostgresErrorCode,
+  getHttpErrorStatusCode,
+  InternalServerError,
   isUniqueViolation,
   NotFoundError,
+  shouldCaptureHttpError,
   ValidationError,
 } from "@/utils/errors";
 import {
@@ -34,7 +37,7 @@ describe("validation utilities", () => {
     });
 
     expect(() => validateSchema(schema, { name: "ab", count: -1 })).toThrow(
-      ValidationError,
+      ValidationError
     );
 
     try {
@@ -65,12 +68,31 @@ describe("validation utilities", () => {
     expect(notFound).toBeInstanceOf(AppError);
     expect(notFound).toBeInstanceOf(NotFoundError);
     expect(notFound.statusCode).toBe(404);
+    expect(notFound.name).toBe("NotFoundError");
 
     expect(conflict).toBeInstanceOf(Error);
     expect(conflict).toBeInstanceOf(AppError);
     expect(conflict).toBeInstanceOf(ConflictError);
     expect(conflict.statusCode).toBe(409);
     expect(conflict.isOperational).toBe(true);
+    expect(conflict.name).toBe("ConflictError");
+  });
+
+  it("preserves plugin status codes and captures only server failures", () => {
+    const rateLimitError = Object.assign(new Error("Rate limit exceeded"), {
+      statusCode: 429,
+    });
+    const cause = new Error("ffmpeg spawn failed");
+    const internal = new InternalServerError("Rendering failed", { cause });
+
+    expect(getHttpErrorStatusCode(rateLimitError)).toBe(429);
+    expect(shouldCaptureHttpError(rateLimitError)).toBe(false);
+    expect(getHttpErrorStatusCode(internal)).toBe(500);
+    expect(shouldCaptureHttpError(internal)).toBe(true);
+    expect(internal.name).toBe("InternalServerError");
+    expect(internal.isOperational).toBe(false);
+    expect(internal.cause).toBe(cause);
+    expect(getHttpErrorStatusCode(new Error("boom"))).toBe(500);
   });
 
   it("extracts a postgres error code from the top-level error", () => {
@@ -97,9 +119,7 @@ describe("validation utilities", () => {
     expect(getPostgresErrorCode(undefined)).toBeUndefined();
     expect(isUniqueViolation(new Error("boom"))).toBe(false);
     expect(
-      isUniqueViolation(
-        Object.assign(new Error("other"), { code: "23503" }),
-      ),
+      isUniqueViolation(Object.assign(new Error("other"), { code: "23503" }))
     ).toBe(false);
   });
 

@@ -293,6 +293,7 @@ export async function multiplayerRemoteRoutes(
   app.get(
     "/sessions/:id/join-requests/pending",
     {
+      logLevel: "silent",
       schema: {
         tags: ["multiplayer-remote"],
         summary: "Get pending multiplayer join request",

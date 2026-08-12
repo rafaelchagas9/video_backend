@@ -26,7 +26,7 @@ export class FrameExtractionService {
   constructor(
     tempDir: string = "/dev/shm",
     format: "jpg" | "webp" | "png" = "jpg",
-    quality: number = 90,
+    quality: number = 90
   ) {
     this.defaultTempDir = tempDir;
     this.defaultFormat = format;
@@ -36,7 +36,7 @@ export class FrameExtractionService {
     if (!existsSync(this.defaultTempDir)) {
       logger.warn(
         { tempDir: this.defaultTempDir },
-        "Default temp directory does not exist, will use fallback",
+        "Default temp directory does not exist, will use fallback"
       );
     }
   }
@@ -46,7 +46,7 @@ export class FrameExtractionService {
    * Returns paths to extracted frames for processing by other services
    */
   async extractFrames(
-    options: FrameExtractionOptions,
+    options: FrameExtractionOptions
   ): Promise<FrameExtractionResult> {
     const startTime = Date.now();
 
@@ -72,7 +72,7 @@ export class FrameExtractionService {
 
     logger.info(
       { videoId, totalFrames, intervalSeconds, outputFormat },
-      "Starting frame extraction",
+      "Starting frame extraction"
     );
 
     // WebP's libwebp encoder only supports single-image output,
@@ -99,14 +99,14 @@ export class FrameExtractionService {
         prefix,
         actualFormat,
         intervalSeconds,
-        totalFrames,
+        totalFrames
       );
 
       const extractionTimeMs = Date.now() - startTime;
 
       logger.info(
         { videoId, framesExtracted: frames.length, timeMs: extractionTimeMs },
-        "Frame extraction completed",
+        "Frame extraction completed"
       );
 
       return {
@@ -122,6 +122,7 @@ export class FrameExtractionService {
       await this.cleanupFrames(videoTempDir, { removeDirectory: true });
       throw new InternalServerError(
         `Frame extraction failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
       );
     }
   }
@@ -137,7 +138,7 @@ export class FrameExtractionService {
     if (!existsSync(baseDir)) {
       logger.warn(
         { requestedDir: baseDir, fallback: "/tmp" },
-        "Temp directory not available, using fallback",
+        "Temp directory not available, using fallback"
       );
       tempDir = "/tmp";
     }
@@ -150,7 +151,7 @@ export class FrameExtractionService {
 
     logger.debug(
       { directory: videoTempDir },
-      "Created temp directory for frames",
+      "Created temp directory for frames"
     );
 
     return videoTempDir;
@@ -228,16 +229,20 @@ export class FrameExtractionService {
         .on("end", () => {
           logger.debug(
             { outputPath, timestamp: timestampSeconds },
-            "Single frame extracted",
+            "Single frame extracted"
           );
           resolve(outputPath);
         })
         .on("error", (err) => {
           logger.error(
             { error: err, videoPath, timestamp: timestampSeconds },
-            "Single frame extraction error",
+            "Single frame extraction error"
           );
-          reject(new InternalServerError("Failed to extract frame from video"));
+          reject(
+            new InternalServerError("Failed to extract frame from video", {
+              cause: err,
+            })
+          );
         })
         .run();
     });
@@ -290,7 +295,10 @@ export class FrameExtractionService {
     // WebP's libwebp encoder only supports single-image output, so we
     // fall back to JPEG for multi-frame sequence extraction.
     const seqFormat = outputFormat === "webp" ? "jpg" : outputFormat;
-    const seqQuality = outputFormat === "webp" ? Math.round(2 + ((100 - quality) / 100) * 29) : undefined;
+    const seqQuality =
+      outputFormat === "webp"
+        ? Math.round(2 + ((100 - quality) / 100) * 29)
+        : undefined;
 
     // Output filename pattern
     const outputPattern = join(outputDir, `${prefix}_%04d.${seqFormat}`);
@@ -333,7 +341,7 @@ export class FrameExtractionService {
         .on("error", (err) => {
           logger.error(
             { error: err, videoPath },
-            "FFmpeg frame extraction error",
+            "FFmpeg frame extraction error"
           );
           reject(err);
         })
@@ -368,7 +376,7 @@ export class FrameExtractionService {
     prefix: string,
     format: string,
     intervalSeconds: number,
-    expectedCount: number,
+    expectedCount: number
   ): Promise<ExtractedFrame[]> {
     const files = await readdir(directory);
     const frameFiles = files
@@ -397,7 +405,7 @@ export class FrameExtractionService {
     if (frames.length < expectedCount) {
       logger.warn(
         { expected: expectedCount, actual: frames.length },
-        "Fewer frames extracted than expected",
+        "Fewer frames extracted than expected"
       );
     }
 
@@ -409,7 +417,7 @@ export class FrameExtractionService {
    */
   async cleanupFrames(
     directory: string,
-    options: FrameCleanupOptions = {},
+    options: FrameCleanupOptions = {}
   ): Promise<void> {
     const { removeDirectory = false, keepFiles = [] } = options;
 
@@ -456,7 +464,7 @@ export class FrameExtractionService {
   findClosestFrame(
     frames: ExtractedFrame[],
     targetSeconds: number,
-    maxDeviationSeconds: number = 5,
+    maxDeviationSeconds: number = 5
   ): ExtractedFrame | null {
     if (frames.length === 0) {
       return null;
@@ -482,7 +490,7 @@ export class FrameExtractionService {
           closestFrame: closestFrame.timestampSeconds,
           deviation: minDifference,
         },
-        "Closest frame exceeds max deviation",
+        "Closest frame exceeds max deviation"
       );
       return null;
     }

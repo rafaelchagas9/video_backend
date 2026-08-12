@@ -41,6 +41,7 @@ export class ConversionProcessorService {
     } = payload;
 
     let videoContext: ReturnType<typeof createVideoEventContext> | null = null;
+    let progressUpdates = Promise.resolve();
 
     try {
       const startedAt = new Date();
@@ -76,7 +77,7 @@ export class ConversionProcessorService {
       } catch (error) {
         logger.warn(
           { error, inputPath, jobId },
-          "Failed to stat original file, using indexed size",
+          "Failed to stat original file, using indexed size"
         );
       }
 
@@ -84,7 +85,7 @@ export class ConversionProcessorService {
       // record of what was actually fed to the encoder.
       const sourceMetadata = this.withDerivedBitrate(
         (await this.probeMedia(inputPath)) ?? this.metadataFromVideo(video),
-        originalSizeBytes,
+        originalSizeBytes
       );
 
       // Build and run FFmpeg command with progress callback
@@ -95,23 +96,31 @@ export class ConversionProcessorService {
         outputPath,
         preset,
         job.target_resolution,
-        async (progress) => {
-          // Update progress in database
-          await conversionJobsService.updateProgress(jobId, progress);
+        (progress) => {
+          progressUpdates = progressUpdates
+            .then(async () => {
+              await conversionJobsService.updateProgress(jobId, progress);
 
-          // Emit progress event via SSE
-          this.emitEvent({
-            type: "conversion:progress",
-            message: {
-              jobId,
-              ...resolvedVideoContext,
-              preset: presetId,
-              ...(batchId ? { batchId } : {}),
-              progress,
-            },
-          });
-        },
+              this.emitEvent({
+                type: "conversion:progress",
+                message: {
+                  jobId,
+                  ...resolvedVideoContext,
+                  preset: presetId,
+                  ...(batchId ? { batchId } : {}),
+                  progress,
+                },
+              });
+            })
+            .catch((error) => {
+              logger.warn(
+                { error, jobId, progress },
+                "Failed to persist conversion progress"
+              );
+            });
+        }
       );
+      await progressUpdates;
 
       // Get output file size
       const stats = statSync(outputPath);
@@ -122,7 +131,7 @@ export class ConversionProcessorService {
 
       const outputMetadata = this.withDerivedBitrate(
         await this.probeMedia(outputPath),
-        stats.size,
+        stats.size
       );
 
       try {
@@ -135,9 +144,9 @@ export class ConversionProcessorService {
             : calculateEffectiveDimensions(
                 sourceMetadata?.width ?? video.width,
                 sourceMetadata?.height ?? video.height,
-                job.target_resolution,
+                job.target_resolution
               ),
-          job.target_resolution,
+          job.target_resolution
         );
 
         await conversionHistoryService.createCompletedEntry({
@@ -167,7 +176,7 @@ export class ConversionProcessorService {
       } catch (error) {
         logger.error(
           { error, jobId, videoId },
-          "Failed to persist conversion history entry",
+          "Failed to persist conversion history entry"
         );
       }
 
@@ -192,7 +201,7 @@ export class ConversionProcessorService {
           originalSizeBytes,
           sizeDeltaBytes: stats.size - originalSizeBytes,
         },
-        "Conversion completed",
+        "Conversion completed"
       );
 
       // Handle Original File Replacement (in-place)
@@ -200,14 +209,14 @@ export class ConversionProcessorService {
         try {
           logger.info(
             { videoId, jobId },
-            "Replacing original file in-place (preserving video record and relations)",
+            "Replacing original file in-place (preserving video record and relations)"
           );
           unlinkSync(inputPath);
           await videosService.replaceFile(videoId, outputPath);
         } catch (error) {
           logger.error(
             { error, videoId },
-            "Failed to replace original video after conversion",
+            "Failed to replace original video after conversion"
           );
           // We don't fail job because conversion itself succeeded
         }
@@ -218,6 +227,7 @@ export class ConversionProcessorService {
         await conversionBatchService.checkBatchCompletion(batchId);
       }
     } catch (error) {
+      await progressUpdates;
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       const ffmpegOutput =
@@ -227,7 +237,7 @@ export class ConversionProcessorService {
       await conversionJobsService.markAsFailed(
         jobId,
         errorMessage,
-        ffmpegOutput,
+        ffmpegOutput
       );
 
       // Notify via SSE
@@ -259,7 +269,7 @@ export class ConversionProcessorService {
    * supplementary and must not fail an otherwise successful conversion.
    */
   private async probeMedia(
-    filePath: string,
+    filePath: string
   ): Promise<ConversionMediaMetadata | null> {
     try {
       const metadata = await metadataService.extractMetadata(filePath);
@@ -297,7 +307,7 @@ export class ConversionProcessorService {
    */
   private withDerivedBitrate(
     metadata: ConversionMediaMetadata | null,
-    sizeBytes: number,
+    sizeBytes: number
   ): ConversionMediaMetadata | null {
     if (!metadata || metadata.bitrate !== null) {
       return metadata;

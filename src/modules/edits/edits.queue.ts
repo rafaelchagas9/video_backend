@@ -1,5 +1,6 @@
 import { redis } from "bun";
 import { logger } from "@/utils/logger";
+import { captureTelemetryException } from "@/utils/telemetry";
 import type { EditQueuePayload } from "./edits.types";
 
 const QUEUE_KEY = "edits:jobs";
@@ -182,6 +183,11 @@ export class EditsQueue {
       this.activeJobs++;
       const run = this.runJob(payload, jobData)
         .catch((error) => {
+          captureTelemetryException(error, {
+            source: "edit_queue_job",
+            jobId: payload.jobId,
+            videoId: payload.videoId,
+          });
           logger.error(
             { error, jobId: payload.jobId },
             "Edit job processing error"

@@ -10,11 +10,15 @@ import {
 import { editsQueue } from "./edits.queue";
 import { videosService } from "@/modules/videos/videos.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
-import { ffmpegService } from "@/modules/conversion/conversion.ffmpeg.service";
+import {
+  classifyFfmpegFailure,
+  ffmpegService,
+} from "@/modules/conversion/conversion.ffmpeg.service";
 import { logger } from "@/utils/logger";
 import { recordPerfStage } from "@/utils/performance-profiler";
 import { env } from "@/config/env";
 import { ConflictError } from "@/utils/errors";
+import { captureTelemetryException } from "@/utils/telemetry";
 import type {
   EditOutputConfig,
   EditQueuePayload,
@@ -26,6 +30,8 @@ import type { Video } from "@/modules/videos/videos.types";
 export { calculateExpectedDuration } from "./edits.validation";
 
 export class EditCancelledError extends Error {
+  readonly name = "EditCancelledError";
+
   constructor(message = "Edit job was cancelled") {
     super(message);
     Object.setPrototypeOf(this, EditCancelledError.prototype);
@@ -33,11 +39,17 @@ export class EditCancelledError extends Error {
 }
 
 class EditFfmpegProcessError extends Error {
+  readonly name = "EditFfmpegProcessError";
+
   constructor(
     message: string,
-    readonly stderrOutput: string
+    readonly stderrOutput: string,
+    readonly exitCode: number | null,
+    readonly signal: NodeJS.Signals | null,
+    readonly encodingMode: EditEncodingMode,
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     Object.setPrototypeOf(this, EditFfmpegProcessError.prototype);
   }
 }
@@ -579,6 +591,25 @@ export class EditsProcessor {
             error instanceof Error ? error.message : String(error);
           logger.error({ jobId, error, errorMessage }, "Edit job failed");
           await editsService.markFailed(jobId, "Video rendering failed");
+          const ffmpegProperties =
+            error instanceof EditFfmpegProcessError
+              ? (() => {
+                  const failureKind = classifyFfmpegFailure(error.stderrOutput);
+                  return {
+                    ffmpegExitCode: error.exitCode,
+                    ffmpegSignal: error.signal,
+                    ffmpegFailureKind: failureKind,
+                    encodingMode: error.encodingMode,
+                    $exception_fingerprint: `edit_ffmpeg:${error.encodingMode}:${error.exitCode ?? error.signal ?? "spawn"}:${failureKind}`,
+                  };
+                })()
+              : {};
+          captureTelemetryException(error, {
+            source: "edit_job",
+            jobId,
+            videoId,
+            ...ffmpegProperties,
+          });
         } else {
           logger.info({ jobId }, "Edit job cancelled");
         }
@@ -759,16 +790,29 @@ export class EditsProcessor {
           );
           settle();
         } else {
+          const failureKind = classifyFfmpegFailure(stderrTail);
           settle(
             new EditFfmpegProcessError(
-              `FFmpeg exited with code ${code ?? "unknown"}${closeSignal ? ` (${closeSignal})` : ""}`,
-              stderrTail.trim()
+              `FFmpeg edit failed (${failureKind}) with exit code ${code ?? "unknown"}`,
+              stderrTail.trim(),
+              code,
+              closeSignal,
+              encodingMode
             )
           );
         }
       });
       ffmpeg.on("error", (error) => {
-        settle(new Error(`FFmpeg error: ${error.message}`));
+        settle(
+          new EditFfmpegProcessError(
+            "FFmpeg edit process failed to start",
+            stderrTail.trim(),
+            null,
+            null,
+            encodingMode,
+            { cause: error }
+          )
+        );
       });
     });
   }

@@ -155,9 +155,10 @@ const envSchema = z.object({
   // Telemetry
   POSTHOG_API_KEY: z.string().default(""),
   POSTHOG_HOST: z.string().default("https://us.i.posthog.com"),
+  POSTHOG_SERVICE_VERSION: z.string().default("0.1.0"),
   POSTHOG_LOG_LEVEL: z
     .enum(["debug", "info", "warn", "error", "fatal"])
-    .default("warn"),
+    .default("info"),
   POSTHOG_CAPTURE_REQUEST_METRICS: z
     .string()
     .default("true")

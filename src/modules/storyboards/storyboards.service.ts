@@ -17,6 +17,7 @@ import { freemem } from "os";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
 import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 import { resolveDemoAssetPath } from "@/database/demo";
+import { captureTelemetryException } from "@/utils/telemetry";
 
 interface SpriteSheetOptions {
   videoId: number;
@@ -162,6 +163,10 @@ export class StoryboardsService {
           });
         }
       } catch (error) {
+        captureTelemetryException(error, {
+          source: "storyboard_job",
+          videoId,
+        });
         logger.error({ videoId, error }, "Failed to generate storyboard");
 
         let videoContext = { videoId, video_id: videoId };

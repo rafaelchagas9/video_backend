@@ -10,6 +10,7 @@ import {
   computeFullHash,
 } from "@/utils/file-utils";
 import { logger } from "@/utils/logger";
+import { captureTelemetryException } from "@/utils/telemetry";
 import { metadataService } from "@/modules/videos/metadata.service";
 import { directoriesService } from "./directories.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
@@ -30,7 +31,7 @@ export class WatcherService {
     if (this.scanningDirectories.has(directoryId)) {
       logger.warn(
         { directoryId },
-        "Directory scan already in progress, skipping",
+        "Directory scan already in progress, skipping"
       );
       return {
         files_found: 0,
@@ -79,7 +80,7 @@ export class WatcherService {
         // Scan directory recursively
         logger.info(
           { directoryId, path: directory.path },
-          "Scanning for video files...",
+          "Scanning for video files..."
         );
         const findFilesStartTime = Date.now();
         const videoFiles = await this.findVideoFiles(directory.path);
@@ -93,13 +94,13 @@ export class WatcherService {
             count: videoFiles.length,
             durationMs: findFilesDuration,
           },
-          `Found ${videoFiles.length} video files in ${(findFilesDuration / 1000).toFixed(2)}s`,
+          `Found ${videoFiles.length} video files in ${(findFilesDuration / 1000).toFixed(2)}s`
         );
 
         // Index each video
         logger.info(
           { directoryId, totalFiles: videoFiles.length },
-          "Starting video indexing...",
+          "Starting video indexing..."
         );
         const indexStartTime = Date.now();
 
@@ -126,13 +127,13 @@ export class WatcherService {
                   avgTimePerFileMs: Math.round(avgTime),
                   estimatedTimeLeftSeconds: Math.round(estimatedTimeLeft),
                 },
-                `Indexed ${i + 1}/${videoFiles.length} files (ETA: ${Math.round(estimatedTimeLeft)}s)`,
+                `Indexed ${i + 1}/${videoFiles.length} files (ETA: ${Math.round(estimatedTimeLeft)}s)`
               );
             }
           } catch (error: any) {
             logger.error(
               { error, filePath, index: i + 1, total: videoFiles.length },
-              "Failed to index video file",
+              "Failed to index video file"
             );
             result.errors.push(`${filePath}: ${error.message}`);
           }
@@ -145,7 +146,7 @@ export class WatcherService {
             filesIndexed: result.files_added,
             durationMs: totalIndexDuration,
           },
-          `Indexed ${result.files_added} files in ${(totalIndexDuration / 1000).toFixed(2)}s`,
+          `Indexed ${result.files_added} files in ${(totalIndexDuration / 1000).toFixed(2)}s`
         );
 
         // Check for removed files (files in DB but not on disk anymore)
@@ -171,7 +172,7 @@ export class WatcherService {
             result.files_removed++;
             logger.debug(
               { filePath: dbVideo.filePath },
-              "Marked file as unavailable",
+              "Marked file as unavailable"
             );
           }
         }
@@ -179,7 +180,7 @@ export class WatcherService {
         if (result.files_removed > 0) {
           logger.info(
             { directoryId, filesRemoved: result.files_removed },
-            `Marked ${result.files_removed} files as unavailable`,
+            `Marked ${result.files_removed} files as unavailable`
           );
         }
 
@@ -207,7 +208,7 @@ export class WatcherService {
             totalDurationMs: totalScanDuration,
             totalDurationSeconds: (totalScanDuration / 1000).toFixed(2),
           },
-          `Directory scan completed in ${(totalScanDuration / 1000).toFixed(2)}s - Found: ${result.files_found}, Added: ${result.files_added}, Removed: ${result.files_removed}, Errors: ${result.errors.length}`,
+          `Directory scan completed in ${(totalScanDuration / 1000).toFixed(2)}s - Found: ${result.files_found}, Added: ${result.files_added}, Removed: ${result.files_removed}, Errors: ${result.errors.length}`
         );
 
         return result;
@@ -241,7 +242,7 @@ export class WatcherService {
 
     logger.info(
       { count: this.newVideoIds.length },
-      "Queueing unified video processing (frames, thumbnails, storyboards, faces)...",
+      "Queueing unified video processing (frames, thumbnails, storyboards, faces)..."
     );
 
     const { getFaceRecognitionService } =
@@ -263,7 +264,7 @@ export class WatcherService {
         if (!video || !video.duration_seconds) {
           logger.warn(
             { videoId },
-            "Skipping video processing - duration not available",
+            "Skipping video processing - duration not available"
           );
           continue;
         }
@@ -272,21 +273,26 @@ export class WatcherService {
         await faceService.processVideo(
           videoId,
           video.file_path,
-          video.duration_seconds,
+          video.duration_seconds
         );
 
         logger.info({ videoId }, "Video queued for unified processing");
       } catch (error) {
+        captureTelemetryException(error, {
+          source: "video_processing_job",
+          stage: "unified_media_processing",
+          videoId,
+        });
         logger.error(
           { videoId, error },
-          "Failed to queue video for processing",
+          "Failed to queue video for processing"
         );
       }
     }
 
     logger.info(
       { count: this.newVideoIds.length },
-      "Videos queued for unified processing",
+      "Videos queued for unified processing"
     );
 
     // Clear local queue
@@ -303,7 +309,7 @@ export class WatcherService {
 
   private async findVideoFiles(
     directoryPath: string,
-    files: string[] = [],
+    files: string[] = []
   ): Promise<string[]> {
     try {
       const entries = await readdir(directoryPath, { withFileTypes: true });
@@ -328,7 +334,7 @@ export class WatcherService {
 
   private async indexVideo(
     filePath: string,
-    directoryId: number,
+    directoryId: number
   ): Promise<Video> {
     const fileName = basename(filePath);
     const fileStartTime = Date.now();
@@ -349,7 +355,7 @@ export class WatcherService {
 
     logger.debug(
       { filePath, durationMs: dbCheckDuration },
-      `DB check completed in ${dbCheckDuration}ms`,
+      `DB check completed in ${dbCheckDuration}ms`
     );
 
     // Get file size
@@ -359,7 +365,7 @@ export class WatcherService {
 
     logger.debug(
       { filePath, fileSize, durationMs: fileSizeDuration },
-      `File size retrieved in ${fileSizeDuration}ms`,
+      `File size retrieved in ${fileSizeDuration}ms`
     );
 
     if (existing && existing.fileSizeBytes === fileSize) {
@@ -385,19 +391,19 @@ export class WatcherService {
         if (metadataDuration > 3000) {
           logger.warn(
             { filePath, durationMs: metadataDuration },
-            `Metadata extraction took ${(metadataDuration / 1000).toFixed(2)}s - consider optimization`,
+            `Metadata extraction took ${(metadataDuration / 1000).toFixed(2)}s - consider optimization`
           );
         } else {
           logger.debug(
             { filePath, durationMs: metadataDuration },
-            `Metadata extracted in ${metadataDuration}ms`,
+            `Metadata extracted in ${metadataDuration}ms`
           );
         }
       } catch (error) {
         const metadataDuration = Date.now() - metadataStart;
         logger.warn(
           { error, filePath, durationMs: metadataDuration },
-          "Failed to extract video metadata",
+          "Failed to extract video metadata"
         );
         metadata = {
           duration_seconds: null,
@@ -418,7 +424,7 @@ export class WatcherService {
       try {
         logger.debug(
           { filePath, fileSizeGB: (fileSize / 1024 ** 3).toFixed(2) },
-          "Computing partial file hash...",
+          "Computing partial file hash..."
         );
 
         // Step 1: Compute partial hash (fast)
@@ -434,8 +440,8 @@ export class WatcherService {
           .where(
             and(
               eq(videosTable.fileHash, partialHash),
-              ne(videosTable.filePath, filePath),
-            ),
+              ne(videosTable.filePath, filePath)
+            )
           )
           .limit(1);
 
@@ -447,7 +453,7 @@ export class WatcherService {
               collidingFile: collision.filePath,
               partialHash,
             },
-            "Partial hash collision detected, computing full hash",
+            "Partial hash collision detected, computing full hash"
           );
 
           hashMethod = "full";
@@ -455,7 +461,7 @@ export class WatcherService {
 
           // Also recompute full hash for colliding file and update it
           const collidingFileFullHash = await computeFullHash(
-            collision.filePath,
+            collision.filePath
           );
           await db
             .update(videosTable)
@@ -469,7 +475,7 @@ export class WatcherService {
               collidingFile: collision.filePath,
               collidingHash: collidingFileFullHash,
             },
-            "Resolved hash collision with full hashes",
+            "Resolved hash collision with full hashes"
           );
         } else {
           // No collision, use partial hash
@@ -486,19 +492,19 @@ export class WatcherService {
               fileSizeGB: (fileSize / 1024 ** 3).toFixed(2),
               method: hashMethod,
             },
-            `Hash computation took ${(hashDuration / 1000).toFixed(2)}s using ${hashMethod} hashing`,
+            `Hash computation took ${(hashDuration / 1000).toFixed(2)}s using ${hashMethod} hashing`
           );
         } else {
           logger.debug(
             { filePath, durationMs: hashDuration, method: hashMethod },
-            `Hash computed in ${hashDuration}ms using ${hashMethod} hashing`,
+            `Hash computed in ${hashDuration}ms using ${hashMethod} hashing`
           );
         }
       } catch (error) {
         const hashDuration = Date.now() - hashStart;
         logger.warn(
           { error, filePath, durationMs: hashDuration },
-          "Failed to compute file hash",
+          "Failed to compute file hash"
         );
       }
 
@@ -564,7 +570,7 @@ export class WatcherService {
       thumbnailsService.generate(videoId).catch((err) => {
         logger.error(
           { videoId, err },
-          "Failed to generate thumbnail during indexing",
+          "Failed to generate thumbnail during indexing"
         );
       });
     }
@@ -578,7 +584,7 @@ export class WatcherService {
     if (totalFileDuration > 5000) {
       logger.warn(
         { filePath, videoId, durationMs: totalFileDuration },
-        `File indexing took ${(totalFileDuration / 1000).toFixed(2)}s - this file may be causing slowness`,
+        `File indexing took ${(totalFileDuration / 1000).toFixed(2)}s - this file may be causing slowness`
       );
     }
 

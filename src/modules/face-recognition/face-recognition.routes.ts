@@ -17,6 +17,7 @@ import { creatorFaceEmbeddingsTable } from "@/database/schema";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
+import { captureTelemetryException } from "@/utils/telemetry";
 
 export async function faceRecognitionRoutes(server: FastifyInstance) {
   const app = server.withTypeProvider<ZodTypeProvider>();
@@ -665,6 +666,11 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       faceService
         .processFacesOnly(videoId, video.file_path, video.duration_seconds)
         .catch((error) => {
+          captureTelemetryException(error, {
+            source: "face_extraction_start",
+            stage: "frame_extraction",
+            videoId,
+          });
           logger.error(
             { videoId, error },
             "Face extraction failed in background"

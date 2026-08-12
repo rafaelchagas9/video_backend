@@ -17,6 +17,7 @@ import { createVideoEventContext } from "@/modules/events/events.types";
 import { videosService } from "@/modules/videos/videos.service";
 import { getFaceRecognitionClient } from "./face-recognition.client";
 import { recordPerfStage } from "@/utils/performance-profiler";
+import { captureTelemetryException } from "@/utils/telemetry";
 import type {
   ExtractedFrame,
   FaceProcessingOptions,
@@ -351,6 +352,13 @@ export class FaceExtractionQueueService {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+
+      captureTelemetryException(error, {
+        source: "face_extraction_job",
+        videoId,
+        jobId,
+        frameCount: frames.length,
+      });
 
       await db
         .update(faceExtractionJobsTable)

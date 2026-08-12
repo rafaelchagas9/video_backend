@@ -935,7 +935,7 @@ describe("Fastify app integration", () => {
       .insert(creatorFaceEmbeddingsTable)
       .values({
         creatorId: creator.id,
-        embedding: JSON.stringify([0.1, 0.2, 0.3]),
+        embedding: JSON.stringify(Array.from({ length: 512 }, () => 0.1)),
         sourceType: "manual_upload",
         isPrimary: true,
         detScore: 0.99,

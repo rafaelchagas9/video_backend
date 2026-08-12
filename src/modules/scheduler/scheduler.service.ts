@@ -9,6 +9,7 @@ import { contentStatsService } from "@/modules/stats/stats.content.service";
 import { usageStatsService } from "@/modules/stats/stats.usage.service";
 import { statsCleanupService } from "@/modules/stats/stats.cleanup.service";
 import { logger } from "@/utils/logger";
+import { captureTelemetryException } from "@/utils/telemetry";
 
 interface ScheduledTaskInfo {
   directoryId: number;
@@ -49,8 +50,8 @@ export class SchedulerService {
       .where(
         and(
           eq(watchedDirectoriesTable.isActive, true),
-          eq(watchedDirectoriesTable.autoScan, true),
-        ),
+          eq(watchedDirectoriesTable.autoScan, true)
+        )
       );
 
     for (const dir of directories) {
@@ -66,7 +67,7 @@ export class SchedulerService {
         scheduledDirectories: directories.length,
         systemTasks: this.systemTasks.size,
       },
-      "Scheduler started",
+      "Scheduler started"
     );
   }
 
@@ -103,7 +104,7 @@ export class SchedulerService {
   scheduleDirectory(
     directoryId: number,
     intervalMinutes: number,
-    path?: string,
+    path?: string
   ): void {
     // Remove existing schedule if any
     this.unscheduleDirectory(directoryId);
@@ -114,12 +115,17 @@ export class SchedulerService {
     const cronJob = cron.schedule(cronExpression, async () => {
       logger.info(
         { directoryId, path, intervalMinutes, triggeredBy: "scheduler" },
-        `Running scheduled scan (interval: ${intervalMinutes}min)`,
+        `Running scheduled scan (interval: ${intervalMinutes}min)`
       );
       try {
         const result = await watcherService.scanDirectory(directoryId);
         logger.info({ directoryId, path, result }, "Scheduled scan completed");
       } catch (error) {
+        captureTelemetryException(error, {
+          source: "scheduled_job",
+          job: "directory_scan",
+          directoryId,
+        });
         logger.error({ directoryId, path, error }, "Scheduled scan failed");
       }
     });
@@ -132,7 +138,7 @@ export class SchedulerService {
 
     logger.info(
       { directoryId, path, intervalMinutes, cronExpression },
-      "Directory scheduled for scanning",
+      "Directory scheduled for scanning"
     );
   }
 
@@ -154,7 +160,7 @@ export class SchedulerService {
   updateSchedule(
     directoryId: number,
     intervalMinutes: number,
-    path?: string,
+    path?: string
   ): void {
     if (this.tasks.has(directoryId)) {
       this.scheduleDirectory(directoryId, intervalMinutes, path);
@@ -195,9 +201,13 @@ export class SchedulerService {
         await storageStatsService.createStorageSnapshot();
         logger.info({ job: "storage-stats" }, "Storage snapshot completed");
       } catch (error) {
+        captureTelemetryException(error, {
+          source: "scheduled_job",
+          job: "storage_stats",
+        });
         logger.error(
           { job: "storage-stats", error },
-          "Storage snapshot failed",
+          "Storage snapshot failed"
         );
       }
     });
@@ -219,9 +229,13 @@ export class SchedulerService {
         ]);
         logger.info({ job: "daily-stats" }, "Daily stats snapshots completed");
       } catch (error) {
+        captureTelemetryException(error, {
+          source: "scheduled_job",
+          job: "daily_stats",
+        });
         logger.error(
           { job: "daily-stats", error },
-          "Daily stats snapshots failed",
+          "Daily stats snapshots failed"
         );
       }
     });
@@ -239,9 +253,13 @@ export class SchedulerService {
         const result = await statsCleanupService.cleanupOldSnapshots();
         logger.info(
           { job: "stats-cleanup", result },
-          "Stats cleanup completed",
+          "Stats cleanup completed"
         );
       } catch (error) {
+        captureTelemetryException(error, {
+          source: "scheduled_job",
+          job: "stats_cleanup",
+        });
         logger.error({ job: "stats-cleanup", error }, "Stats cleanup failed");
       }
     });
@@ -260,7 +278,7 @@ export class SchedulerService {
           "stats-cleanup (weekly)",
         ],
       },
-      "Stats jobs scheduled",
+      "Stats jobs scheduled"
     );
   }
 

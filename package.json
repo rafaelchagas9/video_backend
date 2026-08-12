@@ -8,7 +8,8 @@
     "test:unit": "for f in tests/*.test.ts; do echo \"== $f ==\"; bun test --max-concurrency=1 \"$f\" || exit 1; done",
     "test:integration": "for f in tests/integration/*.integration.test.ts; do echo \"== $f ==\"; bun test --max-concurrency=1 \"$f\" || exit 1; done",
     "start": "bun src/index.ts",
-    "build": "bun build src/index.ts --outdir dist --target bun",
+    "build": "bun build src/index.ts --outdir dist --target bun --sourcemap=external",
+    "posthog:sourcemaps": "bun scripts/publish-posthog-sourcemaps.ts",
     "start:prod": "NODE_ENV=production NODE_OPTIONS='--enable-source-maps' bun dist/index.js",
     "prestart:prod": "bun run validate:env && bun run check:deps && bun run db:migrate",
     "validate:env": "bun scripts/validate-env.ts",
@@ -41,6 +42,10 @@
     "@fastify/websocket": "^11.2.0",
     "@napi-rs/canvas": "^1.0.3",
     "@node-rs/xxhash": "^1.7.6",
+    "@opentelemetry/api-logs": "^0.221.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.221.0",
+    "@opentelemetry/resources": "^2.10.0",
+    "@opentelemetry/sdk-logs": "^0.221.0",
     "bcrypt": "^6.0.0",
     "better-auth": "^1.6.11",
     "chokidar": "^5.0.0",
@@ -59,6 +64,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@posthog/cli": "^0.10.0",
     "@types/bcrypt": "^6.0.0",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node-cron": "^3.0.11",
@@ -72,5 +78,8 @@
     "lint-staged": "^16.2.7",
     "prettier": "^3.7.4",
     "typescript-eslint": "^8.52.0"
-  }
+  },
+  "trustedDependencies": [
+    "@posthog/cli"
+  ]
 }
