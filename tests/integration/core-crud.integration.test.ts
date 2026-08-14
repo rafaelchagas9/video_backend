@@ -84,6 +84,74 @@ describe("Fastify app integration", () => {
     });
   });
 
+  it("preserves edit history and atomically blocks source deletion while a job is active", async () => {
+    const activeSource = await seedVideoFixture("active-edit-source.mp4");
+    const otherSource = await seedVideoFixture("bulk-delete-peer.mp4");
+    const { db } = await import("@/config/drizzle");
+    const { editJobsTable, videosTable } = await import("@/database/schema");
+    const { eq, inArray } = await import("drizzle-orm");
+
+    const [job] = await db
+      .insert(editJobsTable)
+      .values({
+        videoId: activeSource.videoId,
+        activeVideoId: activeSource.videoId,
+        status: "queued",
+        progress: 0,
+        outputConfig: {
+          directory_id: activeSource.directoryId,
+          file_name: "history-preserved.mkv",
+        },
+        timelineConfig: { segments: [{ start: 0, end: 10 }] },
+      })
+      .returning({ id: editJobsTable.id });
+
+    const blocked = await ctx!.authInject({
+      method: "POST",
+      url: "/api/videos/bulk/delete",
+      payload: { ids: [activeSource.videoId, otherSource.videoId] },
+    });
+    expect(blocked.statusCode).toBe(409);
+
+    const videosAfterBlockedDelete = await db
+      .select({ id: videosTable.id })
+      .from(videosTable)
+      .where(
+        inArray(videosTable.id, [activeSource.videoId, otherSource.videoId])
+      );
+    expect(videosAfterBlockedDelete).toHaveLength(2);
+
+    await db
+      .update(editJobsTable)
+      .set({
+        status: "cancelled",
+        activeVideoId: null,
+        completedAt: new Date(),
+      })
+      .where(eq(editJobsTable.id, job!.id));
+
+    const removed = await ctx!.authInject({
+      method: "POST",
+      url: "/api/videos/bulk/delete",
+      payload: { ids: [activeSource.videoId, otherSource.videoId] },
+    });
+    expect(removed.statusCode).toBe(200);
+
+    const [historicalJob] = await db
+      .select({
+        videoId: editJobsTable.videoId,
+        activeVideoId: editJobsTable.activeVideoId,
+        status: editJobsTable.status,
+      })
+      .from(editJobsTable)
+      .where(eq(editJobsTable.id, job!.id));
+    expect(historicalJob).toEqual({
+      videoId: activeSource.videoId,
+      activeVideoId: null,
+      status: "cancelled",
+    });
+  });
+
   it("creates, lists, reads, updates, scans, stats, and deletes directories", async () => {
     const create = await ctx!.authInject({
       method: "POST",

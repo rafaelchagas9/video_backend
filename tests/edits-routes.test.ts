@@ -103,6 +103,8 @@ mock.module("fluent-ffmpeg", () => ({
               codec_name: string;
               channels: number;
               sample_rate: string;
+              start_time: string;
+              tags: { DURATION: string };
             }>;
           }
         ) => void
@@ -114,6 +116,8 @@ mock.module("fluent-ffmpeg", () => ({
               codec_name: "aac",
               channels: 2,
               sample_rate: "48000",
+              start_time: "0",
+              tags: { DURATION: "00:02:00.000" },
             },
           ],
         })
@@ -172,7 +176,16 @@ describe("edit HTTP contract", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toMatchObject({
-      audio: { present: true, codec: "aac", channels: 2, sample_rate: 48000 },
+      audio: {
+        present: true,
+        codec: "aac",
+        channels: 2,
+        sample_rate: 48000,
+        start_time: 0,
+        duration: 120,
+        end_time: 120,
+        covers_video: true,
+      },
       capabilities: {
         timeline: {
           single_source_only: true,

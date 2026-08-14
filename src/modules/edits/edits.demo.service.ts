@@ -39,6 +39,14 @@ export class EditsDemoService {
         codec: video.audio_codec ?? null,
         channels: hasAudio ? 2 : null,
         sample_rate: hasAudio ? 48_000 : null,
+        start_time: hasAudio ? 0 : null,
+        duration: hasAudio ? video.duration_seconds : null,
+        end_time: hasAudio ? video.duration_seconds : null,
+        covers_video: hasAudio
+          ? video.duration_seconds === null
+            ? null
+            : true
+          : false,
       },
       storyboard_vtt: video.storyboard
         ? `/api/videos/${videoId}/thumbnails.vtt`
@@ -175,6 +183,15 @@ export class EditsDemoService {
     };
     demoRepository.putResource(RESOURCE_KIND, id, cancelled);
     return cancelled;
+  }
+
+  hasActiveJobsForVideos(videoIds: number[]): boolean {
+    const ids = new Set(videoIds);
+    return this.jobs().some(
+      (job) =>
+        ids.has(job.videoId) &&
+        ["pending", "queued", "running"].includes(job.status),
+    );
   }
 
   private jobs(): EditJob[] {

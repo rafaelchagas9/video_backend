@@ -26,6 +26,10 @@ import type {
   EditTransformConfig,
 } from "./edits.types";
 import type { Video } from "@/modules/videos/videos.types";
+import {
+  probeRenderedEditOutput,
+  RenderedEditValidationError,
+} from "./edits.render-validation";
 
 export { calculateExpectedDuration } from "./edits.validation";
 
@@ -192,20 +196,21 @@ export function buildEditFilterComplex(
     }
 
     if (includeAudio) {
+      const segmentDuration = sourceDuration / speed;
       const audioFilters = [
         `[${index}:a]atrim=duration=${formatNumber(sourceDuration)}`,
         "asetpts=PTS-STARTPTS",
         ...buildAtempoChain(speed),
+        `apad=whole_dur=${formatNumber(segmentDuration)}`,
+        `atrim=duration=${formatNumber(segmentDuration)}`,
+        "asetpts=PTS-STARTPTS",
       ];
-      filters.push(`${audioFilters.join(",")}[a${index}]`);
-      let audioLabel = `[a${index}]`;
       const segmentAudioFilters: string[] = [];
       const segmentAudio = segment.audio;
       const volume = segmentAudio?.muted ? 0 : (segmentAudio?.volume ?? 1);
       if (volume !== 1) {
         segmentAudioFilters.push(`volume=${formatNumber(volume)}`);
       }
-      const segmentDuration = (segment.end - segment.start) / speed;
       const fadeIn = segmentAudio?.fade_in_seconds ?? 0;
       if (fadeIn > 0) {
         segmentAudioFilters.push(`afade=t=in:st=0:d=${formatNumber(fadeIn)}`);
@@ -217,13 +222,9 @@ export function buildEditFilterComplex(
           `afade=t=out:st=${formatNumber(start)}:d=${formatNumber(fadeOut)}`
         );
       }
-      if (segmentAudioFilters.length > 0) {
-        filters.push(
-          `${audioLabel}${segmentAudioFilters.join(",")}[asegment${index}]`
-        );
-        audioLabel = `[asegment${index}]`;
-      }
-      concatInputs.push(`${videoLabel}${audioLabel}`);
+      audioFilters.push(...segmentAudioFilters);
+      filters.push(`${audioFilters.join(",")}[asegment${index}]`);
+      concatInputs.push(`${videoLabel}[asegment${index}]`);
     } else {
       concatInputs.push(videoLabel);
     }
@@ -260,7 +261,12 @@ export function buildEditFilterComplex(
   );
 
   if (includeAudio) {
-    const audioFilters: string[] = [];
+    const expectedDuration = calculateExpectedDuration(timeline);
+    const audioFilters: string[] = [
+      `apad=whole_dur=${formatNumber(expectedDuration)}`,
+      `atrim=duration=${formatNumber(expectedDuration)}`,
+      "asetpts=PTS-STARTPTS",
+    ];
     const volume = timeline.audio?.volume ?? 1;
     if (volume !== 1) audioFilters.push(`volume=${formatNumber(volume)}`);
     const fadeIn = timeline.audio?.fade_in_seconds ?? 0;
@@ -269,7 +275,7 @@ export function buildEditFilterComplex(
     }
     const fadeOut = timeline.audio?.fade_out_seconds ?? 0;
     if (fadeOut > 0) {
-      const start = Math.max(0, calculateExpectedDuration(timeline) - fadeOut);
+      const start = Math.max(0, expectedDuration - fadeOut);
       audioFilters.push(
         `afade=t=out:st=${formatNumber(start)}:d=${formatNumber(fadeOut)}`
       );
@@ -505,6 +511,22 @@ export class EditsProcessor {
       );
 
       if (signal.aborted) throw new EditCancelledError();
+      const validationStart = Date.now();
+      const renderedDurations = await probeRenderedEditOutput(
+        tempOutputPath,
+        calculateExpectedDuration(timelineConfig),
+        sourceVideo.audio_codec !== null &&
+          timelineConfig.audio?.muted !== true,
+        signal
+      );
+      await recordStageSafely(
+        { scenario: "editing", videoId, jobId, mode: "process_job" },
+        "validate_output",
+        Date.now() - validationStart,
+        { ...renderedDurations }
+      );
+
+      if (signal.aborted) throw new EditCancelledError();
       const currentJob = await editsService.getById(jobId);
       if (currentJob.status !== "running") throw new EditCancelledError();
 
@@ -564,6 +586,9 @@ export class EditsProcessor {
               finalOutputPath
             );
           } catch (rollbackError) {
+            // A failed catalog rollback can mean another edit now depends on
+            // this output. Preserve its file instead of creating a broken row.
+            publishedByThisJob = false;
             logger.error(
               { rollbackError, jobId, outputVideoId: registeredVideoId },
               "Failed to roll back edit output catalog entry"
@@ -604,11 +629,19 @@ export class EditsProcessor {
                   };
                 })()
               : {};
+          const validationProperties =
+            error instanceof RenderedEditValidationError
+              ? {
+                  renderedEditValidationReason: error.reason,
+                  $exception_fingerprint: `edit_output_validation:${error.reason}`,
+                }
+              : {};
           captureTelemetryException(error, {
             source: "edit_job",
             jobId,
             videoId,
             ...ffmpegProperties,
+            ...validationProperties,
           });
         } else {
           logger.info({ jobId }, "Edit job cancelled");

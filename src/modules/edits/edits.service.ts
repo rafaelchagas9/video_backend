@@ -127,6 +127,7 @@ export class EditsService {
       .insert(editJobsTable)
       .values({
         videoId,
+        activeVideoId: videoId,
         status: "queued",
         outputConfig: canonicalInput.output,
         timelineConfig: canonicalInput.timeline,
@@ -238,6 +239,7 @@ export class EditsService {
         progress: 100,
         completedAt: new Date(),
         errorMessage: null,
+        activeVideoId: null,
       })
       .where(and(eq(editJobsTable.id, id), eq(editJobsTable.status, "running")))
       .returning({ id: editJobsTable.id });
@@ -251,6 +253,7 @@ export class EditsService {
         status: "failed",
         errorMessage,
         completedAt: new Date(),
+        activeVideoId: null,
       })
       .where(
         and(
@@ -287,6 +290,9 @@ export class EditsService {
     if (TERMINAL_STATUSES.includes(status) && !updates.completedAt) {
       updateData.completedAt = new Date();
     }
+    if (TERMINAL_STATUSES.includes(status)) {
+      updateData.activeVideoId = null;
+    }
     await db
       .update(editJobsTable)
       .set(updateData)
@@ -306,7 +312,11 @@ export class EditsService {
 
     const [cancelled] = await db
       .update(editJobsTable)
-      .set({ status: "cancelled", completedAt: new Date() })
+      .set({
+        status: "cancelled",
+        completedAt: new Date(),
+        activeVideoId: null,
+      })
       .where(
         and(
           eq(editJobsTable.id, id),
@@ -340,7 +350,7 @@ export class EditsService {
     const rows = await db
       .select({
         id: editJobsTable.id,
-        videoId: editJobsTable.videoId,
+        activeVideoId: editJobsTable.activeVideoId,
         outputConfig: editJobsTable.outputConfig,
         timelineConfig: editJobsTable.timelineConfig,
       })
@@ -348,12 +358,17 @@ export class EditsService {
       .where(eq(editJobsTable.status, "queued"))
       .orderBy(editJobsTable.createdAt);
 
-    return rows.map((row) => ({
-      jobId: row.id,
-      videoId: row.videoId,
-      outputConfig: row.outputConfig as EditOutputConfig,
-      timelineConfig: row.timelineConfig as EditTimelineConfig,
-    }));
+    return rows.map((row) => {
+      if (row.activeVideoId === null) {
+        throw new Error(`Active edit job ${row.id} has no source video`);
+      }
+      return {
+        jobId: row.id,
+        videoId: row.activeVideoId,
+        outputConfig: row.outputConfig as EditOutputConfig,
+        timelineConfig: row.timelineConfig as EditTimelineConfig,
+      };
+    });
   }
 
   private mapToDto(row: typeof editJobsTable.$inferSelect): EditJob {

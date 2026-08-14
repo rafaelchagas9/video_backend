@@ -204,6 +204,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         response: {
           200: messageResponseSchema,
           401: errorResponseSchema,
+          409: errorResponseSchema,
         },
       },
     },
@@ -599,6 +600,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
           200: messageResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
+          409: errorResponseSchema,
         },
       },
     },

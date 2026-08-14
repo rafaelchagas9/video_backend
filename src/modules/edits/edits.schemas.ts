@@ -215,6 +215,10 @@ export const editingMetadataResponseSchema = z.object({
       codec: z.string().nullable(),
       channels: z.number().nullable(),
       sample_rate: z.number().nullable(),
+      start_time: z.number().nullable(),
+      duration: z.number().nullable(),
+      end_time: z.number().nullable(),
+      covers_video: z.boolean().nullable(),
     }),
     storyboard_vtt: z.string().nullable(),
     capabilities: z.object({

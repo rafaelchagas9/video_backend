@@ -11,12 +11,15 @@ import {
   videoFaceDetectionsTable,
   faceImagesTable,
   artworkAssetsTable,
+  editJobsTable,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
+import { ConflictError, isForeignKeyViolation } from "@/utils/errors";
 import type { ListVideosOptions } from "./videos.types";
 import { buildVideoFilters } from "./videos.query-builder";
 import { env } from "@/config/env";
 import { videosDemoService } from "./videos.demo.service";
+import { editsDemoService } from "@/modules/edits/edits.demo.service";
 import {
   demoRepository,
   demoSchema,
@@ -28,6 +31,28 @@ import {
  * Service for bulk video operations
  */
 export class VideosBulkService {
+  async assertNoActiveEditJobs(videoIds: number[]): Promise<void> {
+    if (videoIds.length === 0) return;
+    if (env.DEMO_MODE) {
+      if (editsDemoService.hasActiveJobsForVideos(videoIds)) {
+        throw new ConflictError(
+          "A video cannot be deleted while an edit job is active"
+        );
+      }
+      return;
+    }
+    const [activeJob] = await db
+      .select({ id: editJobsTable.id })
+      .from(editJobsTable)
+      .where(inArray(editJobsTable.activeVideoId, videoIds))
+      .limit(1);
+    if (activeJob) {
+      throw new ConflictError(
+        "A video cannot be deleted while an edit job is active"
+      );
+    }
+  }
+
   /**
    * Delete multiple videos (includes file cleanup via main service)
    * Note: This should be called from the main videosService.delete() method
@@ -35,39 +60,56 @@ export class VideosBulkService {
    */
   async bulkDelete(ids: number[]): Promise<void> {
     if (ids.length === 0) return;
+    await this.assertNoActiveEditJobs(ids);
     if (env.DEMO_MODE) {
       for (const id of ids) videosDemoService.delete(id);
       return;
     }
 
     try {
+      // Reject the entire request before touching any database row or file.
       // 1. Fetch source file paths for the videos being deleted
       const videos = await db
         .select({ filePath: videosTable.filePath })
         .from(videosTable)
         .where(inArray(videosTable.id, ids));
 
-      // 2. Delete derived artifact files (thumbnails, storyboards, face images)
-      await this.deleteVideoArtifactFiles(ids);
+      // 2. Resolve derived files while their catalog rows still exist.
+      const artifactPaths = await this.getVideoArtifactPaths(ids);
 
-      // 3. Delete source video files (no-op for already-removed/unavailable files)
+      // 3. Delete catalog rows first. The active-video FK is the race-safe
+      // backstop: no physical file is touched if a job became active meanwhile.
+      await db.delete(videosTable).where(inArray(videosTable.id, ids));
+
+      // 4. Delete source and derived files (no-op when already unavailable).
       const fs = await import("fs");
-      for (const video of videos) {
-        if (video.filePath && fs.existsSync(video.filePath)) {
+      const paths = [
+        ...videos.map((video) => video.filePath),
+        ...artifactPaths,
+      ].filter((path): path is string => Boolean(path));
+      for (const path of paths) {
+        if (fs.existsSync(path)) {
           try {
-            fs.unlinkSync(video.filePath);
+            fs.unlinkSync(path);
           } catch (error) {
             logger.warn(
-              { error, path: video.filePath },
+              { error, path },
               "Failed to delete video file in bulk operation"
             );
           }
         }
       }
-
-      // 4. Delete videos from database (CASCADE handles relations automatically)
-      await db.delete(videosTable).where(inArray(videosTable.id, ids));
     } catch (error) {
+      if (error instanceof ConflictError) throw error;
+      if (
+        isForeignKeyViolation(error) &&
+        this.getConstraintName(error) ===
+          "edit_jobs_active_video_id_videos_id_fk"
+      ) {
+        throw new ConflictError(
+          "A video cannot be deleted while an edit job is active"
+        );
+      }
       logger.error({ error, ids }, "Failed to execute bulk delete operation");
       throw error;
     }
@@ -85,6 +127,21 @@ export class VideosBulkService {
     if (videoIds.length === 0) return;
     if (env.DEMO_MODE) return;
 
+    const paths = await this.getVideoArtifactPaths(videoIds);
+
+    const fs = await import("fs");
+    for (const path of paths) {
+      if (fs.existsSync(path)) {
+        try {
+          fs.unlinkSync(path);
+        } catch (error) {
+          logger.warn({ error, path }, "Failed to delete video artifact file");
+        }
+      }
+    }
+  }
+
+  private async getVideoArtifactPaths(videoIds: number[]): Promise<string[]> {
     const [thumbnails, storyboards, faceImages, artworkAssets] =
       await Promise.all([
         db
@@ -127,16 +184,20 @@ export class VideosBulkService {
       if (artworkAsset.filePath) paths.push(artworkAsset.filePath);
     }
 
-    const fs = await import("fs");
-    for (const path of paths) {
-      if (fs.existsSync(path)) {
-        try {
-          fs.unlinkSync(path);
-        } catch (error) {
-          logger.warn({ error, path }, "Failed to delete video artifact file");
-        }
-      }
+    return paths;
+  }
+
+  private getConstraintName(error: unknown): string | undefined {
+    let current: unknown = error;
+    const seen = new Set<object>();
+    while (current && typeof current === "object") {
+      if (seen.has(current)) return undefined;
+      seen.add(current);
+      const constraint = (current as { constraint?: unknown }).constraint;
+      if (typeof constraint === "string") return constraint;
+      current = (current as { cause?: unknown }).cause;
     }
+    return undefined;
   }
 
   /**

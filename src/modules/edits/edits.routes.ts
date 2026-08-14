@@ -10,6 +10,11 @@ import { editsService } from "./edits.service";
 import { editsDemoService } from "./edits.demo.service";
 import type { EditJob } from "./edits.types";
 import {
+  getProbeStreamDuration,
+  getProbeStreamStart,
+  type EditProbeStream,
+} from "./edits.render-validation";
+import {
   cancelEditJobResponseSchema,
   createEditJobBodySchema,
   editingCapabilities,
@@ -98,6 +103,10 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
         codec: string | null;
         channels: number | null;
         sample_rate: number | null;
+        start_time: number | null;
+        duration: number | null;
+        end_time: number | null;
+        covers_video: boolean | null;
       }>((resolve) => {
         ffmpeg.ffprobe(video.file_path, (err, metadata) => {
           if (err) {
@@ -106,12 +115,33 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
               codec: video.audio_codec,
               channels: null,
               sample_rate: null,
+              start_time: null,
+              duration: null,
+              end_time: null,
+              covers_video: null,
             });
             return;
           }
           const audio = metadata.streams.find(
             (stream) => stream.codec_type === "audio"
           );
+          const audioStart = audio
+            ? getProbeStreamStart(audio as EditProbeStream)
+            : null;
+          const audioDuration = audio
+            ? getProbeStreamDuration(audio as EditProbeStream)
+            : null;
+          const audioEnd =
+            audioStart !== null && audioDuration !== null
+              ? audioStart + audioDuration
+              : null;
+          const coversVideo = !audio
+            ? false
+            : audioStart !== null &&
+                audioEnd !== null &&
+                video.duration_seconds !== null
+              ? audioStart <= 0.5 && audioEnd >= video.duration_seconds - 0.5
+              : null;
           resolve({
             present: Boolean(audio),
             codec: audio?.codec_name ?? video.audio_codec,
@@ -119,6 +149,10 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
             sample_rate: audio?.sample_rate
               ? Number.parseInt(audio.sample_rate.toString(), 10)
               : null,
+            start_time: audioStart,
+            duration: audioDuration,
+            end_time: audioEnd,
+            covers_video: coversVideo,
           });
         });
       });

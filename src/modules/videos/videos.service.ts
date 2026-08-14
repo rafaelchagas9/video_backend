@@ -469,26 +469,7 @@ export class VideosService {
     }
 
     const video = await this.findById(id); // Ensure exists
-
-    // Delete derived artifact files (thumbnails, storyboards, face images)
-    await videosBulkService.deleteVideoArtifactFiles([id]);
-
-    const fs = await import("fs");
-
-    // Delete the source video file (no-op when already removed/unavailable)
-    if (video.file_path && fs.existsSync(video.file_path)) {
-      try {
-        fs.unlinkSync(video.file_path);
-      } catch (error) {
-        logger.warn(
-          { error, path: video.file_path },
-          "Failed to delete video file"
-        );
-      }
-    }
-
-    // Delete the video database record (CASCADE will handle relationships)
-    await db.delete(videosTable).where(eq(videosTable.id, id));
+    await videosBulkService.bulkDelete([video.id]);
 
     // Enrichment suggestions/runs are polymorphic (no FK) — clean up explicitly.
     const { enrichmentService } =
@@ -1009,6 +990,7 @@ export class VideosService {
     expectedFilePath: string
   ): Promise<boolean> {
     if (env.DEMO_MODE) return false;
+    await videosBulkService.assertNoActiveEditJobs([videoId]);
     const [deleted] = await db
       .delete(videosTable)
       .where(

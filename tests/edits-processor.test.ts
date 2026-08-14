@@ -13,6 +13,10 @@ import type {
   CreateEditJobInput,
   EditTimelineConfig,
 } from "@/modules/edits/edits.types";
+import {
+  RenderedEditValidationError,
+  validateRenderedEditProbe,
+} from "@/modules/edits/edits.render-validation";
 
 const timeline: EditTimelineConfig = {
   segments: [
@@ -74,8 +78,12 @@ describe("edit processor helpers", () => {
     expect(graph.filterComplex).toContain(
       "[1:v]trim=duration=5,setpts=(PTS-STARTPTS)/0.5[v1]"
     );
-    expect(graph.filterComplex).toContain("atempo=2[a0]");
-    expect(graph.filterComplex).toContain("atempo=0.5[a1]");
+    expect(graph.filterComplex).toContain(
+      "atempo=2,apad=whole_dur=5,atrim=duration=5,asetpts=PTS-STARTPTS[asegment0]"
+    );
+    expect(graph.filterComplex).toContain(
+      "atempo=0.5,apad=whole_dur=10,atrim=duration=10,asetpts=PTS-STARTPTS[asegment1]"
+    );
     expect(graph.filterComplex).toContain("concat=n=2:v=1:a=1");
     expect(graph.filterComplex).toContain(
       "crop=w=max(2\\,trunc(iw*0.8/2)*2):h=max(2\\,trunc(ih*0.6/2)*2):x=min(trunc(iw*0.1/2)*2\\,iw-ow):y=min(trunc(ih*0.2/2)*2\\,ih-oh)"
@@ -125,9 +133,11 @@ describe("edit processor helpers", () => {
       "[v1]hwdownload,format=nv12,scale=w=1920:h=1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=w=1920:h=1080:x=(ow-iw)/2:y=(oh-ih)/2:color=black,setsar=1,settb=AVTB,format=yuv420p[vsegment1]"
     );
     expect(graph.filterComplex).toContain(
-      "[a0]volume=0.5,afade=t=in:st=0:d=0.5,afade=t=out:st=4:d=1[asegment0]"
+      "apad=whole_dur=5,atrim=duration=5,asetpts=PTS-STARTPTS,volume=0.5,afade=t=in:st=0:d=0.5,afade=t=out:st=4:d=1[asegment0]"
     );
-    expect(graph.filterComplex).toContain("[a1]volume=0[asegment1]");
+    expect(graph.filterComplex).toContain(
+      "apad=whole_dur=4,atrim=duration=4,asetpts=PTS-STARTPTS,volume=0[asegment1]"
+    );
     expect(graph.filterComplex).toContain(
       "[vsegment0][asegment0][vsegment1][asegment1]concat=n=2:v=1:a=1[vconcat][aconcat]"
     );
@@ -135,14 +145,14 @@ describe("edit processor helpers", () => {
       "[vconcat]hflip,vflip,format=nv12,hwupload[vout]"
     );
     expect(graph.filterComplex).toContain(
-      "[aconcat]volume=1.25,afade=t=out:st=7:d=2[aout]"
+      "[aconcat]apad=whole_dur=9,atrim=duration=9,asetpts=PTS-STARTPTS,volume=1.25,afade=t=out:st=7:d=2[aout]"
     );
 
     expect(graph.filterComplex.indexOf("[v0]crop=")).toBeLessThan(
       graph.filterComplex.indexOf("[vsegment0][asegment0]")
     );
-    expect(graph.filterComplex.indexOf("[a0]volume=0.5")).toBeLessThan(
-      graph.filterComplex.indexOf("[aconcat]volume=1.25")
+    expect(graph.filterComplex.indexOf("volume=0.5")).toBeLessThan(
+      graph.filterComplex.indexOf("[aconcat]apad=whole_dur=9")
     );
   });
 
@@ -325,8 +335,128 @@ describe("edit processor helpers", () => {
     expect(graph).toContain("[0:v]trim=duration=7,setpts=PTS-STARTPTS[v0]");
     expect(graph).toContain("[1:v]trim=duration=3,setpts=(PTS-STARTPTS)/2[v1]");
     expect(graph).toContain(
-      "[v0][a0][v1][a1]concat=n=2:v=1:a=1[vconcat][aconcat]"
+      "[v0][asegment0][v1][asegment1]concat=n=2:v=1:a=1[vconcat][aconcat]"
     );
+  });
+
+  it("pads every selection independently so later audio cannot shift across silent ranges", () => {
+    const graph = buildEditFilterComplex(
+      {
+        segments: [
+          { start: 0, end: 4 },
+          { start: 10, end: 13 },
+          { start: 3, end: 5 },
+          { start: 20, end: 22 },
+        ],
+      },
+      true
+    );
+
+    for (const [index, duration] of [4, 3, 2, 2].entries()) {
+      expect(graph.filterComplex).toContain(
+        `apad=whole_dur=${duration},atrim=duration=${duration},asetpts=PTS-STARTPTS[asegment${index}]`
+      );
+    }
+    expect(graph.filterComplex).toContain(
+      "[v0][asegment0][v1][asegment1][v2][asegment2][v3][asegment3]concat=n=4:v=1:a=1"
+    );
+  });
+
+  it("validates full audio coverage from Matroska duration tags", () => {
+    expect(
+      validateRenderedEditProbe(
+        {
+          format: { duration: "10.021" },
+          streams: [
+            { codec_type: "video", tags: { DURATION: "00:00:10.000" } },
+            {
+              codec_type: "audio",
+              start_time: "-0.007",
+              tags: { DURATION: "00:00:10.008" },
+            },
+          ],
+        },
+        10,
+        true
+      )
+    ).toMatchObject({ videoDuration: 10, audioDuration: 10.008 });
+  });
+
+  it("rejects audio whose endpoint does not match the rendered video", () => {
+    expect(() =>
+      validateRenderedEditProbe(
+        {
+          format: { duration: 10 },
+          streams: [
+            { codec_type: "video", duration: 10 },
+            { codec_type: "audio", start_time: 2, duration: 10 },
+          ],
+        },
+        10,
+        true
+      )
+    ).toThrow("audio duration does not match");
+  });
+
+  it("rejects a successful render whose expected audio ends early", () => {
+    expect(() =>
+      validateRenderedEditProbe(
+        {
+          format: { duration: 10 },
+          streams: [
+            { codec_type: "video", duration: 10 },
+            { codec_type: "audio", duration: 4 },
+          ],
+        },
+        10,
+        true
+      )
+    ).toThrow(RenderedEditValidationError);
+
+    try {
+      validateRenderedEditProbe(
+        {
+          format: { duration: 10 },
+          streams: [
+            { codec_type: "video", duration: 10 },
+            { codec_type: "audio", duration: 4 },
+          ],
+        },
+        10,
+        true
+      );
+    } catch (error) {
+      expect((error as RenderedEditValidationError).reason).toBe(
+        "audio_duration_mismatch"
+      );
+    }
+  });
+
+  it("enforces video-only output when audio is intentionally disabled", () => {
+    expect(() =>
+      validateRenderedEditProbe(
+        {
+          format: { duration: 5 },
+          streams: [{ codec_type: "video", duration: 5 }],
+        },
+        5,
+        false
+      )
+    ).not.toThrow();
+
+    expect(() =>
+      validateRenderedEditProbe(
+        {
+          format: { duration: 5 },
+          streams: [
+            { codec_type: "video", duration: 5 },
+            { codec_type: "audio", duration: 5 },
+          ],
+        },
+        5,
+        false
+      )
+    ).toThrow("unexpectedly contains audio");
   });
 
   it("keeps hardware frames on the fast path and bridges software spatial filters", () => {

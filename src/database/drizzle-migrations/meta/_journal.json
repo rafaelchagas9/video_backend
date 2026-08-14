@@ -218,6 +218,13 @@
       "when": 1785513676602,
       "tag": "0030_sudden_praxagora",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1786733356601,
+      "tag": "0031_silky_carlie_cooper",
+      "breakpoints": true
     }
   ]
 }

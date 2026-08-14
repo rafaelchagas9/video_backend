@@ -115,12 +115,20 @@ describe("SQLite demo edit simulation", () => {
       codec: "aac",
       channels: 2,
       sample_rate: 48_000,
+      start_time: 0,
+      duration: 100,
+      end_time: 100,
+      covers_video: true,
     });
     expect((await service.editingMetadata(2)).audio).toEqual({
       present: false,
       codec: null,
       channels: null,
       sample_rate: null,
+      start_time: null,
+      duration: null,
+      end_time: null,
+      covers_video: false,
     });
   });
 
