@@ -15,6 +15,7 @@ import {
   messageResponseSchema,
   errorResponseSchema,
   bulkUpdatePlaylistVideosSchema,
+  playlistQuerySchema,
 } from "./playlists.schemas";
 
 export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -61,6 +62,7 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["playlists"],
         summary: "List playlists",
         description: "Returns all playlists owned by the user.",
+        querystring: playlistQuerySchema,
         response: {
           200: playlistListResponseSchema,
           401: errorResponseSchema,
@@ -68,7 +70,10 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const playlists = await playlistsService.list(request.user!.id);
+      const playlists = await playlistsService.list(
+        request.user!.id,
+        request.query.include ?? [],
+      );
 
       return reply.send({
         success: true,
@@ -86,6 +91,7 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
         summary: "Get playlist by ID",
         description: "Returns details of a specific playlist.",
         params: idParamSchema,
+        querystring: playlistQuerySchema,
         response: {
           200: playlistResponseSchema,
           401: errorResponseSchema,
@@ -94,7 +100,11 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const playlist = await playlistsService.findById(request.params.id);
+      const playlist = await playlistsService.findById(
+        request.params.id,
+        request.user!.id,
+        request.query.include ?? [],
+      );
 
       return reply.send({
         success: true,
@@ -110,7 +120,8 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["playlists"],
         summary: "Update a playlist",
-        description: "Updates playlist name or description.",
+        description:
+          "Updates playlist metadata. artwork_source_video_id must reference a video that already belongs to this playlist.",
         params: idParamSchema,
         body: updatePlaylistSchema,
         response: {

@@ -51,6 +51,7 @@ export interface TriageBulkActionsInput {
     removeTagIds?: number[];
     addStudioIds?: number[];
     removeStudioIds?: number[];
+    studioAssignmentStatus?: "confirmed_none" | "unknown";
     markTagged?: boolean;
   };
 }

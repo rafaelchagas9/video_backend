@@ -1,0 +1,1 @@
+ALTER TABLE `demo_videos` ADD `studio_absence_confirmed_at` text;

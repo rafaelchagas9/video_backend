@@ -12,16 +12,25 @@ import { env } from "@/config/env";
 import {
   closeDemoDatabase,
   demoSchema,
+  demoRepository,
   getDemoDatabase,
   initializeDemoDatabase,
   setDemoDatabasePathForTests,
 } from "@/database/demo";
-import { directoriesDemoService } from "@/modules/directories/directories.demo.service";
+import {
+  DirectoriesDemoService,
+  directoriesDemoService,
+} from "@/modules/directories/directories.demo.service";
 import { directoriesService } from "@/modules/directories/directories.service";
 import { videosDemoService } from "@/modules/videos/videos.demo.service";
 import { videosBulkService } from "@/modules/videos/videos.bulk.service";
 import { videosMetadataService } from "@/modules/videos/videos.metadata.service";
 import { videosService } from "@/modules/videos/videos.service";
+import { tagsService } from "@/modules/tags/tags.service";
+import { studiosService } from "@/modules/studios/studios.service";
+import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
+import { triageDemoService } from "@/modules/triage/triage.demo.service";
+import { ConflictError, NotFoundError } from "@/utils/errors";
 
 const databasePath = `/tmp/conversor-video-demo-catalog-${process.pid}.sqlite`;
 const timestamp = "2026-01-01T00:00:00.000Z";
@@ -38,25 +47,107 @@ function removeDatabaseFiles(): void {
 function seedCatalog(): void {
   initializeDemoDatabase();
   const db = getDemoDatabase();
+  db.insert(demoSchema.demoTagCategoriesTable)
+    .values([
+      {
+        id: 1,
+        name: "Genre",
+        group: "Content",
+        description: "Genres",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: 2,
+        name: "Theme",
+        group: "Content",
+        description: "Themes",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ])
+    .run();
   db.insert(demoSchema.demoTagsTable)
+    .values([
+      {
+        id: 1,
+        name: "Demo Tag",
+        parentId: null,
+        categoryId: 1,
+        description: null,
+        color: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: 2,
+        name: "Nested Tag",
+        parentId: 1,
+        categoryId: 2,
+        description: null,
+        color: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: 3,
+        name: "Sibling Tag",
+        parentId: 1,
+        categoryId: 1,
+        description: null,
+        color: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ])
+    .run();
+  db.insert(demoSchema.demoTagAliasesTable)
     .values({
       id: 1,
-      name: "Demo Tag",
-      parentId: null,
-      description: null,
-      color: null,
+      tagId: 2,
+      name: "Hidden child",
+      note: "Fixture alias",
       createdAt: timestamp,
-      updatedAt: timestamp,
     })
     .run();
   db.insert(demoSchema.demoStudiosTable)
+    .values([
+      {
+        id: 1,
+        name: "Demo Studio",
+        description: null,
+        profilePicturePath: null,
+        parentStudioId: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: 2,
+        name: "Child Studio A",
+        description: null,
+        profilePicturePath: null,
+        parentStudioId: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: 3,
+        name: "Child Studio B",
+        description: null,
+        profilePicturePath: null,
+        parentStudioId: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ])
+    .run();
+  db.insert(demoSchema.demoStudioAliasesTable)
     .values({
       id: 1,
-      name: "Demo Studio",
-      description: null,
-      profilePicturePath: null,
+      studioId: 2,
+      name: "Alternate studio",
+      note: null,
       createdAt: timestamp,
-      updatedAt: timestamp,
     })
     .run();
   db.insert(demoSchema.demoCreatorsTable)
@@ -121,6 +212,98 @@ afterEach(() => {
 afterAll(() => setDemoDatabasePathForTests(null));
 
 describe("SQLite demo catalog adapters", () => {
+  test("exposes navigable taxonomy with alias-aware search and tree parity", async () => {
+    expect(await tagsService.listCategories()).toEqual([
+      expect.objectContaining({ name: "Genre", group: "Content", tag_count: 2 }),
+      expect.objectContaining({ name: "Theme", group: "Content", tag_count: 1 }),
+    ]);
+
+    const tagResult = await tagsService.list({
+      search: "hidden child",
+      tree: true,
+      include: ["category", "aliases"],
+    });
+    expect(tagResult.pagination.total).toBe(1);
+    expect(tagResult.data[0]).toMatchObject({
+      id: 1,
+      children: [
+        {
+          id: 2,
+          category: { name: "Theme" },
+          aliases: [{ name: "Hidden child", note: "Fixture alias" }],
+        },
+        { id: 3 },
+      ],
+    });
+
+    const categoryTree = await tagsService.list({
+      category_id: 2,
+      tree: true,
+    });
+    expect(categoryTree.data[0]).toMatchObject({
+      id: 1,
+      children: [{ id: 2 }, { id: 3 }],
+    });
+
+    const studioResult = await studiosService.list({
+      search: "alternate studio",
+      include: ["hierarchy", "aliases"],
+    });
+    expect(studioResult.data).toEqual([
+      expect.objectContaining({
+        id: 2,
+        parent: { id: 1, name: "Demo Studio" },
+        children: [],
+        aliases: [expect.objectContaining({ name: "Alternate studio" })],
+      }),
+    ]);
+    expect(
+      await studiosService.findById(1, ["hierarchy", "aliases"])
+    ).toMatchObject({
+      parent: null,
+      children: [
+        { id: 2, name: "Child Studio A" },
+        { id: 3, name: "Child Studio B" },
+      ],
+      aliases: [],
+    });
+
+    expect(
+      await studiosService.list({ sort: "name", order: "desc", limit: 1 })
+    ).toMatchObject({
+      data: [{ id: 1, name: "Demo Studio" }],
+      pagination: { page: 1, limit: 1, total: 3, totalPages: 3 },
+    });
+
+    getDemoDatabase()
+      .update(demoSchema.demoStudiosTable)
+      .set({ parentStudioId: 2 })
+      .where(eq(demoSchema.demoStudiosTable.id, 1))
+      .run();
+    expect(await studiosService.findById(1, ["hierarchy"])).toMatchObject({
+      parent: null,
+      children: [{ id: 3, name: "Child Studio B" }],
+    });
+    expect(await studiosService.findById(2, ["hierarchy"])).toMatchObject({
+      parent: null,
+      children: [],
+    });
+    getDemoDatabase()
+      .update(demoSchema.demoStudiosTable)
+      .set({ parentStudioId: null })
+      .where(eq(demoSchema.demoStudiosTable.id, 1))
+      .run();
+
+    await studiosService.delete(1);
+    expect(
+      getDemoDatabase()
+        .select({ parentStudioId: demoSchema.demoStudiosTable.parentStudioId })
+        .from(demoSchema.demoStudiosTable)
+        .where(eq(demoSchema.demoStudiosTable.id, 2))
+        .get()
+    ).toEqual({ parentStudioId: null });
+  });
+
   test("persists video edits and arbitrary metadata", () => {
     videosDemoService.update(1, { title: "Updated Demo Title" });
     expect(
@@ -168,6 +351,73 @@ describe("SQLite demo catalog adapters", () => {
     ).toHaveLength(1);
   });
 
+  test("tracks explicit studio assignment transitions", () => {
+    expect(demoRepository.getVideoById(2).studio_assignment_status).toBe("unknown");
+    studioAssignmentDemoService.confirmNone([2]);
+    expect(demoRepository.getVideoById(2).studio_assignment_status).toBe("confirmed_none");
+    studioAssignmentDemoService.linkMany([2], [1]);
+    expect(demoRepository.getVideoById(2).studio_assignment_status).toBe("assigned");
+    expect(() => studioAssignmentDemoService.confirmNone([2])).toThrow();
+    studioAssignmentDemoService.unlinkMany([2], [1]);
+    expect(demoRepository.getVideoById(2).studio_assignment_status).toBe("unknown");
+  });
+
+  test("rejects missing demo videos before mutating any valid target", () => {
+    studioAssignmentDemoService.confirmNone([2]);
+
+    expect(() => studioAssignmentDemoService.linkMany([2, 999], [1]))
+      .toThrow(NotFoundError);
+    expect(demoRepository.getVideoById(2).studio_assignment_status).toBe(
+      "confirmed_none"
+    );
+    expect(
+      getDemoDatabase().select().from(demoSchema.demoVideoStudiosTable).all()
+    ).toHaveLength(0);
+  });
+
+  test("reports actual studio rows changed by triage bulk actions", async () => {
+    const added = await triageDemoService.applyBulkActions({
+      videoIds: [1, 2],
+      actions: { addStudioIds: [1, 1] },
+    });
+    expect(added.details.studios_added).toBe(2);
+
+    const addedAgain = await triageDemoService.applyBulkActions({
+      videoIds: [1, 2],
+      actions: { addStudioIds: [1] },
+    });
+    expect(addedAgain.details.studios_added).toBe(0);
+
+    const removed = await triageDemoService.applyBulkActions({
+      videoIds: [1, 2],
+      actions: { removeStudioIds: [1, 1] },
+    });
+    expect(removed.details.studios_removed).toBe(2);
+
+    const removedAgain = await triageDemoService.applyBulkActions({
+      videoIds: [1, 2],
+      actions: { removeStudioIds: [1] },
+    });
+    expect(removedAgain.details.studios_removed).toBe(0);
+  });
+
+  test("rejects and rolls back triage confirmed-none when any video is linked", async () => {
+    studioAssignmentDemoService.linkMany([1], [1]);
+
+    await expect(triageDemoService.applyBulkActions({
+      videoIds: [1, 2],
+      actions: {
+        addCreatorIds: [1],
+        studioAssignmentStatus: "confirmed_none",
+      },
+    })).rejects.toBeInstanceOf(ConflictError);
+
+    expect(
+      getDemoDatabase().select().from(demoSchema.demoVideoCreatorsTable).all()
+    ).toHaveLength(0);
+    expect(demoRepository.getVideoById(2).studio_assignment_status).toBe("unknown");
+  });
+
   test("reports duplicates and persistently purges unavailable rows", () => {
     expect(videosDemoService.getDuplicates()).toMatchObject([
       { file_hash: "duplicate-hash", count: 2, total_size_bytes: "300" },
@@ -210,6 +460,33 @@ describe("SQLite demo catalog adapters", () => {
     expect(directoriesDemoService.findById(1).last_scan_at).not.toBeNull();
     await directoriesService.delete(created.id);
     expect(() => directoriesDemoService.findById(created.id)).toThrow();
+  });
+
+  test("persists deterministic scan history and rejects an overlapping start", async () => {
+    const service = new DirectoriesDemoService();
+    const seeded = service.listScanRuns(1, 1, 20);
+    expect(seeded.data.map((run) => run.id)).toEqual([2, 1]);
+
+    const first = service.startScan(1);
+    expect(() => service.startScan(1)).toThrow(
+      "Directory scan already in progress"
+    );
+    expect(service.listScanRuns(1, 1, 20).pagination.total).toBe(3);
+    await first.completion;
+
+    const reloaded = new DirectoriesDemoService().findScanRun(1, first.run.id);
+    expect(reloaded).toMatchObject({
+      status: "completed",
+      files_found: 2,
+      files_added: 0,
+      files_updated: 0,
+      files_removed: 0,
+      error_count: 0,
+    });
+
+    removeDatabaseFiles();
+    seedCatalog();
+    expect(new DirectoriesDemoService().listScanRuns(1, 1, 20).data.map((run) => run.id)).toEqual([2, 1]);
   });
 
   test("routes core video services through SQLite adapters", async () => {

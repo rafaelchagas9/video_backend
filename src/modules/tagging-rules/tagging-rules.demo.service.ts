@@ -9,6 +9,7 @@ import type {
   TestRuleResult,
   UpdateTaggingRuleInput,
 } from "./tagging-rules.types";
+import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
 
 const RESOURCE_KIND = "tagging-rule";
 
@@ -325,13 +326,19 @@ export class TaggingRulesDemoService {
 
   private applyAction(videoId: number, action: TaggingRuleAction): boolean {
     if (!action.target_id) return false;
+    if (action.action_type === "add_studio") {
+      studioAssignmentDemoService.linkMany([videoId], [action.target_id]);
+      return true;
+    }
+    if (action.action_type === "remove_studio") {
+      studioAssignmentDemoService.unlinkMany([videoId], [action.target_id]);
+      return true;
+    }
     const mapping = {
       add_tag: ["demo_video_tags", "tag_id", true],
       remove_tag: ["demo_video_tags", "tag_id", false],
       add_creator: ["demo_video_creators", "creator_id", true],
       remove_creator: ["demo_video_creators", "creator_id", false],
-      add_studio: ["demo_video_studios", "studio_id", true],
-      remove_studio: ["demo_video_studios", "studio_id", false],
     } as const;
     const [table, column, add] = mapping[action.action_type];
     const operation = add

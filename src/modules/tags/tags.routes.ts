@@ -16,6 +16,8 @@ import {
   tagRecordResponseSchema,
   tagListResponseSchema,
   tagSimpleListResponseSchema,
+  tagCategoriesResponseSchema,
+  tagIncludesQuerySchema,
   messageResponseSchema,
   errorResponseSchema,
 } from "./tags.schemas";
@@ -52,6 +54,27 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
+  app.get(
+    "/categories",
+    {
+      schema: {
+        tags: ["tags"],
+        summary: "List tag categories",
+        description: "Returns tag categories with their tag counts.",
+        response: {
+          200: tagCategoriesResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      return reply.send({
+        success: true,
+        data: await tagsService.listCategories(),
+      });
+    },
+  );
+
   // Get tag by ID (with path)
   app.get(
     "/:id",
@@ -61,6 +84,7 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
         summary: "Get tag by ID",
         description: "Returns tag details including its hierarchical path.",
         params: idParamSchema,
+        querystring: tagIncludesQuerySchema,
         response: {
           200: tagResponseSchema,
           401: errorResponseSchema,
@@ -69,7 +93,10 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const tag = await tagsService.findByIdWithPath(request.params.id);
+      const tag = await tagsService.findByIdWithPath(
+        request.params.id,
+        request.query.include
+      );
 
       return reply.send({
         success: true,

@@ -67,6 +67,7 @@ export function buildVideoFilters(
     hasTags,
     hasCreator,
     hasStudio,
+    studioAssignmentStatus,
     hasRating,
   } = options;
 
@@ -208,6 +209,14 @@ export function buildVideoFilters(
     conditions.push(
       sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`,
     );
+  }
+
+  if (studioAssignmentStatus === "assigned") {
+    conditions.push(sql`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`);
+  } else if (studioAssignmentStatus === "confirmed_none") {
+    conditions.push(sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id}) AND ${videosTable.studioAbsenceConfirmedAt} IS NOT NULL`);
+  } else if (studioAssignmentStatus === "unknown") {
+    conditions.push(sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id}) AND ${videosTable.studioAbsenceConfirmedAt} IS NULL`);
   }
 
   if (hasRating === true) {

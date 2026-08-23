@@ -1,0 +1,1 @@
+ALTER TABLE "videos" ADD COLUMN "studio_absence_confirmed_at" timestamp;

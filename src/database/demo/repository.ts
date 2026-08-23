@@ -1,5 +1,11 @@
 import { API_PREFIX } from "@/config/constants";
-import { ConflictError, ForbiddenError, NotFoundError } from "@/utils/errors";
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from "@/utils/errors";
+import { isVideoWatched } from "@/modules/video-stats/video-watch-state";
 import {
   getDemoSqlite,
   initializeDemoDatabase,
@@ -322,6 +328,11 @@ export class DemoRepository {
       "SELECT s.* FROM demo_studios s JOIN demo_video_studios vs ON vs.studio_id = s.id WHERE vs.video_id = ? ORDER BY s.name",
       id
     ).map((studio) => this.studioFromRow(studio));
+    const studioAssignmentStatus = studios.length > 0
+      ? "assigned"
+      : row.studio_absence_confirmed_at
+        ? "confirmed_none"
+        : "unknown";
     const tags = this.rows(
       "SELECT t.* FROM demo_tags t JOIN demo_video_tags vt ON vt.tag_id = t.id WHERE vt.video_id = ? ORDER BY t.name",
       id
@@ -365,6 +376,7 @@ export class DemoRepository {
       description: row.description,
       themes: row.themes,
       is_available: Boolean(row.is_available),
+      studio_assignment_status: studioAssignmentStatus,
       is_favorite: this.isFavoriteVideo(id),
       last_verified_at: row.last_verified_at,
       indexed_at: row.indexed_at,
@@ -443,6 +455,11 @@ export class DemoRepository {
     filterRelation("tags", options.tagIds);
     filterRelation("creators", options.creatorIds);
     filterRelation("studios", options.studioIds);
+    if (options.hasStudio === true) list = list.filter((video) => video.studios.length > 0);
+    if (options.hasStudio === false) list = list.filter((video) => video.studios.length === 0);
+    if (options.studioAssignmentStatus) {
+      list = list.filter((video) => video.studio_assignment_status === options.studioAssignmentStatus);
+    }
     if (options.createdFrom) {
       const timestamp = new Date(options.createdFrom).getTime();
       list = list.filter(
@@ -654,15 +671,32 @@ export class DemoRepository {
       "INSERT INTO demo_playlists (user_id,name,description,created_at,updated_at) VALUES (?,?,?,?,?)",
       [userId, input.name, input.description ?? null, timestamp, timestamp]
     );
-    return this.getPlaylistById(Number(result.lastInsertRowid));
+    return this.getPlaylistById(Number(result.lastInsertRowid), userId);
   }
-  getPlaylistById(id: number): any {
+  getPlaylistById(id: number, userId?: number): any {
     const playlist = this.row("SELECT * FROM demo_playlists WHERE id = ?", id);
     if (!playlist) throw new NotFoundError(`Playlist not found with id: ${id}`);
-    const first = this.row(
-      "SELECT pv.video_id FROM demo_playlist_videos pv WHERE pv.playlist_id = ? ORDER BY pv.position LIMIT 1",
+    const ownerId = userId ?? Number(playlist.user_id);
+    const entries = this.rows(
+      `SELECT pv.*, v.duration_seconds, s.play_count, s.last_position_seconds,
+              s.last_played_at
+       FROM demo_playlist_videos pv
+       JOIN demo_videos v ON v.id = pv.video_id
+       LEFT JOIN demo_video_stats s
+         ON s.video_id = pv.video_id AND s.user_id = ?
+       WHERE pv.playlist_id = ?
+       ORDER BY pv.position`,
+      ownerId,
       id
     );
+    const watched = (entry: any) =>
+      isVideoWatched({
+        playCount: entry.play_count,
+        positionSeconds: entry.last_position_seconds,
+        durationSeconds: entry.duration_seconds,
+      });
+    const resume = entries.find((entry) => !watched(entry));
+    const first = entries[0];
     return {
       id: Number(playlist.id),
       user_id: Number(playlist.user_id),
@@ -670,10 +704,28 @@ export class DemoRepository {
       description: playlist.description,
       created_at: playlist.created_at,
       updated_at: playlist.updated_at,
-      video_count: this.scalar(
-        "SELECT count(*) FROM demo_playlist_videos WHERE playlist_id = ?",
-        id
+      video_count: entries.length,
+      watched_count: entries.filter(watched).length,
+      runtime_seconds: entries.reduce(
+        (sum, entry) => sum + Number(entry.duration_seconds ?? 0),
+        0
       ),
+      last_played_at:
+        entries
+          .map((entry) => entry.last_played_at)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ?? null,
+      resume: resume
+        ? {
+            video_id: Number(resume.video_id),
+            position_seconds: Number(resume.last_position_seconds ?? 0),
+          }
+        : null,
+      artwork_source_video_id:
+        playlist.artwork_source_video_id === null
+          ? null
+          : Number(playlist.artwork_source_video_id),
       thumbnail_url: first
         ? `${API_PREFIX}/thumbnails/${first.video_id}/image`
         : null,
@@ -683,24 +735,41 @@ export class DemoRepository {
     return this.rows(
       "SELECT id FROM demo_playlists WHERE user_id = ? ORDER BY id",
       userId
-    ).map((item) => this.getPlaylistById(Number(item.id)));
+    ).map((item) => this.getPlaylistById(Number(item.id), userId));
   }
   updatePlaylist(id: number, userId: number, input: any): any {
-    const current = this.getPlaylistById(id);
+    const current = this.getPlaylistById(id, userId);
     if (current.user_id !== userId) throw new ForbiddenError();
-    getDemoSqlite().run(
-      "UPDATE demo_playlists SET name=?,description=?,updated_at=? WHERE id=?",
-      [
-        input.name ?? current.name,
-        input.description ?? current.description,
-        now(),
-        id,
-      ]
-    );
-    return this.getPlaylistById(id);
+    withDemoTransaction(() => {
+      if (
+        input.artwork_source_video_id !== undefined &&
+        !this.row(
+          "SELECT 1 FROM demo_playlist_videos WHERE playlist_id=? AND video_id=?",
+          id,
+          input.artwork_source_video_id
+        )
+      ) {
+        throw new BadRequestError(
+          "Artwork source video must belong to this playlist"
+        );
+      }
+      getDemoSqlite().run(
+        "UPDATE demo_playlists SET name=?,description=?,artwork_source_video_id=?,updated_at=? WHERE id=?",
+        [
+          input.name ?? current.name,
+          input.description !== undefined
+            ? input.description
+            : current.description,
+          input.artwork_source_video_id ?? current.artwork_source_video_id,
+          now(),
+          id,
+        ]
+      );
+    });
+    return this.getPlaylistById(id, userId);
   }
   deletePlaylist(id: number, userId: number): void {
-    const current = this.getPlaylistById(id);
+    const current = this.getPlaylistById(id, userId);
     if (current.user_id !== userId) throw new ForbiddenError();
     getDemoSqlite().run("DELETE FROM demo_playlists WHERE id = ?", [id]);
   }
@@ -709,7 +778,7 @@ export class DemoRepository {
     userId: number,
     videoId: number
   ): void {
-    const playlist = this.getPlaylistById(playlistId);
+    const playlist = this.getPlaylistById(playlistId, userId);
     if (playlist.user_id !== userId) throw new ForbiddenError();
     this.getVideoByIdShallow(videoId);
     if (
@@ -724,37 +793,62 @@ export class DemoRepository {
       "INSERT INTO demo_playlist_videos (playlist_id,video_id,position,added_at) VALUES (?,?,?,?)",
       [playlistId, videoId, playlist.video_count, now()]
     );
+    getDemoSqlite().run(
+      "UPDATE demo_playlists SET artwork_source_video_id=COALESCE(artwork_source_video_id,?),updated_at=? WHERE id=?",
+      [videoId, now(), playlistId]
+    );
   }
   removeVideoFromPlaylist(
     playlistId: number,
     userId: number,
     videoId: number
   ): void {
-    const playlist = this.getPlaylistById(playlistId);
-    if (playlist.user_id !== userId) throw new ForbiddenError();
-    getDemoSqlite().run(
-      "DELETE FROM demo_playlist_videos WHERE playlist_id=? AND video_id=?",
-      [playlistId, videoId]
-    );
+    withDemoTransaction(() => {
+      const playlist = this.getPlaylistById(playlistId, userId);
+      if (playlist.user_id !== userId) throw new ForbiddenError();
+      getDemoSqlite().run(
+        "DELETE FROM demo_playlist_videos WHERE playlist_id=? AND video_id=?",
+        [playlistId, videoId]
+      );
+      if (playlist.artwork_source_video_id === videoId) {
+        const replacement = this.row(
+          "SELECT video_id FROM demo_playlist_videos WHERE playlist_id=? ORDER BY position LIMIT 1",
+          playlistId
+        );
+        getDemoSqlite().run(
+          "UPDATE demo_playlists SET artwork_source_video_id=?,updated_at=? WHERE id=?",
+          [replacement?.video_id ?? null, now(), playlistId]
+        );
+      }
+    });
   }
   getPlaylistVideos(playlistId: number, userId: number): any[] {
-    const playlist = this.getPlaylistById(playlistId);
+    const playlist = this.getPlaylistById(playlistId, userId);
     if (playlist.user_id !== userId) throw new ForbiddenError();
     return this.rows(
       "SELECT * FROM demo_playlist_videos WHERE playlist_id=? ORDER BY position",
       playlistId
-    ).map((item) => ({
-      ...this.getVideoById(Number(item.video_id)),
-      position: Number(item.position),
-      added_to_playlist_at: item.added_at,
-    }));
+    ).map((item) => {
+      const video = this.getVideoById(Number(item.video_id));
+      return {
+        ...video,
+        watched: isVideoWatched({
+          playCount: video.stats?.playCount,
+          positionSeconds: video.stats?.lastPositionSeconds,
+          durationSeconds: video.duration_seconds,
+        }),
+        position_seconds: video.stats?.lastPositionSeconds ?? null,
+        position: Number(item.position),
+        added_to_playlist_at: item.added_at,
+      };
+    });
   }
   reorderPlaylistVideos(
     playlistId: number,
     userId: number,
     positions: any[]
   ): void {
-    const playlist = this.getPlaylistById(playlistId);
+    const playlist = this.getPlaylistById(playlistId, userId);
     if (playlist.user_id !== userId) throw new ForbiddenError();
     withDemoTransaction(() => {
       positions.forEach((item) =>
@@ -787,17 +881,38 @@ export class DemoRepository {
     }
   }
 
-  listCollections(): any[] {
+  listCollections(userId = DEMO_USER_ID): any[] {
     this.ensureReady();
     return this.rows("SELECT id FROM demo_collections ORDER BY id").map(
-      (item) => this.getCollectionById(Number(item.id))
+      (item) => this.getCollectionById(Number(item.id), userId)
     );
   }
-  getCollectionById(id: number): any {
+  getCollectionById(id: number, userId = DEMO_USER_ID): any {
     const item = this.row("SELECT * FROM demo_collections WHERE id=?", id);
     if (!item) {
       throw new NotFoundError(`Video collection not found with id: ${id}`);
     }
+    const entries = this.rows(
+      `SELECT e.*, v.duration_seconds, s.play_count, s.last_position_seconds,
+              s.last_watch_at
+       FROM demo_collection_entries e
+       JOIN demo_videos v ON v.id = e.video_id
+       LEFT JOIN demo_video_stats s
+         ON s.video_id = e.video_id AND s.user_id = ?
+       WHERE e.collection_id = ?
+       ORDER BY CASE WHEN e.sequence_number IS NULL THEN 1 ELSE 0 END,
+                e.sequence_number, e.season_number, e.episode_number,
+                e.episode_part, e.absolute_number, e.created_at`,
+      userId,
+      id
+    );
+    const watched = (entry: any) =>
+      isVideoWatched({
+        playCount: entry.play_count,
+        positionSeconds: entry.last_position_seconds,
+        durationSeconds: entry.duration_seconds,
+      });
+    const resume = entries.find((entry) => !watched(entry));
     return {
       id: Number(item.id),
       title: item.title,
@@ -805,10 +920,36 @@ export class DemoRepository {
       description: item.description,
       release_year: item.release_year,
       external_ids_json: item.external_ids_json,
-      entry_count: this.scalar(
-        "SELECT count(*) FROM demo_collection_entries WHERE collection_id=?",
-        id
+      entry_count: entries.length,
+      watched_count: entries.filter(watched).length,
+      runtime_seconds: entries.reduce(
+        (sum, entry) => sum + Number(entry.duration_seconds ?? 0),
+        0
       ),
+      season_count: new Set(
+        entries
+          .map((entry) => entry.season_number)
+          .filter((season) => season !== null)
+      ).size,
+      last_watched_at:
+        entries
+          .map((entry) => entry.last_watch_at)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ?? null,
+      resume: resume
+        ? {
+            entry_id: Number(resume.id),
+            video_id: Number(resume.video_id),
+            season_number: resume.season_number,
+            episode_number: resume.episode_number,
+            position_seconds: Number(resume.last_position_seconds ?? 0),
+          }
+        : null,
+      artwork_source_video_id:
+        item.artwork_source_video_id === null
+          ? null
+          : Number(item.artwork_source_video_id),
       created_at: item.created_at,
       updated_at: item.updated_at,
     };
@@ -829,21 +970,42 @@ export class DemoRepository {
     );
     return this.getCollectionById(Number(result.lastInsertRowid));
   }
-  updateCollection(id: number, input: any): any {
-    const current = this.getCollectionById(id);
-    getDemoSqlite().run(
-      "UPDATE demo_collections SET title=?,kind=?,description=?,release_year=?,external_ids_json=?,updated_at=? WHERE id=?",
-      [
-        input.title ?? current.title,
-        input.kind ?? current.kind,
-        input.description ?? current.description,
-        input.release_year ?? current.release_year,
-        input.external_ids_json ?? current.external_ids_json,
-        now(),
-        id,
-      ]
-    );
-    return this.getCollectionById(id);
+  updateCollection(id: number, input: any, userId = DEMO_USER_ID): any {
+    const current = this.getCollectionById(id, userId);
+    withDemoTransaction(() => {
+      if (
+        input.artwork_source_video_id !== undefined &&
+        !this.row(
+          "SELECT 1 FROM demo_collection_entries WHERE collection_id=? AND video_id=?",
+          id,
+          input.artwork_source_video_id
+        )
+      ) {
+        throw new BadRequestError(
+          "Artwork source video must belong to this collection"
+        );
+      }
+      getDemoSqlite().run(
+        "UPDATE demo_collections SET title=?,kind=?,description=?,release_year=?,external_ids_json=?,artwork_source_video_id=?,updated_at=? WHERE id=?",
+        [
+          input.title ?? current.title,
+          input.kind ?? current.kind,
+          input.description !== undefined
+            ? input.description
+            : current.description,
+          input.release_year !== undefined
+            ? input.release_year
+            : current.release_year,
+          input.external_ids_json !== undefined
+            ? input.external_ids_json
+            : current.external_ids_json,
+          input.artwork_source_video_id ?? current.artwork_source_video_id,
+          now(),
+          id,
+        ]
+      );
+    });
+    return this.getCollectionById(id, userId);
   }
   deleteCollection(id: number): void {
     if (
@@ -852,13 +1014,19 @@ export class DemoRepository {
     )
       throw new NotFoundError(`Video collection not found with id: ${id}`);
   }
-  listCollectionEntries(collectionId: number): any[] {
-    this.getCollectionById(collectionId);
+  listCollectionEntries(
+    collectionId: number,
+    userId = DEMO_USER_ID
+  ): any[] {
+    this.getCollectionById(collectionId, userId);
     return this.rows(
       "SELECT * FROM demo_collection_entries WHERE collection_id=? ORDER BY sequence_number,id",
       collectionId
     ).map((item) => {
-      const video = this.getVideoByIdShallowRecord(Number(item.video_id));
+      const video = this.getVideoByIdShallowRecord(
+        Number(item.video_id),
+        userId
+      );
       return {
         id: Number(item.id),
         collection_id: Number(item.collection_id),
@@ -876,9 +1044,14 @@ export class DemoRepository {
       };
     });
   }
-  private getVideoByIdShallowRecord(id: number): any {
+  private getVideoByIdShallowRecord(id: number, userId = DEMO_USER_ID): any {
     const item = this.row("SELECT * FROM demo_videos WHERE id=?", id);
     if (!item) throw new NotFoundError(`Video not found with id: ${id}`);
+    const stats = this.row(
+      "SELECT play_count,last_position_seconds FROM demo_video_stats WHERE user_id=? AND video_id=?",
+      userId,
+      id
+    );
     return {
       id,
       file_name: item.file_name,
@@ -896,6 +1069,18 @@ export class DemoRepository {
         ? `${API_PREFIX}/thumbnails/${id}/image`
         : null,
       is_available: Boolean(item.is_available),
+      duration_seconds:
+        item.duration_seconds === null ? null : Number(item.duration_seconds),
+      watched: isVideoWatched({
+        playCount: stats?.play_count,
+        positionSeconds: stats?.last_position_seconds,
+        durationSeconds: item.duration_seconds,
+      }),
+      position_seconds:
+        stats?.last_position_seconds === null ||
+        stats?.last_position_seconds === undefined
+          ? null
+          : Number(stats.last_position_seconds),
     };
   }
   addCollectionEntry(collectionId: number, input: any): any {
@@ -926,21 +1111,41 @@ export class DemoRepository {
         timestamp,
       ]
     );
+    getDemoSqlite().run(
+      "UPDATE demo_collections SET artwork_source_video_id=COALESCE(artwork_source_video_id,?),updated_at=? WHERE id=?",
+      [input.video_id, timestamp, collectionId]
+    );
     return this.listCollectionEntries(collectionId).find(
       (item) => item.id === Number(result.lastInsertRowid)
     );
   }
   removeCollectionEntry(collectionId: number, videoId: number): void {
-    this.getCollectionById(collectionId);
-    if (
-      !getDemoSqlite().run(
-        "DELETE FROM demo_collection_entries WHERE collection_id=? AND video_id=?",
-        [collectionId, videoId]
-      ).changes
-    )
-      throw new NotFoundError(
-        `Video collection entry not found for video id: ${videoId}`
-      );
+    withDemoTransaction(() => {
+      const collection = this.getCollectionById(collectionId);
+      if (
+        !getDemoSqlite().run(
+          "DELETE FROM demo_collection_entries WHERE collection_id=? AND video_id=?",
+          [collectionId, videoId]
+        ).changes
+      )
+        throw new NotFoundError(
+          `Video collection entry not found for video id: ${videoId}`
+        );
+      if (collection.artwork_source_video_id === videoId) {
+        const replacement = this.row(
+          `SELECT video_id FROM demo_collection_entries
+         WHERE collection_id=?
+         ORDER BY CASE WHEN sequence_number IS NULL THEN 1 ELSE 0 END,
+                  sequence_number,season_number,episode_number,created_at
+         LIMIT 1`,
+          collectionId
+        );
+        getDemoSqlite().run(
+          "UPDATE demo_collections SET artwork_source_video_id=?,updated_at=? WHERE id=?",
+          [replacement?.video_id ?? null, now(), collectionId]
+        );
+      }
+    });
   }
   reorderCollectionEntries(collectionId: number, input: any): any[] {
     this.getCollectionById(collectionId);

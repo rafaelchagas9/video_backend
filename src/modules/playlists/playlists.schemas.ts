@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { artworkSummarySchema } from "@/modules/artwork/artwork.schemas";
 
 // Re-export from types for consistency
 export {
@@ -16,6 +17,22 @@ export const idParamSchema = z.object({
 export const videoIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
   video_id: z.coerce.number().int().positive(),
+});
+
+const parseIncludeList = (value: unknown) => {
+  if (typeof value === "string" && value.trim()) {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return Array.isArray(value) ? value : undefined;
+};
+
+export const playlistQuerySchema = z.object({
+  include: z
+    .preprocess(
+      parseIncludeList,
+      z.array(z.enum(["artwork"])).default([]),
+    )
+    .optional(),
 });
 
 const parseNullableNumber = (val: unknown) => {
@@ -42,6 +59,17 @@ const playlistSchema = z.object({
   updated_at: z.string(),
   thumbnail_url: z.string().nullable().optional(),
   video_count: z.number(),
+  watched_count: z.number(),
+  runtime_seconds: z.number(),
+  last_played_at: z.string().nullable(),
+  resume: z
+    .object({
+      video_id: z.number(),
+      position_seconds: z.number(),
+    })
+    .nullable(),
+  artwork_source_video_id: z.number().nullable(),
+  artwork: artworkSummarySchema.nullable().optional(),
 });
 
 const playlistVideoSchema = z.object({
@@ -52,6 +80,8 @@ const playlistVideoSchema = z.object({
   position: z.number(),
   thumbnail_id: z.number().nullable(),
   thumbnail_url: z.string().nullable(),
+  watched: z.boolean(),
+  position_seconds: z.number().nullable(),
 });
 
 const errorSchema = z.object({

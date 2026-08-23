@@ -198,7 +198,35 @@ describe("Fastify app integration", () => {
       method: "POST",
       url: `/api/directories/${directory.id}/scan`,
     });
-    expect(scan.statusCode).toBe(200);
+    expect(scan.statusCode).toBe(202);
+    expect(scan.headers.location).toBe(
+      `/api/directories/${directory.id}/scans/${scan.json().data.id}`,
+    );
+
+    const history = await ctx!.authInject({
+      method: "GET",
+      url: `/api/directories/${directory.id}/scans?page=1&limit=20`,
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json().data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: scan.json().data.id,
+          directory_id: directory.id,
+          status: "completed",
+        }),
+      ]),
+    );
+
+    const scheduler = await ctx!.authInject({
+      method: "GET",
+      url: "/api/directories/scheduler/status",
+    });
+    expect(scheduler.statusCode).toBe(200);
+    expect(scheduler.json().data).toMatchObject({
+      is_running: false,
+      scheduled_directories: 0,
+    });
 
     const stats = await ctx!.authInject({
       method: "GET",
@@ -1158,6 +1186,10 @@ describe("Fastify app integration", () => {
     });
     expect(playlistCreate.statusCode).toBe(201);
     const playlist = playlistCreate.json().data as { id: number };
+    const secondPlaylistVideo = await seedVideoFixture(
+      "playlist-cover-member.mp4",
+    );
+    const playlistOutsider = await seedVideoFixture("playlist-cover-outsider.mp4");
 
     const playlistList = await ctx!.authInject({
       method: "GET",
@@ -1176,6 +1208,16 @@ describe("Fastify app integration", () => {
       },
     });
     expect(playlistAddVideo.statusCode).toBe(201);
+
+    expect(
+      (
+        await ctx!.authInject({
+          method: "POST",
+          url: `/api/playlists/${playlist.id}/videos`,
+          payload: { video_id: secondPlaylistVideo.videoId },
+        })
+      ).statusCode,
+    ).toBe(201);
 
     const playlistVideos = await ctx!.authInject({
       method: "GET",
@@ -1200,6 +1242,68 @@ describe("Fastify app integration", () => {
       "Updated Integration Playlist",
     );
 
+    const playlistCoverUpdate = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/playlists/${playlist.id}`,
+      payload: { artwork_source_video_id: secondPlaylistVideo.videoId },
+    });
+    expect(playlistCoverUpdate.statusCode).toBe(200);
+    expect(playlistCoverUpdate.json().data.artwork_source_video_id).toBe(
+      secondPlaylistVideo.videoId,
+    );
+
+    const playlistCoverRejected = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/playlists/${playlist.id}`,
+      payload: { artwork_source_video_id: playlistOutsider.videoId },
+    });
+    expect(playlistCoverRejected.statusCode).toBe(400);
+    expect(playlistCoverRejected.json().error.message).toBe(
+      "Artwork source video must belong to this playlist",
+    );
+
+    expect(
+      (
+        await ctx!.authInject({
+          method: "PATCH",
+          url: `/api/playlists/${playlist.id}/videos/reorder`,
+          payload: {
+            videos: [
+              { video_id: secondPlaylistVideo.videoId, position: 0 },
+              { video_id: fixture.videoId, position: 1 },
+            ],
+          },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const playlistAfterReorder = await ctx!.authInject({
+      method: "GET",
+      url: `/api/playlists/${playlist.id}`,
+    });
+    expect(playlistAfterReorder.json().data.artwork_source_video_id).toBe(
+      secondPlaylistVideo.videoId,
+    );
+
+    expect(
+      (
+        await ctx!.authInject({
+          method: "POST",
+          url: `/api/playlists/${playlist.id}/videos/bulk`,
+          payload: {
+            videoIds: [secondPlaylistVideo.videoId],
+            action: "remove",
+          },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const playlistAfterSourceRemoval = await ctx!.authInject({
+      method: "GET",
+      url: `/api/playlists/${playlist.id}`,
+    });
+    expect(playlistAfterSourceRemoval.json().data.artwork_source_video_id).toBe(
+      fixture.videoId,
+    );
+
     expect(
       (
         await ctx!.authInject({
@@ -1208,6 +1312,11 @@ describe("Fastify app integration", () => {
         })
       ).statusCode,
     ).toBe(200);
+    const emptyPlaylist = await ctx!.authInject({
+      method: "GET",
+      url: `/api/playlists/${playlist.id}`,
+    });
+    expect(emptyPlaylist.json().data.artwork_source_video_id).toBeNull();
     expect(
       (
         await ctx!.authInject({
@@ -1220,6 +1329,12 @@ describe("Fastify app integration", () => {
 
   it("covers video collection endpoints using a seeded video", async () => {
     const fixture = await seedVideoFixture("collection-fixture.mp4");
+    const secondCollectionVideo = await seedVideoFixture(
+      "collection-cover-member.mp4",
+    );
+    const collectionOutsider = await seedVideoFixture(
+      "collection-cover-outsider.mp4",
+    );
 
     const create = await ctx!.authInject({
       method: "POST",
@@ -1257,6 +1372,22 @@ describe("Fastify app integration", () => {
     expect(entryCreate.statusCode).toBe(201);
     expect(entryCreate.json().data[0].video_id).toBe(fixture.videoId);
 
+    expect(
+      (
+        await ctx!.authInject({
+          method: "POST",
+          url: `/api/video-collections/${collection.id}/entries`,
+          payload: {
+            video_id: secondCollectionVideo.videoId,
+            entry_kind: "episode",
+            sequence_number: 2,
+            season_number: 1,
+            episode_number: 2,
+          },
+        })
+      ).statusCode,
+    ).toBe(201);
+
     const entries = await ctx!.authInject({
       method: "GET",
       url: `/api/video-collections/${collection.id}/entries`,
@@ -1278,6 +1409,64 @@ describe("Fastify app integration", () => {
     expect(update.statusCode).toBe(200);
     expect(update.json().data.description).toBe("Updated collection");
 
+    const collectionCoverUpdate = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/video-collections/${collection.id}`,
+      payload: { artwork_source_video_id: secondCollectionVideo.videoId },
+    });
+    expect(collectionCoverUpdate.statusCode).toBe(200);
+    expect(collectionCoverUpdate.json().data.artwork_source_video_id).toBe(
+      secondCollectionVideo.videoId,
+    );
+
+    const collectionCoverRejected = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/video-collections/${collection.id}`,
+      payload: { artwork_source_video_id: collectionOutsider.videoId },
+    });
+    expect(collectionCoverRejected.statusCode).toBe(400);
+    expect(collectionCoverRejected.json().error.message).toBe(
+      "Artwork source video must belong to this collection",
+    );
+
+    expect(
+      (
+        await ctx!.authInject({
+          method: "PATCH",
+          url: `/api/video-collections/${collection.id}/entries/reorder`,
+          payload: {
+            entries: [
+              { video_id: secondCollectionVideo.videoId, sequence_number: 1 },
+              { video_id: fixture.videoId, sequence_number: 2 },
+            ],
+          },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const collectionAfterReorder = await ctx!.authInject({
+      method: "GET",
+      url: `/api/video-collections/${collection.id}`,
+    });
+    expect(collectionAfterReorder.json().data.artwork_source_video_id).toBe(
+      secondCollectionVideo.videoId,
+    );
+
+    expect(
+      (
+        await ctx!.authInject({
+          method: "DELETE",
+          url: `/api/video-collections/${collection.id}/entries/${secondCollectionVideo.videoId}`,
+        })
+      ).statusCode,
+    ).toBe(200);
+    const collectionAfterSourceRemoval = await ctx!.authInject({
+      method: "GET",
+      url: `/api/video-collections/${collection.id}`,
+    });
+    expect(collectionAfterSourceRemoval.json().data.artwork_source_video_id).toBe(
+      fixture.videoId,
+    );
+
     expect(
       (
         await ctx!.authInject({
@@ -1286,6 +1475,11 @@ describe("Fastify app integration", () => {
         })
       ).statusCode,
     ).toBe(200);
+    const emptyCollection = await ctx!.authInject({
+      method: "GET",
+      url: `/api/video-collections/${collection.id}`,
+    });
+    expect(emptyCollection.json().data.artwork_source_video_id).toBeNull();
     expect(
       (
         await ctx!.authInject({
@@ -1518,6 +1712,220 @@ describe("Fastify app integration", () => {
         })
       ).statusCode,
     ).toBe(200);
+  });
+
+  it("keeps explicit studio state and related caches coherent in both directions", async () => {
+    const primary = await seedVideoFixture("studio-state-primary.mp4");
+    const secondary = await seedVideoFixture("studio-state-secondary.mp4");
+    const studioResponse = await ctx!.authInject({
+      method: "POST",
+      url: "/api/studios",
+      payload: { name: "Studio State Integration" },
+    });
+    expect(studioResponse.statusCode).toBe(201);
+    const studioId = studioResponse.json().data.id as number;
+
+    const { db } = await import("@/config/drizzle");
+    const { videoRelatedScoresTable } = await import("@/database/schema");
+    const { eq, or } = await import("drizzle-orm");
+    const warmBothDirections = async () => {
+      await db.delete(videoRelatedScoresTable).where(or(
+        eq(videoRelatedScoresTable.sourceVideoId, primary.videoId),
+        eq(videoRelatedScoresTable.relatedVideoId, primary.videoId),
+      ));
+      await db.insert(videoRelatedScoresTable).values([
+        {
+          sourceVideoId: primary.videoId,
+          relatedVideoId: secondary.videoId,
+          score: 1,
+          reasonsJson: "[]",
+        },
+        {
+          sourceVideoId: secondary.videoId,
+          relatedVideoId: primary.videoId,
+          score: 1,
+          reasonsJson: "[]",
+        },
+      ]);
+    };
+    const cachedBothDirections = () => db
+      .select()
+      .from(videoRelatedScoresTable)
+      .where(or(
+        eq(videoRelatedScoresTable.sourceVideoId, primary.videoId),
+        eq(videoRelatedScoresTable.relatedVideoId, primary.videoId),
+      ));
+
+    await warmBothDirections();
+    const confirmedNone = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/videos/${primary.videoId}/studio-assignment`,
+      payload: { status: "confirmed_none" },
+    });
+    expect(confirmedNone.statusCode, confirmedNone.body).toBe(200);
+    expect(confirmedNone.json().data.studio_assignment_status).toBe("confirmed_none");
+    expect(await cachedBothDirections()).toHaveLength(0);
+
+    const linkSecondary = await ctx!.authInject({
+      method: "POST",
+      url: `/api/videos/${secondary.videoId}/studios/${studioId}`,
+    });
+    expect(linkSecondary.statusCode, linkSecondary.body).toBe(200);
+
+    await warmBothDirections();
+    const linked = await ctx!.authInject({
+      method: "POST",
+      url: `/api/videos/${primary.videoId}/studios/${studioId}`,
+    });
+    expect(linked.statusCode, linked.body).toBe(200);
+    expect(await cachedBothDirections()).toHaveLength(0);
+    const assigned = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/${primary.videoId}`,
+    });
+    expect(assigned.json().data.studio_assignment_status).toBe("assigned");
+
+    const recomputed = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/${primary.videoId}/related?limit=20&refresh=true`,
+    });
+    expect(recomputed.statusCode, recomputed.body).toBe(200);
+    const recomputedCache = await db.select()
+      .from(videoRelatedScoresTable)
+      .where(eq(videoRelatedScoresTable.sourceVideoId, primary.videoId));
+    expect(recomputedCache).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relatedVideoId: secondary.videoId,
+          reasonsJson: expect.stringContaining("shared-studios"),
+        }),
+      ])
+    );
+
+    await warmBothDirections();
+    const conflict = await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/videos/${primary.videoId}/studio-assignment`,
+      payload: { status: "confirmed_none" },
+    });
+    expect(conflict.statusCode, conflict.body).toBe(409);
+    expect(await cachedBothDirections()).toHaveLength(2);
+
+    const unlinked = await ctx!.authInject({
+      method: "DELETE",
+      url: `/api/videos/${primary.videoId}/studios/${studioId}`,
+    });
+    expect(unlinked.statusCode, unlinked.body).toBe(200);
+    expect(await cachedBothDirections()).toHaveLength(0);
+    const unknown = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/${primary.videoId}`,
+    });
+    expect(unknown.json().data.studio_assignment_status).toBe("unknown");
+
+    await ctx!.authInject({
+      method: "PATCH",
+      url: `/api/videos/${primary.videoId}/studio-assignment`,
+      payload: { status: "confirmed_none" },
+    });
+    const filtered = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos?studioAssignmentStatus=confirmed_none&ids=${primary.videoId}`,
+    });
+    expect(filtered.statusCode, filtered.body).toBe(200);
+    expect(filtered.json().data).toEqual([
+      expect.objectContaining({
+        id: primary.videoId,
+        studio_assignment_status: "confirmed_none",
+      }),
+    ]);
+  });
+
+  it("rolls back mixed triage work when confirmed-none includes a linked video", async () => {
+    const linked = await seedVideoFixture("studio-mixed-linked.mp4");
+    const unlinked = await seedVideoFixture("studio-mixed-unlinked.mp4");
+    const studioResponse = await ctx!.authInject({
+      method: "POST",
+      url: "/api/studios",
+      payload: { name: "Studio Mixed Rollback" },
+    });
+    const creatorResponse = await ctx!.authInject({
+      method: "POST",
+      url: "/api/creators",
+      payload: { name: "Studio Mixed Creator" },
+    });
+    const studioId = studioResponse.json().data.id as number;
+    const creatorId = creatorResponse.json().data.id as number;
+    await ctx!.authInject({
+      method: "POST",
+      url: `/api/videos/${linked.videoId}/studios/${studioId}`,
+    });
+
+    const response = await ctx!.authInject({
+      method: "POST",
+      url: "/api/triage/bulk-actions",
+      payload: {
+        videoIds: [linked.videoId, unlinked.videoId],
+        actions: {
+          addCreatorIds: [creatorId],
+          studioAssignmentStatus: "confirmed_none",
+        },
+      },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+
+    const { db } = await import("@/config/drizzle");
+    const { videoCreatorsTable } = await import("@/database/schema");
+    const { and, eq, inArray } = await import("drizzle-orm");
+    const creatorLinks = await db.select()
+      .from(videoCreatorsTable)
+      .where(and(
+        inArray(videoCreatorsTable.videoId, [linked.videoId, unlinked.videoId]),
+        eq(videoCreatorsTable.creatorId, creatorId),
+      ));
+    expect(creatorLinks).toHaveLength(0);
+    const unlinkedDetail = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/${unlinked.videoId}`,
+    });
+    expect(unlinkedDetail.json().data.studio_assignment_status).toBe("unknown");
+  });
+
+  it("serializes a concurrent studio link and confirmed-none decision", async () => {
+    const video = await seedVideoFixture("studio-concurrency.mp4");
+    const studioResponse = await ctx!.authInject({
+      method: "POST",
+      url: "/api/studios",
+      payload: { name: "Studio Concurrency" },
+    });
+    const studioId = studioResponse.json().data.id as number;
+
+    const [confirmation, linking] = await Promise.all([
+      ctx!.authInject({
+        method: "PATCH",
+        url: `/api/videos/${video.videoId}/studio-assignment`,
+        payload: { status: "confirmed_none" },
+      }),
+      ctx!.authInject({
+        method: "POST",
+        url: `/api/videos/${video.videoId}/studios/${studioId}`,
+      }),
+    ]);
+    expect(linking.statusCode, linking.body).toBe(200);
+    expect([200, 409]).toContain(confirmation.statusCode);
+
+    const detail = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/${video.videoId}`,
+    });
+    expect(detail.json().data.studio_assignment_status).toBe("assigned");
+    const { db } = await import("@/config/drizzle");
+    const { videosTable } = await import("@/database/schema");
+    const { eq } = await import("drizzle-orm");
+    const row = await db.select({ marker: videosTable.studioAbsenceConfirmedAt })
+      .from(videosTable)
+      .where(eq(videosTable.id, video.videoId));
+    expect(row[0]?.marker).toBeNull();
   });
 
   it("covers video queues, bulk actions, duplicates, related, and unavailable cleanup", async () => {

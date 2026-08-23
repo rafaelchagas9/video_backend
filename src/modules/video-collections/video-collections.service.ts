@@ -5,10 +5,17 @@ import {
   thumbnailsTable,
   videoCollectionEntriesTable,
   videoCollectionsTable,
+  videoStatsTable,
   videosTable,
 } from "@/database/schema";
-import { ConflictError, NotFoundError, isUniqueViolation } from "@/utils/errors";
+import {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+  isUniqueViolation,
+} from "@/utils/errors";
 import { env } from "@/config/env";
+import { isVideoWatched } from "@/modules/video-stats/video-watch-state";
 import type {
   CreateVideoCollectionEntryInput,
   CreateVideoCollectionInput,
@@ -40,26 +47,50 @@ type CollectionEntryRow = {
   title?: string | null;
   isAvailable?: boolean;
   thumbnailId?: number | null;
+  durationSeconds?: number | null;
+  playCount?: number | null;
+  positionSeconds?: number | null;
 };
 
+type CollectionSummaryRow = {
+  id: number;
+  title: string;
+  kind: VideoCollection["kind"];
+  description: string | null;
+  release_year: number | null;
+  external_ids_json: string | null;
+  entry_count: number;
+  watched_count: number;
+  runtime_seconds: number;
+  season_count: number;
+  last_watched_at: string | Date | null;
+  artwork_source_video_id: number | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
+type CollectionInclude = "artwork";
+
 export class VideoCollectionsService {
-  async list(): Promise<VideoCollection[]> {
+  async list(
+    userId: number,
+    include: CollectionInclude[] = [],
+  ): Promise<VideoCollection[]> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.listCollections();
+      const collections = demoMockService.listCollections(userId);
+      return this.attachArtwork(collections, include);
     }
 
-    const rows = await db.execute<{
-      id: number;
-      title: string;
-      kind: VideoCollection["kind"];
-      description: string | null;
-      release_year: number | null;
-      external_ids_json: string | null;
-      entry_count: number;
-      created_at: string;
-      updated_at: string;
-    }>(sql`
+    const rows = await this.querySummaries(userId);
+    return this.attachArtwork(await this.mapSummaries(rows, userId), include);
+  }
+
+  private async querySummaries(
+    userId: number,
+    id?: number,
+  ): Promise<CollectionSummaryRow[]> {
+    return db.execute<CollectionSummaryRow>(sql`
       SELECT
         c.id,
         c.title,
@@ -68,15 +99,45 @@ export class VideoCollectionsService {
         c.release_year,
         c.external_ids_json,
         COUNT(e.id)::int AS entry_count,
+        COUNT(e.id) FILTER (
+          WHERE vs.play_count > 0
+            AND (
+              vs.last_position_seconds = 0
+              OR (
+                v.duration_seconds > 0
+                AND vs.last_position_seconds / v.duration_seconds >= 0.95
+              )
+            )
+        )::int AS watched_count,
+        COALESCE(SUM(v.duration_seconds), 0)::double precision AS runtime_seconds,
+        COUNT(DISTINCT e.season_number) FILTER (
+          WHERE e.season_number IS NOT NULL
+        )::int AS season_count,
+        MAX(vs.last_watch_at) AS last_watched_at,
+        c.artwork_source_video_id,
         c.created_at,
         c.updated_at
       FROM ${videoCollectionsTable} c
       LEFT JOIN ${videoCollectionEntriesTable} e
         ON c.id = e.collection_id
+      LEFT JOIN ${videosTable} v
+        ON v.id = e.video_id
+      LEFT JOIN ${videoStatsTable} vs
+        ON vs.video_id = e.video_id AND vs.user_id = ${userId}
+      ${id === undefined ? sql`` : sql`WHERE c.id = ${id}`}
       GROUP BY c.id
       ORDER BY c.updated_at DESC, c.id DESC
     `);
+  }
 
+  private async mapSummaries(
+    rows: CollectionSummaryRow[],
+    userId: number,
+  ): Promise<VideoCollection[]> {
+    const resumes = await this.getResumeByCollectionIds(
+      rows.map((row) => row.id),
+      userId,
+    );
     return rows.map((row) => ({
       id: row.id,
       title: row.title,
@@ -85,12 +146,23 @@ export class VideoCollectionsService {
       release_year: row.release_year,
       external_ids_json: row.external_ids_json,
       entry_count: Number(row.entry_count),
+      watched_count: Number(row.watched_count),
+      runtime_seconds: Number(row.runtime_seconds),
+      season_count: Number(row.season_count),
+      last_watched_at: row.last_watched_at
+        ? new Date(row.last_watched_at).toISOString()
+        : null,
+      resume: resumes.get(row.id) ?? null,
+      artwork_source_video_id: row.artwork_source_video_id,
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at).toISOString(),
     }));
   }
 
-  async create(input: CreateVideoCollectionInput): Promise<VideoCollection> {
+  async create(
+    input: CreateVideoCollectionInput,
+    userId = 0,
+  ): Promise<VideoCollection> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       return demoMockService.createCollection(input);
@@ -111,69 +183,42 @@ export class VideoCollectionsService {
       throw new Error("Failed to create video collection");
     }
 
-    return this.findById(result[0].id);
+    return this.findById(result[0].id, userId);
   }
 
-  async findById(id: number): Promise<VideoCollection> {
+  async findById(
+    id: number,
+    userId = 0,
+    include: CollectionInclude[] = [],
+  ): Promise<VideoCollection> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCollectionById(id);
+      return (
+        await this.attachArtwork(
+          [demoMockService.getCollectionById(id, userId)],
+          include,
+        )
+      )[0]!;
     }
 
-    const rows = await db.execute<{
-      id: number;
-      title: string;
-      kind: VideoCollection["kind"];
-      description: string | null;
-      release_year: number | null;
-      external_ids_json: string | null;
-      entry_count: number;
-      created_at: string;
-      updated_at: string;
-    }>(sql`
-      SELECT
-        c.id,
-        c.title,
-        c.kind,
-        c.description,
-        c.release_year,
-        c.external_ids_json,
-        COUNT(e.id)::int AS entry_count,
-        c.created_at,
-        c.updated_at
-      FROM ${videoCollectionsTable} c
-      LEFT JOIN ${videoCollectionEntriesTable} e
-        ON c.id = e.collection_id
-      WHERE c.id = ${id}
-      GROUP BY c.id
-      LIMIT 1
-    `);
+    const rows = await this.querySummaries(userId, id);
 
     const row = rows[0];
     if (!row) {
       throw new NotFoundError(`Video collection not found with id: ${id}`);
     }
 
-    return {
-      id: row.id,
-      title: row.title,
-      kind: row.kind as VideoCollectionKind,
-      description: row.description,
-      release_year: row.release_year,
-      external_ids_json: row.external_ids_json,
-      entry_count: Number(row.entry_count),
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: new Date(row.updated_at).toISOString(),
-    };
+    return (await this.attachArtwork(await this.mapSummaries([row], userId), include))[0]!;
   }
 
   async update(
     id: number,
     input: UpdateVideoCollectionInput,
+    userId = 0,
   ): Promise<VideoCollection> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.updateCollection(id, input);
+      return demoMockService.updateCollection(id, input, userId);
     }
 
     await this.findById(id);
@@ -187,19 +232,57 @@ export class VideoCollectionsService {
       updates.releaseYear = input.release_year;
     if (input.external_ids_json !== undefined)
       updates.externalIdsJson = input.external_ids_json;
+    if (input.artwork_source_video_id !== undefined)
+      updates.artworkSourceVideoId = input.artwork_source_video_id;
 
     if (Object.keys(updates).length === 0) {
-      return this.findById(id);
+      return this.findById(id, userId);
     }
 
     updates.updatedAt = new Date();
 
-    await db
-      .update(videoCollectionsTable)
-      .set(updates)
-      .where(eq(videoCollectionsTable.id, id));
+    await db.transaction(async (tx) => {
+      // The parent row is the serialization point shared with entry removal.
+      // Without this lock, a member can disappear between the check and update.
+      const [lockedCollection] = await tx
+        .select({ id: videoCollectionsTable.id })
+        .from(videoCollectionsTable)
+        .where(eq(videoCollectionsTable.id, id))
+        .limit(1)
+        .for("update");
+      if (!lockedCollection) {
+        throw new NotFoundError(`Video collection not found with id: ${id}`);
+      }
 
-    return this.findById(id);
+      if (input.artwork_source_video_id !== undefined) {
+        const member = await tx
+          .select({ id: videoCollectionEntriesTable.id })
+          .from(videoCollectionEntriesTable)
+          .where(
+            and(
+              eq(videoCollectionEntriesTable.collectionId, id),
+              eq(
+                videoCollectionEntriesTable.videoId,
+                input.artwork_source_video_id,
+              ),
+            ),
+          )
+          .limit(1);
+
+        if (!member[0]) {
+          throw new BadRequestError(
+            "Artwork source video must belong to this collection",
+          );
+        }
+      }
+
+      await tx
+        .update(videoCollectionsTable)
+        .set(updates)
+        .where(eq(videoCollectionsTable.id, id));
+    });
+
+    return this.findById(id, userId);
   }
 
   async delete(id: number): Promise<void> {
@@ -215,10 +298,13 @@ export class VideoCollectionsService {
       .where(eq(videoCollectionsTable.id, id));
   }
 
-  async listEntries(collectionId: number): Promise<VideoCollectionEntry[]> {
+  async listEntries(
+    collectionId: number,
+    userId = 0,
+  ): Promise<VideoCollectionEntry[]> {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.listCollectionEntries(collectionId);
+      return demoMockService.listCollectionEntries(collectionId, userId);
     }
 
     await this.findById(collectionId);
@@ -241,10 +327,20 @@ export class VideoCollectionsService {
         title: videosTable.title,
         isAvailable: videosTable.isAvailable,
         thumbnailId: thumbnailsTable.id,
+        durationSeconds: videosTable.durationSeconds,
+        playCount: videoStatsTable.playCount,
+        positionSeconds: videoStatsTable.lastPositionSeconds,
       })
       .from(videoCollectionEntriesTable)
       .innerJoin(videosTable, eq(videoCollectionEntriesTable.videoId, videosTable.id))
       .leftJoin(thumbnailsTable, eq(videosTable.id, thumbnailsTable.videoId))
+      .leftJoin(
+        videoStatsTable,
+        and(
+          eq(videoStatsTable.videoId, videosTable.id),
+          eq(videoStatsTable.userId, userId),
+        ),
+      )
       .where(eq(videoCollectionEntriesTable.collectionId, collectionId))
       .orderBy(
         sql`CASE WHEN ${videoCollectionEntriesTable.sequenceNumber} IS NULL THEN 1 ELSE 0 END`,
@@ -308,7 +404,10 @@ export class VideoCollectionsService {
 
       await db
         .update(videoCollectionsTable)
-        .set({ updatedAt: new Date() })
+        .set({
+          updatedAt: new Date(),
+          artworkSourceVideoId: sql`COALESCE(${videoCollectionsTable.artworkSourceVideoId}, ${input.video_id})`,
+        })
         .where(eq(videoCollectionsTable.id, collectionId));
 
       const created = await this.listEntries(collectionId);
@@ -353,6 +452,29 @@ export class VideoCollectionsService {
 
     try {
       await db.transaction(async (tx) => {
+        // Clear the coordinates being replaced before assigning their new
+        // values. This lets two existing entries swap positions without
+        // tripping the collection's partial unique indexes mid-transaction.
+        await tx
+          .update(videoCollectionEntriesTable)
+          .set({
+            sequenceNumber: null,
+            seasonNumber: null,
+            episodeNumber: null,
+            episodePart: null,
+            absoluteNumber: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(videoCollectionEntriesTable.collectionId, collectionId),
+              inArray(
+                videoCollectionEntriesTable.videoId,
+                input.entries.map((entry) => entry.video_id),
+              ),
+            ),
+          );
+
         for (const entry of input.entries) {
           await tx
             .update(videoCollectionEntriesTable)
@@ -394,36 +516,70 @@ export class VideoCollectionsService {
 
     await this.findById(collectionId);
 
-    const existing = await db
-      .select({ id: videoCollectionEntriesTable.id })
-      .from(videoCollectionEntriesTable)
-      .where(
-        and(
-          eq(videoCollectionEntriesTable.collectionId, collectionId),
-          eq(videoCollectionEntriesTable.videoId, videoId),
-        ),
-      )
-      .limit(1);
+    await db.transaction(async (tx) => {
+      const [lockedCollection] = await tx
+        .select({ artworkSourceVideoId: videoCollectionsTable.artworkSourceVideoId })
+        .from(videoCollectionsTable)
+        .where(eq(videoCollectionsTable.id, collectionId))
+        .limit(1)
+        .for("update");
+      if (!lockedCollection) {
+        throw new NotFoundError(
+          `Video collection not found with id: ${collectionId}`,
+        );
+      }
 
-    if (!existing[0]) {
-      throw new NotFoundError(
-        `Collection entry not found for video id: ${videoId}`,
-      );
-    }
+      const [existing] = await tx
+        .select({ id: videoCollectionEntriesTable.id })
+        .from(videoCollectionEntriesTable)
+        .where(
+          and(
+            eq(videoCollectionEntriesTable.collectionId, collectionId),
+            eq(videoCollectionEntriesTable.videoId, videoId),
+          ),
+        )
+        .limit(1);
+      if (!existing) {
+        throw new NotFoundError(
+          `Collection entry not found for video id: ${videoId}`,
+        );
+      }
 
-    await db
-      .delete(videoCollectionEntriesTable)
-      .where(
-        and(
-          eq(videoCollectionEntriesTable.collectionId, collectionId),
-          eq(videoCollectionEntriesTable.videoId, videoId),
-        ),
-      );
+      await tx
+        .delete(videoCollectionEntriesTable)
+        .where(
+          and(
+            eq(videoCollectionEntriesTable.collectionId, collectionId),
+            eq(videoCollectionEntriesTable.videoId, videoId),
+          ),
+        );
 
-    await db
-      .update(videoCollectionsTable)
-      .set({ updatedAt: new Date() })
-      .where(eq(videoCollectionsTable.id, collectionId));
+      const replacement =
+        lockedCollection.artworkSourceVideoId === videoId
+          ? await tx
+              .select({ videoId: videoCollectionEntriesTable.videoId })
+              .from(videoCollectionEntriesTable)
+              .where(eq(videoCollectionEntriesTable.collectionId, collectionId))
+              .orderBy(
+                sql`CASE WHEN ${videoCollectionEntriesTable.sequenceNumber} IS NULL THEN 1 ELSE 0 END`,
+                asc(videoCollectionEntriesTable.sequenceNumber),
+                asc(videoCollectionEntriesTable.seasonNumber),
+                asc(videoCollectionEntriesTable.episodeNumber),
+                asc(videoCollectionEntriesTable.createdAt),
+              )
+              .limit(1)
+          : [];
+
+      await tx
+        .update(videoCollectionsTable)
+        .set({
+          updatedAt: new Date(),
+          ...(lockedCollection.artworkSourceVideoId === videoId
+            ? { artworkSourceVideoId: replacement[0]?.videoId ?? null }
+            : {}),
+        })
+        .where(eq(videoCollectionsTable.id, collectionId));
+    });
   }
 
   async getCollectionContextByVideoId(
@@ -604,6 +760,89 @@ export class VideoCollectionsService {
     };
   }
 
+  private async getResumeByCollectionIds(
+    collectionIds: number[],
+    userId: number,
+  ): Promise<Map<number, NonNullable<VideoCollection["resume"]>>> {
+    if (collectionIds.length === 0) return new Map();
+
+    const rows = await db.execute<{
+      collection_id: number;
+      entry_id: number;
+      video_id: number;
+      season_number: number | null;
+      episode_number: number | null;
+      position_seconds: number;
+    }>(sql`
+      SELECT DISTINCT ON (e.collection_id)
+        e.collection_id,
+        e.id AS entry_id,
+        e.video_id,
+        e.season_number,
+        e.episode_number,
+        COALESCE(vs.last_position_seconds, 0)::double precision AS position_seconds
+      FROM ${videoCollectionEntriesTable} e
+      INNER JOIN ${videosTable} v ON v.id = e.video_id
+      LEFT JOIN ${videoStatsTable} vs
+        ON vs.video_id = e.video_id AND vs.user_id = ${userId}
+      WHERE e.collection_id IN (
+        ${sql.join(collectionIds.map((collectionId) => sql`${collectionId}`), sql`, `)}
+      )
+        AND NOT (
+          COALESCE(vs.play_count, 0) > 0
+          AND (
+            vs.last_position_seconds = 0
+            OR (
+              v.duration_seconds > 0
+              AND vs.last_position_seconds / v.duration_seconds >= 0.95
+            )
+          )
+        )
+      ORDER BY
+        e.collection_id,
+        CASE WHEN e.sequence_number IS NULL THEN 1 ELSE 0 END,
+        e.sequence_number,
+        e.season_number,
+        e.episode_number,
+        e.episode_part,
+        e.absolute_number,
+        e.created_at
+    `);
+
+    return new Map(
+      rows.map((row) => [
+        row.collection_id,
+        {
+          entry_id: row.entry_id,
+          video_id: row.video_id,
+          season_number: row.season_number,
+          episode_number: row.episode_number,
+          position_seconds: Number(row.position_seconds),
+        },
+      ]),
+    );
+  }
+
+  private async attachArtwork(
+    collections: VideoCollection[],
+    include: CollectionInclude[],
+  ): Promise<VideoCollection[]> {
+    if (!include.includes("artwork") || collections.length === 0) {
+      return collections;
+    }
+    const sourceIds = collections
+      .map((collection) => collection.artwork_source_video_id)
+      .filter((id): id is number => id !== null);
+    const { artworkService } = await import("@/modules/artwork/artwork.service");
+    const artwork = await artworkService.getSummariesByVideoIds(sourceIds);
+    return collections.map((collection) => ({
+      ...collection,
+      artwork: collection.artwork_source_video_id
+        ? (artwork.get(collection.artwork_source_video_id) ?? null)
+        : null,
+    }));
+  }
+
   private mapEntryRow(
     row: CollectionEntryRow,
     includeVideo: boolean,
@@ -632,6 +871,13 @@ export class VideoCollectionsService {
                 ? `${API_PREFIX}/thumbnails/${row.thumbnailId}/image`
                 : null,
               is_available: row.isAvailable ?? false,
+              duration_seconds: row.durationSeconds ?? null,
+              watched: isVideoWatched({
+                playCount: row.playCount,
+                positionSeconds: row.positionSeconds,
+                durationSeconds: row.durationSeconds,
+              }),
+              position_seconds: row.positionSeconds ?? null,
             },
           }
         : {}),

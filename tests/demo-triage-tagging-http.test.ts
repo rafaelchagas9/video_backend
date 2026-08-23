@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { rmSync } from "fs";
 import Fastify from "fastify";
+import swagger from "@fastify/swagger";
 import {
+  jsonSchemaTransform,
   serializerCompiler,
   validatorCompiler,
 } from "fastify-type-provider-zod";
@@ -39,6 +41,10 @@ describe("demo triage and tagging-rules HTTP contracts", () => {
 
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
+    await app.register(swagger, {
+      openapi: { info: { title: "Triage contract", version: "1" } },
+      transform: jsonSchemaTransform,
+    });
     const { triageRoutes, usersTriageLegacyRoutes } =
       await import("@/modules/triage/triage.routes");
     const { taggingRulesRoutes } =
@@ -114,6 +120,26 @@ describe("demo triage and tagging-rules HTTP contracts", () => {
         total_videos: 132,
         tagged_percentage: expect.any(Number),
       });
+    }
+  });
+
+  it("documents validation and assignment conflicts for both triage bulk routes", () => {
+    const paths = app.swagger().paths as Record<
+      string,
+      Record<string, { responses?: Record<string, unknown> }>
+    >;
+    for (const path of [
+      "/api/triage/bulk-actions",
+      "/api/users/triage/bulk-actions",
+    ]) {
+      expect(paths[path]?.post?.responses).toEqual(
+        expect.objectContaining({
+          "200": expect.anything(),
+          "400": expect.anything(),
+          "401": expect.anything(),
+          "409": expect.anything(),
+        })
+      );
     }
   });
 

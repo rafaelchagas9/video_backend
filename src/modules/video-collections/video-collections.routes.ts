@@ -13,6 +13,7 @@ import {
   videoCollectionResponseSchema,
   videoCollectionsListResponseSchema,
   videoIdParamSchema,
+  videoCollectionQuerySchema,
 } from "./video-collections.schemas";
 import { updateVideoCollectionSchema } from "./video-collections.types";
 
@@ -30,14 +31,18 @@ export async function videoCollectionsRoutes(
         tags: ["video-collections"],
         summary: "List video collections",
         description: "Returns all configured video collections.",
+        querystring: videoCollectionQuerySchema,
         response: {
           200: videoCollectionsListResponseSchema,
           401: errorResponseSchema,
         },
       },
     },
-    async (_request, reply) => {
-      const collections = await videoCollectionsService.list();
+    async (request, reply) => {
+      const collections = await videoCollectionsService.list(
+        request.user!.id,
+        request.query.include ?? [],
+      );
       return reply.send({
         success: true,
         data: collections,
@@ -61,7 +66,10 @@ export async function videoCollectionsRoutes(
       },
     },
     async (request, reply) => {
-      const collection = await videoCollectionsService.create(request.body);
+      const collection = await videoCollectionsService.create(
+        request.body,
+        request.user!.id,
+      );
       return reply.status(201).send({
         success: true,
         data: collection,
@@ -78,6 +86,7 @@ export async function videoCollectionsRoutes(
         summary: "Get video collection by ID",
         description: "Returns one video collection.",
         params: idParamSchema,
+        querystring: videoCollectionQuerySchema,
         response: {
           200: videoCollectionResponseSchema,
           401: errorResponseSchema,
@@ -86,7 +95,11 @@ export async function videoCollectionsRoutes(
       },
     },
     async (request, reply) => {
-      const collection = await videoCollectionsService.findById(request.params.id);
+      const collection = await videoCollectionsService.findById(
+        request.params.id,
+        request.user!.id,
+        request.query.include ?? [],
+      );
       return reply.send({
         success: true,
         data: collection,
@@ -100,7 +113,8 @@ export async function videoCollectionsRoutes(
       schema: {
         tags: ["video-collections"],
         summary: "Update a video collection",
-        description: "Updates collection metadata.",
+        description:
+          "Updates collection metadata. artwork_source_video_id must reference a video that already belongs to this collection.",
         params: idParamSchema,
         body: updateVideoCollectionSchema,
         response: {
@@ -115,6 +129,7 @@ export async function videoCollectionsRoutes(
       const collection = await videoCollectionsService.update(
         request.params.id,
         request.body,
+        request.user!.id,
       );
       return reply.send({
         success: true,
@@ -164,7 +179,10 @@ export async function videoCollectionsRoutes(
       },
     },
     async (request, reply) => {
-      const entries = await videoCollectionsService.listEntries(request.params.id);
+      const entries = await videoCollectionsService.listEntries(
+        request.params.id,
+        request.user!.id,
+      );
       return reply.send({
         success: true,
         data: entries,

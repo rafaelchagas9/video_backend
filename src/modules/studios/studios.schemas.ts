@@ -52,12 +52,36 @@ export const listStudiosQuerySchema = z.object({
   order: z.enum(["asc", "desc"]).default("asc"),
   missing: z.enum(["picture", "social", "linked", "any"]).optional(),
   complete: z.coerce.boolean().optional(),
+  include: z
+    .preprocess(
+      (value) =>
+        typeof value === "string"
+          ? value.split(",").map((item) => item.trim()).filter(Boolean)
+          : value,
+      z.array(z.enum(["hierarchy", "aliases"]))
+    )
+    .default([]),
+});
+
+export const studioIncludesQuerySchema = z.object({
+  include: listStudiosQuerySchema.shape.include,
 });
 
 // Completeness schema
 const completenessSchema = z.object({
   is_complete: z.boolean(),
   missing_fields: z.array(z.string()),
+});
+
+const studioSummarySchema = z.object({
+  id: z.number(),
+  name: z.string(),
+});
+
+const studioAliasSummarySchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  note: z.string().nullable(),
 });
 
 // Response schemas - Enhanced studio with counts and completeness
@@ -75,6 +99,9 @@ const studioSchema = z.object({
   linked_creator_count: z.number().optional(),
   has_profile_picture: z.boolean().optional(),
   completeness: completenessSchema.optional(),
+  parent: studioSummarySchema.nullable().optional(),
+  children: z.array(studioSummarySchema).optional(),
+  aliases: z.array(studioAliasSummarySchema).optional(),
 });
 
 const creatorSchema = z.object({

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { VideoArtworkSummary } from "@/modules/artwork/artwork.types";
 
 export interface Playlist {
   id: number;
@@ -9,6 +10,17 @@ export interface Playlist {
   updated_at: string;
   thumbnail_url?: string | null;
   video_count: number;
+  watched_count: number;
+  runtime_seconds: number;
+  last_played_at: string | null;
+  resume: PlaylistResume | null;
+  artwork_source_video_id: number | null;
+  artwork?: VideoArtworkSummary | null;
+}
+
+export interface PlaylistResume {
+  video_id: number;
+  position_seconds: number;
 }
 
 export interface PlaylistVideo {
@@ -26,6 +38,7 @@ export const createPlaylistSchema = z.object({
 export const updatePlaylistSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).nullable().optional(),
+  artwork_source_video_id: z.number().int().positive().optional(),
 });
 
 export const addVideoToPlaylistSchema = z.object({

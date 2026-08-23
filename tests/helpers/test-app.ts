@@ -230,6 +230,23 @@ function installExternalServiceMocks(): void {
   mock.module("@/modules/directories/watcher.service", () => ({
     watcherService: {
       scanDirectory: mock(async () => undefined),
+      startScan: mock(async (directoryId: number) => {
+        const { directoryScansService } = await import(
+          "@/modules/directories/directory-scans.service"
+        );
+        const run = await directoryScansService.create(directoryId);
+        const result = {
+          files_found: 0,
+          files_added: 0,
+          files_updated: 0,
+          files_removed: 0,
+          errors: [],
+        };
+        const completion = directoryScansService
+          .complete(run.id, result)
+          .then(() => result);
+        return { run, completion };
+      }),
       startWatching: mock(async () => undefined),
       stopWatching: mock(async () => undefined),
     },
@@ -432,7 +449,11 @@ function installExternalServiceMocks(): void {
         outputConfig: {
           directory_id: 1,
           file_name: "edited.mkv",
+          format: "mkv",
+          video_codec: "av1",
+          audio_codec: "opus",
         },
+        timelineConfig: { segments: [{ start: 0, end: 10, speed: 1 }] },
         errorMessage: null,
       })),
       list: mock(async () => ({
@@ -449,11 +470,31 @@ function installExternalServiceMocks(): void {
             outputConfig: {
               directory_id: 1,
               file_name: "edited.mkv",
+              format: "mkv",
+              video_codec: "av1",
+              audio_codec: "opus",
             },
+            timelineConfig: { segments: [{ start: 0, end: 10, speed: 1 }] },
             errorMessage: null,
           },
         ],
         pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+      })),
+      recipeFor: mock((job: any) => ({
+        source_video_id: job.videoId,
+        output_defaults: {
+          directory_id: job.outputConfig.directory_id,
+          format: job.outputConfig.format,
+          video_codec: job.outputConfig.video_codec,
+          audio_codec: job.outputConfig.audio_codec,
+        },
+        timeline: job.timelineConfig,
+      })),
+      clone: mock(async (_id: number, body: any) => ({
+        id: 2,
+        status: "queued",
+        videoId: 1,
+        outputConfig: body.output,
       })),
       cancel: mock(async (id: number) => ({
         id,
@@ -614,6 +655,9 @@ function installExternalServiceMocks(): void {
     captureTelemetryLog: mock(() => undefined),
     flushTelemetry: mock(async () => undefined),
     getTelemetryDistinctId: mock(() => "test-user"),
+    sanitizeTelemetryProperties: mock(
+      (properties: Record<string, unknown>) => properties,
+    ),
     sanitizeTelemetryUrl: mock((url: string) => url),
     shouldCaptureLog: mock(() => false),
     shouldTrackRequestMetrics: mock(() => false),

@@ -15,6 +15,7 @@ import {
   creatorAliasesTable,
   creatorPlatformsTable,
   creatorExternalIdsTable,
+  creatorMergesTable,
   studiosTable,
   studioAliasesTable,
   studioExternalIdsTable,
@@ -25,7 +26,6 @@ import {
   videosTable,
   videoMetadataTable,
   videoCreatorsTable,
-  videoStudiosTable,
   videoTagsTable,
   videoExternalIdsTable,
   enrichmentSuggestionsTable,
@@ -35,8 +35,14 @@ import {
   type EnrichmentEntityType,
   type NewCreator,
 } from "@/database/schema";
-import { AppError, BadRequestError, NotFoundError } from "@/utils/errors";
+import {
+  AppError,
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+} from "@/utils/errors";
 import { env } from "@/config/env";
+import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
 import { logger } from "@/utils/logger";
 import { creatorsService } from "@/modules/creators/creators.service";
 import { creatorsSocialService } from "@/modules/creators/creators.social.service";
@@ -58,6 +64,8 @@ import type {
   RunDTO,
   SuggestionDTO,
 } from "./enrichment.types";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const AUTO_ACCEPT_RELATED_TYPES: Record<
   Exclude<EnrichmentEntityType, "scene">,
@@ -159,44 +167,90 @@ export class EnrichmentService {
       throw new AppError(502, `Enrichment service error: ${message}`);
     }
 
-    let inserted = 0;
-    if (result.candidates.length > 0) {
-      const rows = result.candidates.map((c) =>
-        this.toSuggestionRow(entityType, entityId, c)
+    // A creator can be merged while the remote enrichment call is in flight.
+    // Lock the live/canonical creator while persisting so merge either moves
+    // these rows afterward or we resolve the already-completed merge first.
+    const persisted = await db.transaction(async (tx) => {
+      const canonicalEntityId = await this.lockCanonicalCreatorForWrite(
+        tx,
+        entityType,
+        entityId
       );
-      const insertedRows = await db
-        .insert(enrichmentSuggestionsTable)
-        .values(rows)
-        .onConflictDoNothing()
-        .returning({ id: enrichmentSuggestionsTable.id });
-      inserted = insertedRows.length;
-    }
+      let inserted = 0;
+      if (result.candidates.length > 0) {
+        const rows = result.candidates.map((candidate) =>
+          this.toSuggestionRow(entityType, canonicalEntityId, candidate)
+        );
+        const insertedRows = await tx
+          .insert(enrichmentSuggestionsTable)
+          .values(rows)
+          .onConflictDoNothing()
+          .returning({ id: enrichmentSuggestionsTable.id });
+        inserted = insertedRows.length;
+      }
 
-    const [updated] = await db
-      .update(enrichmentRunsTable)
-      .set({
-        status: "success",
-        sourcesUsed: result.sources_used,
-        suggestionCount: inserted,
-        errors: result.errors.length > 0 ? result.errors : null,
-        finishedAt: new Date(),
-      })
-      .where(eq(enrichmentRunsTable.id, run.id))
-      .returning();
+      const [updated] = await tx
+        .update(enrichmentRunsTable)
+        .set({
+          entityId: canonicalEntityId,
+          status: "success",
+          sourcesUsed: result.sources_used,
+          suggestionCount: inserted,
+          errors: result.errors.length > 0 ? result.errors : null,
+          finishedAt: new Date(),
+        })
+        .where(eq(enrichmentRunsTable.id, run.id))
+        .returning();
+      return { canonicalEntityId, inserted, updated };
+    });
 
     logger.info(
       {
         entityType,
-        entityId,
+        entityId: persisted.canonicalEntityId,
         runId: run.id,
         candidates: result.candidates.length,
-        inserted,
+        inserted: persisted.inserted,
         sources: result.sources_used,
       },
       "Enrichment run complete"
     );
 
-    return this.toRunDTO(updated);
+    return this.toRunDTO(persisted.updated);
+  }
+
+  private async lockCanonicalCreatorForWrite(
+    tx: Tx,
+    entityType: EntityType,
+    entityId: number
+  ): Promise<number> {
+    if (entityType !== "creator") return entityId;
+
+    let candidateId = entityId;
+    for (let depth = 0; depth < 20; depth += 1) {
+      const [creator] = await tx
+        .select({ id: creatorsTable.id })
+        .from(creatorsTable)
+        .where(eq(creatorsTable.id, candidateId))
+        .limit(1)
+        .for("share");
+      if (creator) return creator.id;
+
+      const [merge] = await tx
+        .select({ intoCreatorId: creatorMergesTable.intoCreatorId })
+        .from(creatorMergesTable)
+        .where(eq(creatorMergesTable.fromCreatorId, candidateId))
+        .orderBy(desc(creatorMergesTable.id))
+        .limit(1);
+      if (!merge) {
+        throw new NotFoundError(`Creator not found with id: ${entityId}`);
+      }
+      candidateId = merge.intoCreatorId;
+    }
+
+    throw new ConflictError(
+      `Creator merge chain is too deep for creator ${entityId}`
+    );
   }
 
   /** Build the discovery request for the Python service, per entity type. */
@@ -209,7 +263,7 @@ export class EnrichmentService {
       ? parseExactExternalReference(
           options.external_ref,
           entityType,
-          options.sources,
+          options.sources
         )
       : null;
     const applyRunOptions = (request: EnrichRequest): EnrichRequest => ({
@@ -718,10 +772,7 @@ export class EnrichmentService {
           s.source,
           raw.external_id
         );
-        await db
-          .insert(videoStudiosTable)
-          .values({ videoId, studioId })
-          .onConflictDoNothing();
+        await studioAssignmentService.linkMany([videoId], [studioId]);
         await this.autoEnrichRelatedEntity(
           "studio",
           studioId,
@@ -932,30 +983,38 @@ export class EnrichmentService {
     );
     if (candidates.length === 0) return;
 
-    const rows = candidates.map((candidate) =>
-      this.toSuggestionRow(entityType, entityId, candidate)
-    );
-    const dedupHashes = new Set(rows.map((row) => row.dedupHash));
-    await db
-      .insert(enrichmentSuggestionsTable)
-      .values(rows)
-      .onConflictDoNothing();
-
-    const pending = await db
-      .select()
-      .from(enrichmentSuggestionsTable)
-      .where(
-        and(
-          eq(enrichmentSuggestionsTable.entityType, entityType),
-          eq(enrichmentSuggestionsTable.entityId, entityId),
-          eq(enrichmentSuggestionsTable.status, "pending")
-        )
+    const persisted = await db.transaction(async (tx) => {
+      const canonicalEntityId = await this.lockCanonicalCreatorForWrite(
+        tx,
+        entityType,
+        entityId
       );
+      const rows = candidates.map((candidate) =>
+        this.toSuggestionRow(entityType, canonicalEntityId, candidate)
+      );
+      const dedupHashes = new Set(rows.map((row) => row.dedupHash));
+      await tx
+        .insert(enrichmentSuggestionsTable)
+        .values(rows)
+        .onConflictDoNothing();
 
-    for (const suggestion of pending) {
+      const pending = await tx
+        .select()
+        .from(enrichmentSuggestionsTable)
+        .where(
+          and(
+            eq(enrichmentSuggestionsTable.entityType, entityType),
+            eq(enrichmentSuggestionsTable.entityId, canonicalEntityId),
+            eq(enrichmentSuggestionsTable.status, "pending")
+          )
+        );
+      return { canonicalEntityId, dedupHashes, pending };
+    });
+
+    for (const suggestion of persisted.pending) {
       if (
         !acceptedTypes.has(suggestion.type) ||
-        !dedupHashes.has(suggestion.dedupHash)
+        !persisted.dedupHashes.has(suggestion.dedupHash)
       ) {
         continue;
       }
@@ -982,7 +1041,7 @@ export class EnrichmentService {
     logger.info(
       {
         entityType,
-        entityId,
+        entityId: persisted.canonicalEntityId,
         source,
         externalId,
         candidates: candidates.length,

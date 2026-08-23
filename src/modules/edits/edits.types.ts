@@ -73,6 +73,17 @@ export interface CreateEditJobInput {
   timeline: EditTimelineConfig;
 }
 
+export interface EditRecipe {
+  source_video_id: number;
+  output_defaults: Omit<EditOutputConfig, "file_name">;
+  timeline: EditTimelineConfig;
+}
+
+export interface CloneEditJobInput {
+  output: EditOutputConfig;
+  timeline?: EditTimelineConfig;
+}
+
 export interface EditQueuePayload {
   jobId: number;
   videoId: number;

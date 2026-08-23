@@ -90,7 +90,9 @@ export async function triageRoutes(fastify: FastifyInstance): Promise<void> {
         body: triageBulkActionsSchema,
         response: {
           200: triageBulkActionsResultSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
+          409: errorResponseSchema,
         },
       },
     },
@@ -213,7 +215,9 @@ export async function usersTriageLegacyRoutes(
         body: triageBulkActionsSchema,
         response: {
           200: triageBulkActionsResultSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
+          409: errorResponseSchema,
         },
       },
     },

@@ -11,6 +11,7 @@ import { env } from "@/config/env";
 import {
   closeDemoDatabase,
   demoSchema,
+  demoRepository,
   getDemoDatabase,
   initializeDemoDatabase,
   setDemoDatabasePathForTests,
@@ -53,6 +54,7 @@ function seed(): void {
       fileName: "one.webm",
       directoryId: 1,
       fileSizeBytes: 100,
+      durationSeconds: 100,
       title: "One",
       isAvailable: true,
       indexedAt: timestamp,
@@ -153,6 +155,260 @@ describe("SQLite demo people and content adapters", () => {
     expect(() =>
       playlistsDemoService.update(playlist.id, 4, { name: "Denied" })
     ).toThrow();
+  });
+
+  test("selects delegated covers only from current demo members", () => {
+    getDemoDatabase()
+      .insert(demoSchema.demoVideosTable)
+      .values([
+        {
+          id: 2,
+          sourceVideoId: 2,
+          filePath: "demo_mode/video/two.webm",
+          fileName: "two.webm",
+          directoryId: 1,
+          fileSizeBytes: 200,
+          title: "Two",
+          isAvailable: true,
+          indexedAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          id: 3,
+          sourceVideoId: 3,
+          filePath: "demo_mode/video/outsider.webm",
+          fileName: "outsider.webm",
+          directoryId: 1,
+          fileSizeBytes: 300,
+          title: "Outsider",
+          isAvailable: true,
+          indexedAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ])
+      .run();
+
+    const playlist = playlistsDemoService.create(3, { name: "Cover queue" });
+    playlistsDemoService.addVideo(playlist.id, 3, 1);
+    playlistsDemoService.addVideo(playlist.id, 3, 2);
+    expect(
+      playlistsDemoService.update(playlist.id, 3, {
+        artwork_source_video_id: 2,
+      }).artwork_source_video_id
+    ).toBe(2);
+    expect(() =>
+      playlistsDemoService.update(playlist.id, 3, {
+        artwork_source_video_id: 3,
+      })
+    ).toThrow("Artwork source video must belong to this playlist");
+    expect(() =>
+      playlistsDemoService.update(playlist.id, 4, {
+        artwork_source_video_id: 2,
+      })
+    ).toThrow();
+    playlistsDemoService.reorderVideos(playlist.id, 3, [
+      { video_id: 2, position: 0 },
+      { video_id: 1, position: 1 },
+    ]);
+    expect(
+      playlistsDemoService.findById(playlist.id, 3).artwork_source_video_id
+    ).toBe(2);
+    playlistsDemoService.removeVideo(playlist.id, 3, 2);
+    expect(
+      playlistsDemoService.findById(playlist.id, 3).artwork_source_video_id
+    ).toBe(1);
+    playlistsDemoService.removeVideo(playlist.id, 3, 1);
+    expect(
+      playlistsDemoService.findById(playlist.id, 3).artwork_source_video_id
+    ).toBeNull();
+
+    const collection = demoRepository.createCollection({
+      title: "Cover collection",
+      kind: "movie_series",
+    });
+    demoRepository.addCollectionEntry(collection.id, {
+      video_id: 1,
+      entry_kind: "movie",
+      sequence_number: 1,
+    });
+    demoRepository.addCollectionEntry(collection.id, {
+      video_id: 2,
+      entry_kind: "movie",
+      sequence_number: 2,
+    });
+    expect(
+      demoRepository.updateCollection(collection.id, {
+        artwork_source_video_id: 2,
+      }).artwork_source_video_id
+    ).toBe(2);
+    expect(() =>
+      demoRepository.updateCollection(collection.id, {
+        artwork_source_video_id: 3,
+      })
+    ).toThrow("Artwork source video must belong to this collection");
+    demoRepository.reorderCollectionEntries(collection.id, {
+      entries: [
+        { video_id: 2, sequence_number: 1 },
+        { video_id: 1, sequence_number: 2 },
+      ],
+    });
+    expect(
+      demoRepository.getCollectionById(collection.id).artwork_source_video_id
+    ).toBe(2);
+    demoRepository.removeCollectionEntry(collection.id, 2);
+    expect(
+      demoRepository.getCollectionById(collection.id).artwork_source_video_id
+    ).toBe(1);
+    demoRepository.removeCollectionEntry(collection.id, 1);
+    expect(
+      demoRepository.getCollectionById(collection.id).artwork_source_video_id
+    ).toBeNull();
+
+    const empty = demoRepository.createCollection({
+      title: "Empty collection",
+      kind: "other",
+    });
+    expect(empty.artwork_source_video_id).toBeNull();
+    expect(() =>
+      demoRepository.updateCollection(empty.id, {
+        artwork_source_video_id: 3,
+      })
+    ).toThrow("Artwork source video must belong to this collection");
+  });
+
+  test("serves real collection and playlist watch summaries", () => {
+    getDemoDatabase()
+      .insert(demoSchema.demoVideosTable)
+      .values({
+        id: 2,
+        sourceVideoId: 2,
+        filePath: "demo_mode/video/two.webm",
+        fileName: "two.webm",
+        directoryId: 1,
+        fileSizeBytes: 200,
+        durationSeconds: 200,
+        title: "Two",
+        isAvailable: true,
+        indexedAt: timestamp,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .run();
+    getDemoDatabase()
+      .insert(demoSchema.demoVideoStatsTable)
+      .values([
+        {
+          userId: 3,
+          videoId: 1,
+          playCount: 1,
+          totalWatchSeconds: 100,
+          sessionWatchSeconds: 100,
+          sessionPlayCounted: true,
+          lastPositionSeconds: 95,
+          lastPlayedAt: "2026-01-02T00:00:00.000Z",
+          lastWatchAt: "2026-01-02T00:00:00.000Z",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          userId: 3,
+          videoId: 2,
+          playCount: 1,
+          totalWatchSeconds: 40,
+          sessionWatchSeconds: 40,
+          sessionPlayCounted: true,
+          lastPositionSeconds: 40,
+          lastPlayedAt: "2026-01-03T00:00:00.000Z",
+          lastWatchAt: "2026-01-03T00:00:00.000Z",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ])
+      .run();
+
+    const playlist = playlistsDemoService.create(3, { name: "Progress" });
+    playlistsDemoService.addVideo(playlist.id, 3, 1);
+    playlistsDemoService.addVideo(playlist.id, 3, 2);
+    playlistsDemoService.reorderVideos(playlist.id, 3, [
+      { video_id: 2, position: 0 },
+      { video_id: 1, position: 1 },
+    ]);
+
+    const playlistSummary = playlistsDemoService.findById(playlist.id, 3);
+    expect(playlistSummary).toMatchObject({
+      video_count: 2,
+      watched_count: 1,
+      runtime_seconds: 300,
+      artwork_source_video_id: 1,
+      resume: { video_id: 2, position_seconds: 40 },
+      last_played_at: "2026-01-03T00:00:00.000Z",
+    });
+    expect(playlistsDemoService.getVideos(playlist.id, 3)).toEqual([
+      expect.objectContaining({
+        id: 2,
+        duration_seconds: 200,
+        watched: false,
+        position_seconds: 40,
+      }),
+      expect.objectContaining({
+        id: 1,
+        duration_seconds: 100,
+        watched: true,
+        position_seconds: 95,
+      }),
+    ]);
+
+    const collection = demoRepository.createCollection({
+      title: "Progress collection",
+      kind: "tv_series",
+    });
+    demoRepository.addCollectionEntry(collection.id, {
+      video_id: 1,
+      entry_kind: "episode",
+      sequence_number: 1,
+      season_number: 1,
+      episode_number: 1,
+    });
+    const secondEntry = demoRepository.addCollectionEntry(collection.id, {
+      video_id: 2,
+      entry_kind: "episode",
+      sequence_number: 2,
+      season_number: 1,
+      episode_number: 2,
+    });
+    expect(demoRepository.getCollectionById(collection.id, 3)).toMatchObject({
+      entry_count: 2,
+      watched_count: 1,
+      runtime_seconds: 300,
+      season_count: 1,
+      artwork_source_video_id: 1,
+      resume: {
+        entry_id: secondEntry.id,
+        video_id: 2,
+        position_seconds: 40,
+      },
+      last_watched_at: "2026-01-03T00:00:00.000Z",
+    });
+    expect(demoRepository.listCollectionEntries(collection.id, 3)).toEqual([
+      expect.objectContaining({
+        video_id: 1,
+        video: expect.objectContaining({
+          duration_seconds: 100,
+          watched: true,
+          position_seconds: 95,
+        }),
+      }),
+      expect.objectContaining({
+        video_id: 2,
+        video: expect.objectContaining({
+          duration_seconds: 200,
+          watched: false,
+          position_seconds: 40,
+        }),
+      }),
+    ]);
   });
 
   test("routes child service mutations through SQLite adapters", async () => {

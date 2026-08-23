@@ -33,3 +33,48 @@ export interface DirectoryStats {
   available_videos: number;
   unavailable_videos: number;
 }
+
+export interface ScanRun {
+  id: number;
+  directory_id: number;
+  status: "running" | "completed";
+  files_found: number;
+  files_added: number;
+  files_updated: number;
+  files_removed: number;
+  error_count: number;
+  error_summaries: string[];
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface ScanResult {
+  files_found: number;
+  files_added: number;
+  files_updated: number;
+  files_removed: number;
+  errors: string[];
+}
+
+export interface ScanRunPage {
+  data: ScanRun[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SchedulerStatus {
+  is_running: boolean;
+  scheduled_directories: number;
+  schedules: Array<{
+    directory_id: number;
+    interval_minutes: number;
+  }>;
+  system_tasks: Array<{
+    name: string;
+    cron_expression: string;
+  }>;
+}

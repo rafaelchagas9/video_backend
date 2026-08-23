@@ -10,6 +10,7 @@ import { videosRelatedService } from "./videos.related.service";
 import { streamingService } from "./streaming.service";
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
+import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
 import { tagsService } from "@/modules/tags/tags.service";
 import { ratingsService } from "@/modules/ratings/ratings.service";
 import { bookmarksService } from "@/modules/bookmarks/bookmarks.service";
@@ -63,6 +64,7 @@ import {
   cleanupUnavailableResponseSchema,
   verifyUnavailableSchema,
   verifyUnavailableResponseSchema,
+  studioAssignmentBodySchema,
 } from "./videos.schemas";
 
 export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -539,6 +541,7 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         querystring: getVideoQuerySchema,
         response: {
           200: videoResponseSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },
@@ -583,6 +586,35 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         data: video,
         message: "Video updated successfully",
       });
+    },
+  );
+
+  app.patch(
+    "/:id/studio-assignment",
+    {
+      schema: {
+        tags: ["videos", "triage"],
+        summary: "Set explicit studio assignment state",
+        params: idParamSchema,
+        body: studioAssignmentBodySchema,
+        response: {
+          200: videoResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await videosService.findById(request.params.id, request.user!.id);
+      if (request.body.status === "confirmed_none") {
+        await studioAssignmentService.confirmNone([request.params.id]);
+      } else {
+        await studioAssignmentService.markUnknown([request.params.id]);
+      }
+      const video = await videosService.findById(request.params.id, request.user!.id);
+      return reply.send({ success: true, data: video });
     },
   );
 

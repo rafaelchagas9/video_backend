@@ -3,7 +3,7 @@ import {
   restoreDemoBaselineSnapshot,
 } from "./baseline";
 import { initializeDemoDatabase } from "./client";
-import { hasDemoSeed } from "./seed";
+import { ensureDemoEntityPageData, hasDemoSeed } from "./seed";
 import { resetDemoRuntimeAssets } from "./assets";
 
 /** Prepare demo state without ever consulting the legacy JSON fixture. */
@@ -13,6 +13,7 @@ export function prepareDemoDatabaseForStartup(
   initializeDemoDatabase();
   if (resetMode === "on-start" && hasDemoBaselineSnapshot()) {
     restoreDemoBaselineSnapshot();
+    ensureDemoEntityPageData();
     resetDemoRuntimeAssets();
   }
   if (!hasDemoSeed()) {

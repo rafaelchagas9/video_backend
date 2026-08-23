@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { existsSync, rmSync, statSync } from "fs";
+import { Database } from "bun:sqlite";
+import { chmodSync, existsSync, rmSync, statSync } from "fs";
 import { resolve } from "path";
 
 process.env.NODE_ENV = "test";
@@ -50,7 +51,18 @@ describe("immutable demo SQLite baseline reset", () => {
     expect(statSync(baselinePath).mode & 0o222).toBe(0);
 
     const sqlite = demo.getDemoSqlite();
+    const reviewVideoId = sqlite
+      .query<{ id: number }, []>(
+        `SELECT v.id FROM demo_videos v
+         WHERE v.studio_absence_confirmed_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM demo_video_studios vs WHERE vs.video_id = v.id
+           )
+         ORDER BY v.id LIMIT 1`
+      )
+      .get()!.id;
     const original = {
+      reviewVideoId,
       videoTitle: sqlite
         .query<
           { title: string },
@@ -107,6 +119,10 @@ describe("immutable demo SQLite baseline reset", () => {
     sqlite.run("UPDATE demo_videos SET title = ? WHERE id = 1", [
       "Runtime-mutated title",
     ]);
+    sqlite.run(
+      "UPDATE demo_videos SET studio_absence_confirmed_at = ? WHERE id = ?",
+      ["2026-08-01T00:00:00.000Z", reviewVideoId]
+    );
     sqlite.run("DELETE FROM demo_creators WHERE id = 42");
     sqlite.run("DELETE FROM demo_videos WHERE id = 132");
     sqlite.run("UPDATE demo_studios SET name = ? WHERE id = 1", [
@@ -175,7 +191,23 @@ describe("immutable demo SQLite baseline reset", () => {
       outcome: "success",
     });
 
+    // Additive migrations may make the live schema newer than an immutable
+    // baseline captured by the previous release. Missing nullable columns must
+    // take their defaults instead of making startup fail on column counts.
+    sqlite.exec(
+      "ALTER TABLE demo_collections ADD COLUMN future_nullable TEXT"
+    );
+
     demo.resetDemoRuntimeState();
+
+    expect(
+      sqlite
+        .query<
+          { future_nullable: string | null },
+          []
+        >("SELECT future_nullable FROM demo_collections WHERE id = 1")
+        .get()?.future_nullable
+    ).toBeNull();
 
     expect(
       sqlite
@@ -185,6 +217,20 @@ describe("immutable demo SQLite baseline reset", () => {
         >("SELECT title FROM demo_videos WHERE id = 1")
         .get()!.title
     ).toBe(original.videoTitle);
+    expect(
+      sqlite
+        .query<
+          { studio_absence_confirmed_at: string | null },
+          [number]
+        >(
+          "SELECT studio_absence_confirmed_at FROM demo_videos WHERE id = ?"
+        )
+        .get(original.reviewVideoId)?.studio_absence_confirmed_at
+    ).toBeNull();
+    expect(
+      demo.demoRepository.getVideoById(original.reviewVideoId)
+        .studio_assignment_status
+    ).toBe("unknown");
     expect(
       sqlite
         .query<
@@ -288,5 +334,29 @@ describe("immutable demo SQLite baseline reset", () => {
         >("SELECT title FROM demo_videos WHERE id = 1")
         .get()!.title
     ).not.toBe("Manual-mode persisted title");
+  });
+
+  it("restores an older baseline that predates additive demo tables", () => {
+    demo.closeDemoDatabase();
+    chmodSync(baselinePath, 0o644);
+    const baseline = new Database(baselinePath, { strict: true });
+    try {
+      baseline.exec("DROP TABLE demo_studio_aliases");
+    } finally {
+      baseline.close(false);
+      chmodSync(baselinePath, 0o444);
+    }
+
+    demo.resetDemoRuntimeState();
+
+    const sqlite = demo.getDemoSqlite();
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_studio_aliases")
+        .get()!.count
+    ).toBeGreaterThan(0);
   });
 });

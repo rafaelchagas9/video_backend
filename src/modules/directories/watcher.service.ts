@@ -1,8 +1,8 @@
 import { readdir } from "fs/promises";
 import { join, basename } from "path";
 import { db } from "@/config/drizzle";
-import { scanLogsTable, videosTable } from "@/database/schema";
-import { eq, and, ne } from "drizzle-orm";
+import { videosTable, videoStudiosTable } from "@/database/schema";
+import { eq, and, ne, sql } from "drizzle-orm";
 import {
   isVideoFile,
   getFileSize,
@@ -13,42 +13,53 @@ import { logger } from "@/utils/logger";
 import { captureTelemetryException } from "@/utils/telemetry";
 import { metadataService } from "@/modules/videos/metadata.service";
 import { directoriesService } from "./directories.service";
+import { directoryScansService } from "./directory-scans.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
-import type { Video } from "@/modules/videos/videos.types";
-
-interface ScanResult {
-  files_found: number;
-  files_added: number;
-  files_updated: number;
-  files_removed: number;
-  errors: string[];
-}
+import { deriveStudioAssignmentStatus, type Video } from "@/modules/videos/videos.types";
+import type { Directory, ScanResult, ScanRun } from "./directories.types";
+import { ConflictError } from "@/utils/errors";
 
 export class WatcherService {
   private scanningDirectories = new Set<number>();
 
-  async scanDirectory(directoryId: number): Promise<ScanResult> {
+  async startScan(directoryId: number): Promise<{
+    run: ScanRun;
+    completion: Promise<ScanResult>;
+  }> {
     if (this.scanningDirectories.has(directoryId)) {
-      logger.warn(
-        { directoryId },
-        "Directory scan already in progress, skipping"
-      );
-      return {
-        files_found: 0,
-        files_added: 0,
-        files_updated: 0,
-        files_removed: 0,
-        errors: ["Scan already in progress"],
-      };
+      throw new ConflictError("Directory scan already in progress");
     }
 
     this.scanningDirectories.add(directoryId);
+
+    try {
+      const directory = await directoriesService.findById(directoryId);
+      const run = await directoryScansService.create(directoryId);
+      return {
+        run,
+        completion: this.completeScan(directory, run.id),
+      };
+    } catch (error) {
+      this.scanningDirectories.delete(directoryId);
+      throw error;
+    }
+  }
+
+  async scanDirectory(directoryId: number): Promise<ScanResult> {
+    const { completion } = await this.startScan(directoryId);
+    return completion;
+  }
+
+  private async completeScan(
+    directory: Directory,
+    scanLogId: number
+  ): Promise<ScanResult> {
+    const directoryId = directory.id;
 
     const scanStartTime = Date.now();
     logger.info({ directoryId }, "Starting directory scan");
 
     try {
-      const directory = await directoriesService.findById(directoryId);
       logger.debug({ directoryId, path: directory.path }, "Directory loaded");
 
       const result: ScanResult = {
@@ -58,23 +69,6 @@ export class WatcherService {
         files_removed: 0,
         errors: [],
       };
-
-      const startTime = new Date();
-
-      // Insert scan log
-      const [scanLogResult] = await db
-        .insert(scanLogsTable)
-        .values({
-          directoryId,
-          startedAt: startTime,
-        })
-        .returning({ id: scanLogsTable.id });
-
-      if (!scanLogResult) {
-        throw new Error("Failed to create scan log");
-      }
-
-      const scanLogId = scanLogResult.id;
 
       try {
         // Scan directory recursively
@@ -184,18 +178,7 @@ export class WatcherService {
           );
         }
 
-        // Update scan log
-        await db
-          .update(scanLogsTable)
-          .set({
-            completedAt: new Date(),
-            filesFound: result.files_found,
-            filesAdded: result.files_added,
-            filesUpdated: result.files_updated,
-            filesRemoved: result.files_removed,
-            errors: JSON.stringify(result.errors),
-          })
-          .where(eq(scanLogsTable.id, scanLogId));
+        await directoryScansService.complete(scanLogId, result);
 
         // Update directory last scan time
         await directoriesService.updateLastScanTime(directoryId);
@@ -213,14 +196,10 @@ export class WatcherService {
 
         return result;
       } catch (error: any) {
-        // Update scan log with error
-        await db
-          .update(scanLogsTable)
-          .set({
-            completedAt: new Date(),
-            errors: JSON.stringify([error.message]),
-          })
-          .where(eq(scanLogsTable.id, scanLogId));
+        await directoryScansService.complete(scanLogId, {
+          ...result,
+          errors: [...result.errors, error?.message ?? "Directory scan failed"],
+        });
 
         throw error;
       }
@@ -228,9 +207,11 @@ export class WatcherService {
       // Process any queued storyboards (this is safe to await here as it handles its own errors)
       // We do this in finally to ensure we process even if scan had partial errors,
       // but only if we have compiled a list of new videos
-      await this.processStoryboardQueue();
-
-      this.scanningDirectories.delete(directoryId);
+      try {
+        await this.processStoryboardQueue();
+      } finally {
+        this.scanningDirectories.delete(directoryId);
+      }
     }
   }
 
@@ -595,6 +576,9 @@ export class WatcherService {
     if (!video) {
       throw new Error("Video not found after indexing");
     }
+    const [assignment] = await db.select({
+      hasStudio: sql<boolean>`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${video.id})`,
+    }).from(videosTable).where(eq(videosTable.id, video.id)).limit(1);
 
     return {
       id: video.id,
@@ -614,6 +598,7 @@ export class WatcherService {
       description: video.description,
       themes: video.themes,
       is_available: video.isAvailable,
+      studio_assignment_status: deriveStudioAssignmentStatus(Boolean(assignment?.hasStudio), video.studioAbsenceConfirmedAt),
       last_verified_at: video.lastVerifiedAt?.toISOString() ?? null,
       indexed_at: video.indexedAt.toISOString(),
       created_at: video.createdAt.toISOString(),

@@ -6,6 +6,7 @@ import {
   creatorsTable,
   videosTable,
   studiosTable,
+  videoStudiosTable,
 } from "@/database/schema";
 import {
   NotFoundError,
@@ -13,7 +14,7 @@ import {
   isUniqueViolation,
   isForeignKeyViolation,
 } from "@/utils/errors";
-import type { Video } from "@/modules/videos/videos.types";
+import { deriveStudioAssignmentStatus, type Video } from "@/modules/videos/videos.types";
 import type { Creator } from "./creators.types";
 import type { Studio } from "@/modules/studios/studios.types";
 import { env } from "@/config/env";
@@ -51,6 +52,8 @@ export class CreatorsRelationshipsService {
         description: videosTable.description,
         themes: videosTable.themes,
         isAvailable: videosTable.isAvailable,
+        studioAbsenceConfirmedAt: videosTable.studioAbsenceConfirmedAt,
+        hasStudio: sql<boolean>`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`,
         lastVerifiedAt: videosTable.lastVerifiedAt,
         indexedAt: videosTable.indexedAt,
         createdAt: videosTable.createdAt,
@@ -354,6 +357,7 @@ export class CreatorsRelationshipsService {
       description: video.description,
       themes: video.themes,
       is_available: video.isAvailable,
+      studio_assignment_status: deriveStudioAssignmentStatus(video.hasStudio, video.studioAbsenceConfirmedAt),
       last_verified_at:
         video.lastVerifiedAt instanceof Date
           ? video.lastVerifiedAt.toISOString()

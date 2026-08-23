@@ -14,6 +14,7 @@ import type {
   UpdateStudioInput,
   UpdateStudioSocialLinkInput,
 } from "./studios.types";
+import { studioAssignmentDemoService } from "./studio-assignment.demo.service";
 
 const {
   demoCreatorsTable,
@@ -93,10 +94,16 @@ export class StudiosDemoService {
 
   delete(id: number): void {
     this.findById(id);
-    getDemoDatabase()
-      .delete(demoStudiosTable)
-      .where(eq(demoStudiosTable.id, id))
-      .run();
+    withDemoTransaction(() => {
+      const videoIds = this.getVideoIds(id);
+      studioAssignmentDemoService.unlinkMany(videoIds, [id]);
+      getDemoDatabase()
+        .update(demoStudiosTable)
+        .set({ parentStudioId: null, updatedAt: now() })
+        .where(eq(demoStudiosTable.parentStudioId, id))
+        .run();
+      getDemoDatabase().delete(demoStudiosTable).where(eq(demoStudiosTable.id, id)).run();
+    });
   }
 
   listSocialLinks(studioId: number): StudioSocialLink[] {
@@ -297,23 +304,12 @@ export class StudiosDemoService {
       .get();
     if (existing)
       throw new ConflictError("Video is already linked to this studio");
-    getDemoDatabase()
-      .insert(demoVideoStudiosTable)
-      .values({ studioId, videoId })
-      .run();
+    studioAssignmentDemoService.linkMany([videoId], [studioId]);
   }
 
   unlinkVideo(studioId: number, videoId: number): void {
     this.findById(studioId);
-    getDemoDatabase()
-      .delete(demoVideoStudiosTable)
-      .where(
-        and(
-          eq(demoVideoStudiosTable.studioId, studioId),
-          eq(demoVideoStudiosTable.videoId, videoId)
-        )
-      )
-      .run();
+    studioAssignmentDemoService.unlinkMany([videoId], [studioId]);
   }
 
   getVideoIds(studioId: number): number[] {

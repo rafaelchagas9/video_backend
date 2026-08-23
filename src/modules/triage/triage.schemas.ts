@@ -38,7 +38,12 @@ export const triageBulkActionsSchema = z.object({
     removeTagIds: z.array(z.number().int().positive()).optional(),
     addStudioIds: z.array(z.number().int().positive()).optional(),
     removeStudioIds: z.array(z.number().int().positive()).optional(),
+    studioAssignmentStatus: z.enum(["confirmed_none", "unknown"]).optional(),
   }),
+}).superRefine((value, ctx) => {
+  if (value.actions.studioAssignmentStatus && (value.actions.addStudioIds?.length || value.actions.removeStudioIds?.length)) {
+    ctx.addIssue({ code: "custom", path: ["actions", "studioAssignmentStatus"], message: "Studio assignment status cannot be combined with studio link changes" });
+  }
 });
 
 export const triageBulkActionsResultSchema = z.object({

@@ -3,6 +3,7 @@ import {
   videoCollectionEntryKindValues,
   videoCollectionKindValues,
 } from "./video-collections.types";
+import { artworkSummarySchema } from "@/modules/artwork/artwork.schemas";
 
 export {
   createVideoCollectionSchema,
@@ -18,6 +19,22 @@ export const idParamSchema = z.object({
 export const videoIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
   video_id: z.coerce.number().int().positive(),
+});
+
+const parseIncludeList = (value: unknown) => {
+  if (typeof value === "string" && value.trim()) {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return Array.isArray(value) ? value : undefined;
+};
+
+export const videoCollectionQuerySchema = z.object({
+  include: z
+    .preprocess(
+      parseIncludeList,
+      z.array(z.enum(["artwork"])).default([]),
+    )
+    .optional(),
 });
 
 const entrySchema = z.object({
@@ -41,6 +58,9 @@ const entrySchema = z.object({
       thumbnail_id: z.number().nullable(),
       thumbnail_url: z.string().nullable(),
       is_available: z.boolean(),
+      duration_seconds: z.number().nullable(),
+      watched: z.boolean(),
+      position_seconds: z.number().nullable(),
     })
     .optional(),
 });
@@ -53,6 +73,21 @@ export const videoCollectionSummarySchema = z.object({
   release_year: z.number().nullable(),
   external_ids_json: z.string().nullable(),
   entry_count: z.number().optional(),
+  watched_count: z.number(),
+  runtime_seconds: z.number(),
+  season_count: z.number(),
+  last_watched_at: z.string().nullable(),
+  resume: z
+    .object({
+      entry_id: z.number(),
+      video_id: z.number(),
+      season_number: z.number().nullable(),
+      episode_number: z.number().nullable(),
+      position_seconds: z.number(),
+    })
+    .nullable(),
+  artwork_source_video_id: z.number().nullable(),
+  artwork: artworkSummarySchema.nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });

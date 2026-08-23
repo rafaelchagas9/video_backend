@@ -6,7 +6,6 @@ import {
   taggingRuleActionsTable,
   videoTagsTable,
   videoCreatorsTable,
-  videoStudiosTable,
   creatorsTable,
   studiosTable,
   videosTable,
@@ -17,6 +16,7 @@ import {
   isUniqueViolation,
 } from "@/utils/errors";
 import { logger } from "@/utils/logger";
+import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
 import type {
   TaggingRule,
   TaggingRuleCondition,
@@ -657,29 +657,16 @@ export class TaggingRulesService {
                 studioId = existingStudio[0].id;
               }
 
-              await db
-                .insert(videoStudiosTable)
-                .values({ videoId, studioId })
-                .onConflictDoNothing();
+              await studioAssignmentService.linkMany([videoId], [studioId]);
             }
           } else if (action.target_id) {
-            await db
-              .insert(videoStudiosTable)
-              .values({ videoId, studioId: action.target_id })
-              .onConflictDoNothing();
+            await studioAssignmentService.linkMany([videoId], [action.target_id]);
           }
           break;
 
         case "remove_studio":
           if (action.target_id) {
-            await db
-              .delete(videoStudiosTable)
-              .where(
-                and(
-                  eq(videoStudiosTable.videoId, videoId),
-                  eq(videoStudiosTable.studioId, action.target_id)
-                )
-              );
+            await studioAssignmentService.unlinkMany([videoId], [action.target_id]);
           }
           break;
       }

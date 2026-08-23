@@ -1,7 +1,17 @@
 import { db } from "@/config/drizzle";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { playlistsTable, playlistVideosTable } from "@/database/schema";
-import { NotFoundError, ForbiddenError, ConflictError } from "@/utils/errors";
+import {
+  playlistsTable,
+  playlistVideosTable,
+  videoStatsTable,
+  videosTable,
+} from "@/database/schema";
+import {
+  BadRequestError,
+  NotFoundError,
+  ForbiddenError,
+  ConflictError,
+} from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import type {
   Playlist,
@@ -11,6 +21,24 @@ import type {
 import { videosService } from "@/modules/videos/videos.service";
 import { env } from "@/config/env";
 import { playlistsDemoService } from "./playlists.demo.service";
+import { isVideoWatched } from "@/modules/video-stats/video-watch-state";
+
+type PlaylistInclude = "artwork";
+
+type PlaylistSummaryRow = {
+  id: number;
+  user_id: number;
+  name: string;
+  description: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+  video_count: number;
+  watched_count: number;
+  runtime_seconds: number;
+  last_played_at: string | Date | null;
+  thumbnail_id: number | null;
+  artwork_source_video_id: number | null;
+};
 
 export class PlaylistsService {
   async create(userId: number, input: CreatePlaylistInput): Promise<Playlist> {
@@ -31,73 +59,119 @@ export class PlaylistsService {
       throw new Error("Failed to create playlist");
     }
 
-    return this.findById(result[0].id);
+    return this.findById(result[0].id, userId);
   }
 
-  async findById(id: number): Promise<Playlist> {
+  async findById(
+    id: number,
+    userId = 0,
+    include: PlaylistInclude[] = [],
+  ): Promise<Playlist> {
     if (env.DEMO_MODE) {
-      return playlistsDemoService.findById(id);
+      return (
+        await this.attachArtwork(
+          [playlistsDemoService.findById(id, userId)],
+          include,
+        )
+      )[0]!;
     }
 
-    const playlists = await db
-      .select()
-      .from(playlistsTable)
-      .where(eq(playlistsTable.id, id))
-      .limit(1);
-
-    if (!playlists || playlists.length === 0) {
+    const rows = await this.querySummaries(userId, id);
+    if (!rows[0]) {
       throw new NotFoundError(`Playlist not found with id: ${id}`);
     }
-
-    const [countResult] = await db
-      .select({
-        count: sql<number>`cast(count(${playlistVideosTable.videoId}) as int)`,
-      })
-      .from(playlistVideosTable)
-      .where(eq(playlistVideosTable.playlistId, id));
-
-    return this.mapToSnakeCase({
-      ...playlists[0],
-      video_count: countResult?.count ?? 0,
-    });
+    return (
+      await this.attachArtwork(await this.mapSummaries(rows, userId), include)
+    )[0]!;
   }
 
-  async list(userId: number): Promise<Playlist[]> {
+  async list(
+    userId: number,
+    include: PlaylistInclude[] = [],
+  ): Promise<Playlist[]> {
     if (env.DEMO_MODE) {
-      return playlistsDemoService.list(userId);
+      return this.attachArtwork(playlistsDemoService.list(userId), include);
     }
 
-    // Use raw SQL for complex subquery
-    const query = sql`
+    return this.attachArtwork(
+      await this.mapSummaries(await this.querySummaries(userId), userId),
+      include,
+    );
+  }
+
+  private async querySummaries(
+    userId: number,
+    id?: number,
+  ): Promise<PlaylistSummaryRow[]> {
+    return db.execute<PlaylistSummaryRow>(sql`
       SELECT
-        p.*,
-        CAST((
-          SELECT COUNT(*)
-          FROM playlist_videos pv
-          WHERE pv.playlist_id = p.id
-        ) AS INTEGER) as video_count,
+        p.id,
+        p.user_id,
+        p.name,
+        p.description,
+        p.created_at,
+        p.updated_at,
+        COUNT(pv.video_id)::int AS video_count,
+        COUNT(pv.video_id) FILTER (
+          WHERE vs.play_count > 0
+            AND (
+              vs.last_position_seconds = 0
+              OR (
+                v.duration_seconds > 0
+                AND vs.last_position_seconds / v.duration_seconds >= 0.95
+              )
+            )
+        )::int AS watched_count,
+        COALESCE(SUM(v.duration_seconds), 0)::double precision AS runtime_seconds,
+        MAX(vs.last_played_at) AS last_played_at,
         (
           SELECT t.id
-          FROM playlist_videos pv
-          JOIN videos v ON pv.video_id = v.id
-          LEFT JOIN thumbnails t ON v.id = t.video_id
-          WHERE pv.playlist_id = p.id
-          ORDER BY pv.position ASC
+          FROM playlist_videos pv_thumb
+          JOIN videos v_thumb ON pv_thumb.video_id = v_thumb.id
+          LEFT JOIN thumbnails t ON v_thumb.id = t.video_id
+          WHERE pv_thumb.playlist_id = p.id
+          ORDER BY pv_thumb.position ASC
           LIMIT 1
-        ) as thumbnail_id
+        ) AS thumbnail_id,
+        p.artwork_source_video_id
       FROM playlists p
+      LEFT JOIN playlist_videos pv ON pv.playlist_id = p.id
+      LEFT JOIN videos v ON v.id = pv.video_id
+      LEFT JOIN video_stats vs
+        ON vs.video_id = pv.video_id AND vs.user_id = ${userId}
       WHERE p.user_id = ${userId}
+        ${id === undefined ? sql`` : sql`AND p.id = ${id}`}
+      GROUP BY p.id
       ORDER BY p.created_at DESC
-    `;
+    `);
+  }
 
-    const result = await db.execute(query);
-    const playlists = result as any[];
-
-    return playlists.map((p) => ({
-      ...this.mapToSnakeCase(p),
-      thumbnail_url: p.thumbnail_id
-        ? `${API_PREFIX}/thumbnails/${p.thumbnail_id}/image`
+  private async mapSummaries(
+    rows: PlaylistSummaryRow[],
+    userId: number,
+  ): Promise<Playlist[]> {
+    const resumes = await this.getResumeByPlaylistIds(
+      rows.map((row) => row.id),
+      userId,
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      user_id: row.user_id,
+      name: row.name,
+      description: row.description,
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at).toISOString(),
+      thumbnail_url: row.thumbnail_id
+        ? `${API_PREFIX}/thumbnails/${row.thumbnail_id}/image`
         : null,
+      video_count: Number(row.video_count),
+      watched_count: Number(row.watched_count),
+      runtime_seconds: Number(row.runtime_seconds),
+      last_played_at: row.last_played_at
+        ? new Date(row.last_played_at).toISOString()
+        : null,
+      resume: resumes.get(row.id) ?? null,
+      artwork_source_video_id: row.artwork_source_video_id,
     }));
   }
 
@@ -110,7 +184,7 @@ export class PlaylistsService {
       return playlistsDemoService.update(id, userId, input);
     }
 
-    const playlist = await this.findById(id);
+    const playlist = await this.findById(id, userId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
@@ -129,18 +203,63 @@ export class PlaylistsService {
       updates.description = input.description;
     }
 
+    if (input.artwork_source_video_id !== undefined) {
+      updates.artworkSourceVideoId = input.artwork_source_video_id;
+    }
+
     if (Object.keys(updates).length === 0) {
       return playlist;
     }
 
     updates.updatedAt = new Date();
 
-    await db
-      .update(playlistsTable)
-      .set(updates)
-      .where(eq(playlistsTable.id, id));
+    await db.transaction(async (tx) => {
+      // Serialize cover selection with membership removal. A plain membership
+      // read does not protect against a concurrent delete under READ COMMITTED.
+      const [lockedPlaylist] = await tx
+        .select({ id: playlistsTable.id })
+        .from(playlistsTable)
+        .where(
+          and(
+            eq(playlistsTable.id, id),
+            eq(playlistsTable.userId, userId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!lockedPlaylist) {
+        throw new NotFoundError(`Playlist not found with id: ${id}`);
+      }
 
-    return this.findById(id);
+      if (input.artwork_source_video_id !== undefined) {
+        const member = await tx
+          .select({ videoId: playlistVideosTable.videoId })
+          .from(playlistVideosTable)
+          .where(
+            and(
+              eq(playlistVideosTable.playlistId, id),
+              eq(
+                playlistVideosTable.videoId,
+                input.artwork_source_video_id,
+              ),
+            ),
+          )
+          .limit(1);
+
+        if (!member[0]) {
+          throw new BadRequestError(
+            "Artwork source video must belong to this playlist",
+          );
+        }
+      }
+
+      await tx
+        .update(playlistsTable)
+        .set(updates)
+        .where(eq(playlistsTable.id, id));
+    });
+
+    return this.findById(id, userId);
   }
 
   async delete(id: number, userId: number): Promise<void> {
@@ -149,7 +268,7 @@ export class PlaylistsService {
       return;
     }
 
-    const playlist = await this.findById(id);
+    const playlist = await this.findById(id, userId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
@@ -172,7 +291,7 @@ export class PlaylistsService {
       return;
     }
 
-    const playlist = await this.findById(playlistId);
+    const playlist = await this.findById(playlistId, userId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
@@ -218,6 +337,14 @@ export class PlaylistsService {
       videoId,
       position: finalPosition,
     });
+
+    await db
+      .update(playlistsTable)
+      .set({
+        artworkSourceVideoId: sql`COALESCE(${playlistsTable.artworkSourceVideoId}, ${videoId})`,
+        updatedAt: new Date(),
+      })
+      .where(eq(playlistsTable.id, playlistId));
   }
 
   async removeVideo(
@@ -230,7 +357,7 @@ export class PlaylistsService {
       return;
     }
 
-    const playlist = await this.findById(playlistId);
+    const playlist = await this.findById(playlistId, userId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
@@ -239,14 +366,47 @@ export class PlaylistsService {
       );
     }
 
-    await db
-      .delete(playlistVideosTable)
-      .where(
-        and(
-          eq(playlistVideosTable.playlistId, playlistId),
-          eq(playlistVideosTable.videoId, videoId)
+    await db.transaction(async (tx) => {
+      const [lockedPlaylist] = await tx
+        .select({ artworkSourceVideoId: playlistsTable.artworkSourceVideoId })
+        .from(playlistsTable)
+        .where(
+          and(
+            eq(playlistsTable.id, playlistId),
+            eq(playlistsTable.userId, userId),
+          ),
         )
-      );
+        .limit(1)
+        .for("update");
+      if (!lockedPlaylist) {
+        throw new NotFoundError(`Playlist not found with id: ${playlistId}`);
+      }
+
+      await tx
+        .delete(playlistVideosTable)
+        .where(
+          and(
+            eq(playlistVideosTable.playlistId, playlistId),
+            eq(playlistVideosTable.videoId, videoId),
+          ),
+        );
+
+      if (lockedPlaylist.artworkSourceVideoId === videoId) {
+        const [replacement] = await tx
+          .select({ videoId: playlistVideosTable.videoId })
+          .from(playlistVideosTable)
+          .where(eq(playlistVideosTable.playlistId, playlistId))
+          .orderBy(playlistVideosTable.position)
+          .limit(1);
+        await tx
+          .update(playlistsTable)
+          .set({
+            artworkSourceVideoId: replacement?.videoId ?? null,
+            updatedAt: new Date(),
+          })
+          .where(eq(playlistsTable.id, playlistId));
+      }
+    });
 
     // Drizzle doesn't return rowCount, so we'll just proceed
     // The delete will succeed even if no rows match
@@ -257,7 +417,7 @@ export class PlaylistsService {
       return playlistsDemoService.getVideos(playlistId, userId);
     }
 
-    const playlist = await this.findById(playlistId);
+    const playlist = await this.findById(playlistId, userId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
@@ -271,12 +431,16 @@ export class PlaylistsService {
         v.*,
         pv.position,
         pv.added_at as added_to_playlist_at,
-        t.id as thumbnail_id
+        t.id as thumbnail_id,
+        vs.play_count,
+        vs.last_position_seconds
       FROM videos v
       INNER JOIN playlist_videos pv ON v.id = pv.video_id
       LEFT JOIN (
         SELECT DISTINCT ON (video_id) id, video_id FROM thumbnails
       ) t ON v.id = t.video_id
+      LEFT JOIN video_stats vs
+        ON vs.video_id = v.id AND vs.user_id = ${userId}
       WHERE pv.playlist_id = ${playlistId}
       ORDER BY pv.position ASC
     `;
@@ -287,6 +451,23 @@ export class PlaylistsService {
     // Add thumbnail_url to each video
     return videos.map((video) => ({
       ...video,
+      duration_seconds:
+        video.duration_seconds === null ? null : Number(video.duration_seconds),
+      watched: isVideoWatched({
+        playCount: video.play_count === null ? null : Number(video.play_count),
+        positionSeconds:
+          video.last_position_seconds === null
+            ? null
+            : Number(video.last_position_seconds),
+        durationSeconds:
+          video.duration_seconds === null
+            ? null
+            : Number(video.duration_seconds),
+      }),
+      position_seconds:
+        video.last_position_seconds === null
+          ? null
+          : Number(video.last_position_seconds),
       thumbnail_url: video.thumbnail_id
         ? `${API_PREFIX}/thumbnails/${video.thumbnail_id}/image`
         : null,
@@ -303,7 +484,7 @@ export class PlaylistsService {
       return;
     }
 
-    const playlist = await this.findById(playlistId);
+    const playlist = await this.findById(playlistId, userId);
 
     // Verify ownership
     if (playlist.user_id !== userId) {
@@ -323,8 +504,12 @@ export class PlaylistsService {
 
     const query = sql`
       UPDATE playlist_videos
-      SET position = CASE ${cases} END
-      WHERE playlist_id = ${playlistId} AND video_id = ANY(${videoIds})
+      SET position = (CASE ${cases} END)::integer
+      WHERE playlist_id = ${playlistId}
+        AND video_id IN (${sql.join(
+          videoIds.map((videoId) => sql`${videoId}`),
+          sql`, `,
+        )})
     `;
 
     await db.execute(query);
@@ -344,7 +529,7 @@ export class PlaylistsService {
     const { videoIds, action } = input;
     if (videoIds.length === 0) return;
 
-    const playlist = await this.findById(playlistId);
+    const playlist = await this.findById(playlistId, userId);
     if (playlist.user_id !== userId) {
       throw new ForbiddenError(
         "You do not have permission to modify this playlist"
@@ -386,37 +571,127 @@ export class PlaylistsService {
           .insert(playlistVideosTable)
           .values(values)
           .onConflictDoNothing();
+
+        await db
+          .update(playlistsTable)
+          .set({
+            artworkSourceVideoId: sql`COALESCE(${playlistsTable.artworkSourceVideoId}, ${toAdd[0]})`,
+            updatedAt: new Date(),
+          })
+          .where(eq(playlistsTable.id, playlistId));
       }
     } else {
-      // Delete multiple videos
-      await db
-        .delete(playlistVideosTable)
-        .where(
-          and(
-            eq(playlistVideosTable.playlistId, playlistId),
-            inArray(playlistVideosTable.videoId, videoIds)
+      await db.transaction(async (tx) => {
+        const [lockedPlaylist] = await tx
+          .select({ artworkSourceVideoId: playlistsTable.artworkSourceVideoId })
+          .from(playlistsTable)
+          .where(
+            and(
+              eq(playlistsTable.id, playlistId),
+              eq(playlistsTable.userId, userId),
+            ),
           )
-        );
+          .limit(1)
+          .for("update");
+        if (!lockedPlaylist) {
+          throw new NotFoundError(`Playlist not found with id: ${playlistId}`);
+        }
+
+        await tx
+          .delete(playlistVideosTable)
+          .where(
+            and(
+              eq(playlistVideosTable.playlistId, playlistId),
+              inArray(playlistVideosTable.videoId, videoIds),
+            ),
+          );
+
+        if (
+          lockedPlaylist.artworkSourceVideoId !== null &&
+          videoIds.includes(lockedPlaylist.artworkSourceVideoId)
+        ) {
+          const [replacement] = await tx
+            .select({ videoId: playlistVideosTable.videoId })
+            .from(playlistVideosTable)
+            .where(eq(playlistVideosTable.playlistId, playlistId))
+            .orderBy(playlistVideosTable.position)
+            .limit(1);
+          await tx
+            .update(playlistsTable)
+            .set({
+              artworkSourceVideoId: replacement?.videoId ?? null,
+              updatedAt: new Date(),
+            })
+            .where(eq(playlistsTable.id, playlistId));
+        }
+      });
     }
   }
 
-  private mapToSnakeCase(playlist: any): Playlist {
-    return {
-      id: playlist.id,
-      user_id: playlist.userId ?? playlist.user_id,
-      name: playlist.name,
-      description: playlist.description,
-      created_at:
-        playlist.createdAt instanceof Date
-          ? playlist.createdAt.toISOString()
-          : playlist.created_at,
-      updated_at:
-        playlist.updatedAt instanceof Date
-          ? playlist.updatedAt.toISOString()
-          : playlist.updated_at,
-      video_count:
-        playlist.video_count !== undefined ? Number(playlist.video_count) : 0,
-    };
+  private async getResumeByPlaylistIds(
+    playlistIds: number[],
+    userId: number,
+  ): Promise<Map<number, NonNullable<Playlist["resume"]>>> {
+    if (playlistIds.length === 0) return new Map();
+
+    const rows = await db.execute<{
+      playlist_id: number;
+      video_id: number;
+      position_seconds: number;
+    }>(sql`
+      SELECT DISTINCT ON (pv.playlist_id)
+        pv.playlist_id,
+        pv.video_id,
+        COALESCE(vs.last_position_seconds, 0)::double precision AS position_seconds
+      FROM ${playlistVideosTable} pv
+      INNER JOIN ${videosTable} v ON v.id = pv.video_id
+      LEFT JOIN ${videoStatsTable} vs
+        ON vs.video_id = pv.video_id AND vs.user_id = ${userId}
+      WHERE pv.playlist_id IN (
+        ${sql.join(playlistIds.map((playlistId) => sql`${playlistId}`), sql`, `)}
+      )
+        AND NOT (
+          COALESCE(vs.play_count, 0) > 0
+          AND (
+            vs.last_position_seconds = 0
+            OR (
+              v.duration_seconds > 0
+              AND vs.last_position_seconds / v.duration_seconds >= 0.95
+            )
+          )
+        )
+      ORDER BY pv.playlist_id, pv.position
+    `);
+
+    return new Map(
+      rows.map((row) => [
+        row.playlist_id,
+        {
+          video_id: row.video_id,
+          position_seconds: Number(row.position_seconds),
+        },
+      ]),
+    );
+  }
+
+  private async attachArtwork(
+    playlists: Playlist[],
+    include: PlaylistInclude[],
+  ): Promise<Playlist[]> {
+    if (!include.includes("artwork") || playlists.length === 0) {
+      return playlists;
+    }
+    const sourceIds = playlists
+      .map((playlist) => playlist.artwork_source_video_id)
+      .filter((id): id is number => id !== null);
+    const { artworkService } = await import("@/modules/artwork/artwork.service");
+    const artwork = await artworkService.getSummariesByVideoIds(sourceIds);
+    return playlists.map((playlist) => ({
+      ...playlist,
+      artwork: playlist.artwork_source_video_id
+        ? (artwork.get(playlist.artwork_source_video_id) ?? null)
+        : null,
+    }));
   }
 }
 

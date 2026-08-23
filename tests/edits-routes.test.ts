@@ -53,6 +53,36 @@ const editsServiceMock = {
     pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
   })),
   getById: mock(async () => completedJob),
+  recipeFor: mock((job: EditJob) => ({
+    source_video_id: job.videoId,
+    output_defaults: {
+      directory_id: job.outputConfig.directory_id,
+      format: job.outputConfig.format,
+      video_codec: job.outputConfig.video_codec,
+      audio_codec: job.outputConfig.audio_codec,
+    },
+    timeline: job.timelineConfig,
+  })),
+  clone: mock(
+    async (
+      _id: number,
+      input: {
+        output: typeof completedJob.outputConfig;
+        timeline?: typeof completedJob.timelineConfig;
+      }
+    ) => ({
+      ...completedJob,
+      id: 9,
+      status: "queued" as const,
+      progress: 0,
+      outputConfig: input.output,
+      timelineConfig: input.timeline ?? completedJob.timelineConfig,
+      outputPath: null,
+      outputVideoId: null,
+      startedAt: null,
+      completedAt: null,
+    })
+  ),
   cancel: mock(async () => ({ ...completedJob, status: "cancelled" as const })),
 };
 
@@ -268,7 +298,7 @@ describe("edit HTTP contract", () => {
     );
   });
 
-  it("lists jobs for reload recovery and exposes canonical output URLs", async () => {
+  it("keeps recipes detail-only and exposes canonical output URLs", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/edits/jobs?page=1&limit=20&video_id=3&status=completed",
@@ -295,13 +325,63 @@ describe("edit HTTP contract", () => {
       ],
       pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
     });
+    expect(response.body).not.toContain("recipe");
 
     const status = await app.inject({
       method: "GET",
       url: "/api/edits/jobs/7",
       headers: authHeaders,
     });
-    expect(status.json().data.output.stream_url).toBe("/api/videos/99/stream");
+    expect(status.json().data).toMatchObject({
+      output: { stream_url: "/api/videos/99/stream" },
+      recipe: {
+        source_video_id: 3,
+        output_defaults: {
+          directory_id: 2,
+          format: "mkv",
+          video_codec: "av1",
+          audio_codec: "opus",
+        },
+        timeline: completedJob.timelineConfig,
+      },
+    });
+    expect(status.body).not.toContain("/library/finished.mkv");
+    expect(status.body).not.toContain("output_path");
+  });
+
+  it("clones a terminal recipe into a distinct queued job", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/edits/jobs/7/clone",
+      headers: authHeaders,
+      payload: {
+        output: {
+          directory_id: 2,
+          file_name: "another-cut",
+          format: "mkv",
+          video_codec: "av1",
+          audio_codec: "aac",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.headers.location).toBe("/api/edits/jobs/9");
+    expect(response.json().data).toMatchObject({
+      job_id: 9,
+      video_id: 3,
+      status: "queued",
+      output: { file_name: "another-cut" },
+    });
+    expect(editsServiceMock.clone).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({
+        output: expect.objectContaining({
+          file_name: "another-cut",
+          audio_codec: "aac",
+        }),
+      })
+    );
   });
 
   it("does not expose internal render errors or local paths", async () => {
@@ -384,6 +464,16 @@ describe("edit HTTP contract", () => {
         "400": expect.anything(),
         "401": expect.anything(),
         "404": expect.anything(),
+        "500": expect.anything(),
+      })
+    );
+    expect(paths["/api/edits/jobs/{id}/clone"]?.post?.responses).toEqual(
+      expect.objectContaining({
+        "202": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "404": expect.anything(),
+        "409": expect.anything(),
         "500": expect.anything(),
       })
     );

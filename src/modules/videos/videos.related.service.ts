@@ -1,5 +1,5 @@
-import { and, desc, eq, sql } from "drizzle-orm";
-import { db } from "@/config/drizzle";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { db, type DrizzleTransaction } from "@/config/drizzle";
 import { env } from "@/config/env";
 import {
   favoritesTable,
@@ -82,11 +82,20 @@ interface RelatedVideoRow {
   updatedAt: Date | string;
   thumbnailId: number | null;
   isFavorite: boolean;
+  studioAssignmentStatus: "assigned" | "confirmed_none" | "unknown";
 }
 
 type TagFamilyMap = Map<number, Set<number>>;
 
 export class VideosRelatedService {
+  async invalidateForVideos(videoIds: number[], executor: typeof db | DrizzleTransaction = db): Promise<void> {
+    const ids = [...new Set(videoIds)];
+    if (!ids.length) return;
+    await executor.delete(videoRelatedScoresTable).where(or(
+      inArray(videoRelatedScoresTable.sourceVideoId, ids),
+      inArray(videoRelatedScoresTable.relatedVideoId, ids),
+    ));
+  }
   async getRelated(
     userId: number,
     sourceVideoId: number,
@@ -185,6 +194,11 @@ export class VideosRelatedService {
         description: videosTable.description,
         themes: videosTable.themes,
         isAvailable: videosTable.isAvailable,
+        studioAssignmentStatus: sql<"assigned" | "confirmed_none" | "unknown">`CASE
+          WHEN EXISTS (SELECT 1 FROM video_studios vs_status WHERE vs_status.video_id = ${videosTable.id}) THEN 'assigned'
+          WHEN ${videosTable.studioAbsenceConfirmedAt} IS NOT NULL THEN 'confirmed_none'
+          ELSE 'unknown'
+        END`,
         lastVerifiedAt: videosTable.lastVerifiedAt,
         indexedAt: videosTable.indexedAt,
         createdAt: videosTable.createdAt,
@@ -617,6 +631,7 @@ export class VideosRelatedService {
       description: row.description,
       themes: row.themes,
       is_available: row.isAvailable,
+      studio_assignment_status: row.studioAssignmentStatus,
       last_verified_at: row.lastVerifiedAt
         ? this.toIsoString(row.lastVerifiedAt)
         : null,

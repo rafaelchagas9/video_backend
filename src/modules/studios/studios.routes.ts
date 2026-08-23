@@ -44,6 +44,7 @@ import {
   recentResponseSchema,
   quickCreateStudioSchema,
   quickCreateResponseSchema,
+  studioIncludesQuerySchema,
 } from "./studios.schemas";
 
 export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
@@ -86,6 +87,7 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
         summary: "Get studio by ID",
         description: "Returns details of a specific studio.",
         params: idParamSchema,
+        querystring: studioIncludesQuerySchema,
         response: {
           200: studioResponseSchema,
           401: errorResponseSchema,
@@ -94,7 +96,10 @@ export async function studiosRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
-      const studio = await studiosService.findById(request.params.id);
+      const studio = await studiosService.findById(
+        request.params.id,
+        request.query.include
+      );
 
       return reply.send({
         success: true,

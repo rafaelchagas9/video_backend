@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -34,6 +35,7 @@ FIELD_MAP: dict[str, str] = {
     "death_date": "death_date",
     "ethnicity": "ethnicity",
     "country": "country",
+    "birthplace": "birthplace",
     "eye_color": "eye_color",
     "hair_color": "hair_color",
     "height": "height_cm",
@@ -124,6 +126,13 @@ ID_QUERIES: dict[str, str] = {
     "tag": f"query($id:ID!){{ findTag(id:$id){{ {TAG_FIELDS} }} }}",
 }
 
+TPDB_REST_PATHS: dict[str, str] = {
+    "performer": "performers",
+    "studio": "sites",
+    "scene": "scenes",
+    "tag": "tags",
+}
+
 
 def _name_confidence(candidate_name: str, term: str) -> float:
     """High confidence on an exact (case-insensitive) name match, else moderate."""
@@ -166,6 +175,175 @@ def _with_match(
     return base
 
 
+def _unique_images(*values: Any) -> list[dict[str, Any]]:
+    """Normalize REST image fields to the GraphQL-style `{id, url}` list."""
+    images: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str):
+            item = {"url": value}
+        elif isinstance(value, dict) and isinstance(value.get("url"), str):
+            item = value
+        else:
+            return
+        url = item["url"]
+        if not url or url in seen:
+            return
+        seen.add(url)
+        images.append({"id": item.get("id"), "url": url})
+
+    for value in values:
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+        elif isinstance(value, dict) and "url" not in value:
+            for item in value.values():
+                add(item)
+        else:
+            add(value)
+    return images
+
+
+def _tpdb_rest_identifier(value: dict[str, Any]) -> Any:
+    """Prefer the stable UUID; fall back to the numeric TPDB database id."""
+    return value.get("uuid") or value.get("id") or value.get("_id")
+
+
+def _normalize_tpdb_rest_performer(performer: dict[str, Any]) -> dict[str, Any]:
+    """Convert a ThePornDB REST performer to the shared mapper shape."""
+    canonical = performer.get("parent") or performer
+    extras = canonical.get("extras") or canonical.get("extra") or {}
+    links = extras.get("links") or {}
+    urls = [
+        {"url": url, "site": {"name": label}}
+        for label, url in links.items()
+        if isinstance(url, str) and url
+    ]
+    return {
+        "id": _tpdb_rest_identifier(canonical),
+        "name": canonical.get("name"),
+        "disambiguation": canonical.get("disambiguation"),
+        "aliases": canonical.get("aliases") or [],
+        "gender": extras.get("gender"),
+        "birth_date": extras.get("birthday"),
+        "death_date": extras.get("deathday"),
+        "ethnicity": extras.get("ethnicity"),
+        "country": extras.get("nationality"),
+        "birthplace": extras.get("birthplace"),
+        "eye_color": extras.get("eye_colour") or extras.get("eye_color"),
+        "hair_color": extras.get("hair_colour") or extras.get("haircolor"),
+        "height": extras.get("height"),
+        "cup_size": extras.get("cupsize"),
+        "waist_size": extras.get("waist"),
+        "hip_size": extras.get("hips"),
+        "career_start_year": extras.get("career_start_year"),
+        "career_end_year": extras.get("career_end_year"),
+        "urls": urls,
+        "images": _unique_images(
+            canonical.get("posters"),
+            canonical.get("image"),
+            canonical.get("thumbnail"),
+            canonical.get("face"),
+        ),
+    }
+
+
+def _normalize_tpdb_rest_scene(scene: dict[str, Any]) -> dict[str, Any]:
+    """Convert a ThePornDB REST scene to the shared mapper shape."""
+    site = scene.get("site") or {}
+    directors = scene.get("directors") or []
+    performers = []
+    for appearance in scene.get("performers") or []:
+        canonical = appearance.get("parent") or appearance
+        if not canonical.get("name"):
+            continue
+        performers.append(
+            {
+                "as": (
+                    appearance.get("name")
+                    if appearance.get("name") != canonical.get("name")
+                    else None
+                ),
+                "performer": {
+                    "id": _tpdb_rest_identifier(canonical),
+                    "name": canonical.get("name"),
+                },
+            }
+        )
+
+    tags = [
+        {"id": _tpdb_rest_identifier(tag), "name": tag.get("name")}
+        for tag in scene.get("tags") or []
+        if tag.get("name")
+    ]
+    return {
+        "id": _tpdb_rest_identifier(scene),
+        "title": scene.get("title"),
+        "details": scene.get("description"),
+        "director": ", ".join(
+            str(director.get("name"))
+            for director in directors
+            if director.get("name")
+        ),
+        "release_date": scene.get("date"),
+        "code": scene.get("sku"),
+        "studio": (
+            {"id": _tpdb_rest_identifier(site), "name": site.get("name")}
+            if site.get("name")
+            else None
+        ),
+        "performers": performers,
+        "tags": tags,
+        "images": _unique_images(
+            scene.get("media"),
+            scene.get("posters"),
+            scene.get("background"),
+            scene.get("poster"),
+            scene.get("image"),
+        ),
+    }
+
+
+def _normalize_tpdb_rest_studio(site: dict[str, Any]) -> dict[str, Any]:
+    """Convert a ThePornDB REST site to the shared studio mapper shape."""
+    parent = site.get("parent") or site.get("network")
+    return {
+        "id": _tpdb_rest_identifier(site),
+        "name": site.get("name"),
+        "aliases": [site["short_name"]] if site.get("short_name") else [],
+        "urls": (
+            [{"url": site["url"], "site": {"name": "website"}}]
+            if site.get("url")
+            else []
+        ),
+        "images": _unique_images(site.get("logo"), site.get("poster")),
+        "parent": (
+            {"id": _tpdb_rest_identifier(parent), "name": parent.get("name")}
+            if isinstance(parent, dict) and parent.get("name")
+            else None
+        ),
+    }
+
+
+def _normalize_tpdb_rest_tag(tag: dict[str, Any]) -> dict[str, Any]:
+    """Convert a ThePornDB REST tag to the shared tag mapper shape."""
+    return {
+        "id": _tpdb_rest_identifier(tag),
+        "name": tag.get("name"),
+        "description": tag.get("description"),
+        "aliases": tag.get("aliases") or [],
+    }
+
+
+TPDB_REST_NORMALIZERS = {
+    "performer": _normalize_tpdb_rest_performer,
+    "studio": _normalize_tpdb_rest_studio,
+    "scene": _normalize_tpdb_rest_scene,
+    "tag": _normalize_tpdb_rest_tag,
+}
+
+
 class StashBoxSource(Source):
     def __init__(
         self,
@@ -175,12 +353,14 @@ class StashBoxSource(Source):
         api_key: str,
         auth_style: str = "bearer",  # "bearer" (TPDB) | "apikey" (StashDB)
         dialect: str = "tpdb",  # "tpdb" | "stashbox"
+        exact_endpoint: str | None = None,
     ) -> None:
         self.name = name
         self.endpoint = endpoint
         self.api_key = api_key
         self.auth_style = auth_style
         self.dialect = dialect if dialect in QUERIES else "tpdb"
+        self.exact_endpoint = exact_endpoint.rstrip("/") if exact_endpoint else None
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -216,7 +396,22 @@ class StashBoxSource(Source):
     async def _query_by_id(
         self, client: httpx.AsyncClient, entity: str, external_id: str
     ) -> list[dict[str, Any]]:
-        """Fetch one exact upstream object by ID when a related candidate provides it."""
+        """Fetch one exact upstream object by its source-specific identifier."""
+        if self.dialect == "tpdb" and self.exact_endpoint:
+            identifier = quote(external_id, safe="")
+            resp = await client.get(
+                f"{self.exact_endpoint}/{TPDB_REST_PATHS[entity]}/{identifier}",
+                headers=self._headers(),
+            )
+            if resp.status_code == 404:
+                return []
+            resp.raise_for_status()
+            body = resp.json()
+            value = body.get("data") if isinstance(body, dict) else None
+            if not isinstance(value, dict):
+                return []
+            return [TPDB_REST_NORMALIZERS[entity](value)]
+
         resp = await client.post(
             self.endpoint,
             headers=self._headers(),

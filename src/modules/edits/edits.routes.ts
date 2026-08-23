@@ -16,13 +16,14 @@ import {
 } from "./edits.render-validation";
 import {
   cancelEditJobResponseSchema,
+  cloneEditJobBodySchema,
   createEditJobBodySchema,
   editingCapabilities,
   editingMetadataResponseSchema,
   editErrorResponseSchema,
   editJobListResponseSchema,
   editJobResponseSchema,
-  jobStatusResponseSchema,
+  jobDetailResponseSchema,
   listEditJobsQuerySchema,
 } from "./edits.schemas";
 
@@ -276,7 +277,7 @@ export async function editsRoutes(fastify: FastifyInstance) {
         summary: "Get edit job status",
         params: idParamSchema,
         response: {
-          200: jobStatusResponseSchema,
+          200: jobDetailResponseSchema,
           400: editErrorResponseSchema,
           401: editErrorResponseSchema,
           404: editErrorResponseSchema,
@@ -289,8 +290,51 @@ export async function editsRoutes(fastify: FastifyInstance) {
 
       return {
         success: true as const,
-        data: serializeJobStatus(job),
+        data: {
+          ...serializeJobStatus(job),
+          recipe: editsService.recipeFor(job),
+        },
       };
+    }
+  );
+
+  app.post(
+    "/jobs/:id/clone",
+    {
+      preHandler: authenticateUser,
+      schema: {
+        tags: ["edits"],
+        summary: "Clone a terminal edit job",
+        description:
+          "Queues a new edit using a terminal job as a recipe. A new output target is always required.",
+        params: idParamSchema,
+        body: cloneEditJobBodySchema,
+        response: {
+          202: editJobResponseSchema,
+          ...standardErrorResponses,
+        },
+      },
+    },
+    async (request, reply) => {
+      const job = await editsService.clone(request.params.id, request.body);
+      const location = `/api/edits/jobs/${job.id}`;
+
+      return reply
+        .code(202)
+        .header("Location", location)
+        .send({
+          success: true as const,
+          data: {
+            job_id: job.id,
+            status: job.status,
+            video_id: job.videoId,
+            output: {
+              directory_id: job.outputConfig.directory_id,
+              file_name: job.outputConfig.file_name,
+            },
+          },
+          message: "Render job cloned and queued",
+        });
     }
   );
 

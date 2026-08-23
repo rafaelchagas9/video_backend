@@ -32,6 +32,20 @@ const parseBooleanQuery = (val: unknown) => {
   return undefined;
 };
 
+const parseIncludes = (value: unknown) =>
+  typeof value === "string"
+    ? value.split(",").map((item) => item.trim()).filter(Boolean)
+    : value;
+
+export const tagIncludesQuerySchema = z.object({
+  include: z
+    .preprocess(
+      parseIncludes,
+      z.array(z.enum(["category", "aliases"]))
+    )
+    .default([]),
+});
+
 export const listTagsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
@@ -39,6 +53,8 @@ export const listTagsQuerySchema = z.object({
   sort: z.enum(["name", "created_at"]).default("name"),
   order: z.enum(["asc", "desc"]).default("asc"),
   tree: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
+  category_id: z.coerce.number().int().positive().optional(),
+  include: tagIncludesQuerySchema.shape.include,
 });
 
 export const treeQuerySchema = z.object({
@@ -46,6 +62,19 @@ export const treeQuerySchema = z.object({
 });
 
 // Response schemas
+const taxonomyAliasSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  note: z.string().nullable(),
+});
+
+const tagCategorySchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  group: z.string().nullable(),
+  description: z.string().nullable(),
+});
+
 const tagSchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -54,6 +83,8 @@ const tagSchema = z.object({
   color: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+  category: tagCategorySchema.nullable().optional(),
+  aliases: z.array(taxonomyAliasSchema).optional(),
 });
 
 const tagWithPathSchema = tagSchema.extend({
@@ -108,6 +139,11 @@ export const tagListResponseSchema = z.object({
 export const tagSimpleListResponseSchema = z.object({
   success: z.literal(true),
   data: z.array(tagSchema),
+});
+
+export const tagCategoriesResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.array(tagCategorySchema.extend({ tag_count: z.number().int().min(0) })),
 });
 
 export const tagVideosResponseSchema = z.object({

@@ -3,12 +3,12 @@ import { eq, inArray } from "drizzle-orm";
 import {
   videoTagsTable,
   videoCreatorsTable,
-  videoStudiosTable,
   creatorsTable,
   studiosTable,
   videosTable,
 } from "@/database/schema";
 import { logger } from "@/utils/logger";
+import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
 import { taggingRulesService } from "../tagging-rules/tagging-rules.service";
 import { parseVideoPath } from "@/utils/path-parser";
 
@@ -340,17 +340,11 @@ export class AutoTaggingService {
                 studiosCache?.set(studioName, studioId);
               }
 
-              await db
-                .insert(videoStudiosTable)
-                .values({ videoId, studioId })
-                .onConflictDoNothing();
+              await studioAssignmentService.linkMany([videoId], [studioId]);
               return { success: true, type: "studio" };
             }
           } else if (action.target_id) {
-            await db
-              .insert(videoStudiosTable)
-              .values({ videoId, studioId: action.target_id })
-              .onConflictDoNothing();
+            await studioAssignmentService.linkMany([videoId], [action.target_id]);
             return { success: true, type: "studio" };
           }
           break;

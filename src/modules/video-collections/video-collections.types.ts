@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { VideoArtworkSummary } from "@/modules/artwork/artwork.types";
 
 export const videoCollectionKindValues = [
   "movie_series",
@@ -27,8 +28,23 @@ export interface VideoCollection {
   release_year: number | null;
   external_ids_json: string | null;
   entry_count?: number;
+  watched_count: number;
+  runtime_seconds: number;
+  season_count: number;
+  last_watched_at: string | null;
+  resume: VideoCollectionResume | null;
+  artwork_source_video_id: number | null;
+  artwork?: VideoArtworkSummary | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface VideoCollectionResume {
+  entry_id: number;
+  video_id: number;
+  season_number: number | null;
+  episode_number: number | null;
+  position_seconds: number;
 }
 
 export interface VideoCollectionEntry {
@@ -51,6 +67,9 @@ export interface VideoCollectionEntry {
     thumbnail_id: number | null;
     thumbnail_url: string | null;
     is_available: boolean;
+    duration_seconds: number | null;
+    watched: boolean;
+    position_seconds: number | null;
   };
 }
 
@@ -92,8 +111,11 @@ export const createVideoCollectionSchema = z.object({
   external_ids_json: z.string().max(20000).nullable().optional(),
 });
 
-export const updateVideoCollectionSchema =
-  createVideoCollectionSchema.partial();
+export const updateVideoCollectionSchema = createVideoCollectionSchema
+  .partial()
+  .extend({
+    artwork_source_video_id: z.number().int().positive().optional(),
+  });
 
 export const createVideoCollectionEntrySchema = z
   .object({

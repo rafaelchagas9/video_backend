@@ -35,6 +35,7 @@ import type {
   UpdateVideoInput,
   UnavailableVideo,
 } from "./videos.types";
+import { deriveStudioAssignmentStatus } from "./videos.types";
 import { computeFileHash } from "@/utils/file-utils";
 import { metadataService } from "./metadata.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
@@ -150,6 +151,8 @@ export class VideosService {
         description: videosTable.description,
         themes: videosTable.themes,
         isAvailable: videosTable.isAvailable,
+        studioAbsenceConfirmedAt: videosTable.studioAbsenceConfirmedAt,
+        hasStudio: sql<boolean>`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`,
         lastVerifiedAt: videosTable.lastVerifiedAt,
         indexedAt: videosTable.indexedAt,
         createdAt: videosTable.createdAt,
@@ -197,6 +200,7 @@ export class VideosService {
       description: video.description,
       themes: video.themes,
       is_available: video.isAvailable,
+      studio_assignment_status: deriveStudioAssignmentStatus(video.hasStudio, video.studioAbsenceConfirmedAt),
       last_verified_at: video.lastVerifiedAt?.toISOString() ?? null,
       indexed_at: video.indexedAt.toISOString(),
       created_at: video.createdAt.toISOString(),
@@ -281,9 +285,7 @@ export class VideosService {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       const videosObj = demoMockService.getVideos({
-        tagIds: options.tagIds,
-        creatorIds: options.creatorIds,
-        studioIds: options.studioIds,
+        ...options,
         limit: 100,
       });
       const list = videosObj.data;

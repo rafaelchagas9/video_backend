@@ -2,6 +2,14 @@ import { describe, expect, it } from "bun:test";
 import { isDemoRequestAllowed } from "@/utils/demo-mode-policy";
 
 describe("demo mode request policy", () => {
+  it("allows only POST for the reviewed creator merge endpoint", () => {
+    expect(isDemoRequestAllowed("POST", "/api/creators/12/merge")).toBe(true);
+    expect(isDemoRequestAllowed("GET", "/api/creators/12/merge")).toBe(false);
+    expect(isDemoRequestAllowed("DELETE", "/api/creators/12/merge")).toBe(
+      false
+    );
+  });
+
   it("gives generated HEAD routes the same classification as GET", () => {
     for (const url of [
       "/health",

@@ -15,6 +15,10 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(`^${API_PREFIX}/auth/me$`),
   },
   {
+    methods: new Set(["PATCH"]),
+    path: new RegExp(`^${API_PREFIX}/videos/\\d+/studio-assignment$`),
+  },
+  {
     methods: new Set(["GET"]),
     path: new RegExp(
       `^${API_PREFIX}/videos(?:/(?:compression-suggestions|next|triage-queue|unavailable|random|history))?$`
@@ -173,6 +177,10 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(`^${API_PREFIX}/creators/\\d+$`),
   },
   {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/creators/\\d+/merge$`),
+  },
+  {
     methods: new Set(["GET"]),
     path: new RegExp(
       `^${API_PREFIX}/creators/\\d+/(?:picture|videos|favorite/check|platforms|social-links|gallery|aliases)$`
@@ -219,6 +227,10 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET", "POST"]),
     path: new RegExp(`^${API_PREFIX}/tags$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/tags/categories$`),
   },
   {
     methods: new Set(["GET", "PATCH", "DELETE"]),
@@ -300,6 +312,10 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(`^${API_PREFIX}/edits/jobs/\\d+/cancel$`),
   },
   {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/edits/jobs/\\d+/clone$`),
+  },
+  {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/events/stream$`),
   },
@@ -318,6 +334,18 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["POST"]),
     path: new RegExp(`^${API_PREFIX}/directories/\\d+/scan$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/directories/\\d+/scans$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/directories/\\d+/scans/\\d+$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/directories/scheduler/status$`),
   },
   {
     methods: new Set(["GET"]),

@@ -36,7 +36,14 @@ import type {
   Video,
   VideoListInclude,
 } from "./videos.types";
+import type { StudioAssignmentStatus } from "./videos.types";
 import { buildVideoFilters, getValidSortColumn } from "./videos.query-builder";
+
+const studioAssignmentStatusSql = sql<StudioAssignmentStatus>`CASE
+  WHEN EXISTS (SELECT 1 FROM ${videoStudiosTable} vs_status WHERE vs_status.video_id = ${videosTable.id}) THEN 'assigned'
+  WHEN ${videosTable.studioAbsenceConfirmedAt} IS NOT NULL THEN 'confirmed_none'
+  ELSE 'unknown'
+END`;
 
 interface PaginatedVideos {
   data: Video[];
@@ -158,6 +165,7 @@ export class VideosSearchService {
         description: videosTable.description,
         themes: videosTable.themes,
         isAvailable: videosTable.isAvailable,
+        studioAssignmentStatus: studioAssignmentStatusSql,
         lastVerifiedAt: videosTable.lastVerifiedAt,
         indexedAt: videosTable.indexedAt,
         createdAt: videosTable.createdAt,
@@ -351,6 +359,7 @@ export class VideosSearchService {
         description: string | null;
         themes: string | null;
         is_available: boolean;
+        studio_assignment_status: StudioAssignmentStatus;
         last_verified_at: string | null;
         indexed_at: string;
         created_at: string;
@@ -363,7 +372,7 @@ export class VideosSearchService {
                ${videosTable.durationSeconds} as duration_seconds, ${videosTable.width}, ${videosTable.height},
                ${videosTable.codec}, ${videosTable.bitrate}, ${videosTable.fps},
                ${videosTable.audioCodec} as audio_codec, ${videosTable.title}, ${videosTable.description},
-               ${videosTable.themes}, ${videosTable.isAvailable} as is_available, ${videosTable.lastVerifiedAt} as last_verified_at,
+               ${videosTable.themes}, ${videosTable.isAvailable} as is_available, ${studioAssignmentStatusSql} as studio_assignment_status, ${videosTable.lastVerifiedAt} as last_verified_at,
                ${videosTable.indexedAt} as indexed_at, ${videosTable.createdAt} as created_at, ${videosTable.updatedAt} as updated_at,
                ${thumbnailsTable.id} as thumbnail_id, ${thumbnailsTable.filePath} as thumbnail_file_path
         FROM ${videosTable}
@@ -519,6 +528,7 @@ export class VideosSearchService {
           description: v.description,
           themes: v.themes,
           is_available: v.isAvailable,
+          studio_assignment_status: v.studioAssignmentStatus,
           last_verified_at: v.lastVerifiedAt?.toISOString() ?? null,
           indexed_at: v.indexedAt.toISOString(),
           created_at: v.createdAt.toISOString(),
@@ -743,6 +753,7 @@ export class VideosSearchService {
         description: videosTable.description,
         themes: videosTable.themes,
         isAvailable: videosTable.isAvailable,
+        studioAssignmentStatus: studioAssignmentStatusSql,
         lastVerifiedAt: videosTable.lastVerifiedAt,
         indexedAt: videosTable.indexedAt,
         createdAt: videosTable.createdAt,
@@ -792,6 +803,7 @@ export class VideosSearchService {
           description: videosTable.description,
           themes: videosTable.themes,
           isAvailable: videosTable.isAvailable,
+          studioAssignmentStatus: studioAssignmentStatusSql,
           lastVerifiedAt: videosTable.lastVerifiedAt,
           indexedAt: videosTable.indexedAt,
           createdAt: videosTable.createdAt,
@@ -848,6 +860,7 @@ export class VideosSearchService {
         description: nextVideo.description,
         themes: nextVideo.themes,
         is_available: nextVideo.isAvailable,
+        studio_assignment_status: nextVideo.studioAssignmentStatus,
         last_verified_at: nextVideo.lastVerifiedAt?.toISOString() ?? null,
         indexed_at: nextVideo.indexedAt.toISOString(),
         created_at: nextVideo.createdAt.toISOString(),

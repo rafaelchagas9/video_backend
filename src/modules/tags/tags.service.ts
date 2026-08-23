@@ -1,7 +1,13 @@
-import { eq, sql, isNull, or, and, ilike } from "drizzle-orm";
+import { eq, sql, isNull, or, and, ilike, inArray, asc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
-import { tagsTable, videoTagsTable } from "@/database/schema";
+import {
+  tagAliasesTable,
+  tagCategoriesTable,
+  tagsTable,
+  videoTagsTable,
+} from "@/database/schema";
+import { demoSchema, getDemoDatabase } from "@/database/demo";
 import {
   NotFoundError,
   ConflictError,
@@ -17,25 +23,107 @@ import type {
   UpdateTagInput,
   ListTagsOptions,
   PaginatedTags,
+  TagCategoryWithCount,
+  TagInclude,
 } from "./tags.types";
 import type { Video } from "@/modules/videos/videos.types";
 import { tagsDemoService } from "./tags.demo.service";
 import { videosDemoService } from "@/modules/videos/videos.demo.service";
 
 export class TagsService {
+  async listCategories(): Promise<TagCategoryWithCount[]> {
+    if (env.DEMO_MODE) {
+      const rows = getDemoDatabase()
+        .select({
+          id: demoSchema.demoTagCategoriesTable.id,
+          name: demoSchema.demoTagCategoriesTable.name,
+          group: demoSchema.demoTagCategoriesTable.group,
+          description: demoSchema.demoTagCategoriesTable.description,
+          tagCount: sql<number>`count(${demoSchema.demoTagsTable.id})`,
+        })
+        .from(demoSchema.demoTagCategoriesTable)
+        .leftJoin(
+          demoSchema.demoTagsTable,
+          eq(
+            demoSchema.demoTagsTable.categoryId,
+            demoSchema.demoTagCategoriesTable.id
+          )
+        )
+        .groupBy(demoSchema.demoTagCategoriesTable.id)
+        .orderBy(
+          asc(demoSchema.demoTagCategoriesTable.group),
+          asc(demoSchema.demoTagCategoriesTable.name)
+        )
+        .all();
+      return rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        group: row.group,
+        description: row.description,
+        tag_count: Number(row.tagCount),
+      }));
+    }
+
+    const rows = await db
+      .select({
+        id: tagCategoriesTable.id,
+        name: tagCategoriesTable.name,
+        group: tagCategoriesTable.group,
+        description: tagCategoriesTable.description,
+        tagCount: sql<number>`count(${tagsTable.id})`,
+      })
+      .from(tagCategoriesTable)
+      .leftJoin(tagsTable, eq(tagsTable.categoryId, tagCategoriesTable.id))
+      .groupBy(tagCategoriesTable.id)
+      .orderBy(tagCategoriesTable.group, tagCategoriesTable.name);
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      group: row.group,
+      description: row.description,
+      tag_count: Number(row.tagCount),
+    }));
+  }
+
   async list(options: ListTagsOptions = {}): Promise<PaginatedTags> {
     if (env.DEMO_MODE) {
       const page = options.page ?? 1;
       const limit = options.limit ?? 20;
-      let tags = tagsDemoService.list();
+      const allTags = tagsDemoService.list();
+      let tags = allTags;
+
+      const aliases = getDemoDatabase()
+        .select()
+        .from(demoSchema.demoTagAliasesTable)
+        .all();
+      const categoryAssignments = getDemoDatabase()
+        .select({
+          id: demoSchema.demoTagsTable.id,
+          categoryId: demoSchema.demoTagsTable.categoryId,
+        })
+        .from(demoSchema.demoTagsTable)
+        .all();
 
       if (options.search) {
         const search = options.search.toLowerCase();
         tags = tags.filter(
           (tag) =>
             tag.name.toLowerCase().includes(search) ||
-            tag.description?.toLowerCase().includes(search)
+            tag.description?.toLowerCase().includes(search) ||
+            aliases.some(
+              (alias) =>
+                alias.tagId === tag.id &&
+                alias.name.toLowerCase().includes(search)
+            )
         );
+      }
+      if (options.category_id !== undefined) {
+        const matchingIds = new Set(
+          categoryAssignments
+            .filter((row) => row.categoryId === options.category_id)
+            .map((row) => row.id)
+        );
+        tags = tags.filter((tag) => matchingIds.has(tag.id));
       }
 
       tags.sort((left, right) => left.name.localeCompare(right.name));
@@ -43,7 +131,31 @@ export class TagsService {
         tags.reverse();
       }
 
-      const result = options.tree ? this.buildTree(tags) : tags;
+      let result: Tag[] | TagTreeNode[];
+      if (options.tree) {
+        const rootIds = new Set<number>();
+        for (const match of tags) {
+          let current = match;
+          const visited = new Set<number>();
+          while (current.parent_id !== null && !visited.has(current.id)) {
+            visited.add(current.id);
+            const parent = allTags.find((tag) => tag.id === current.parent_id);
+            if (!parent) break;
+            current = parent;
+          }
+          rootIds.add(current.id);
+        }
+        const expanded = await this.attachIncludes(
+          allTags,
+          options.include ?? []
+        );
+        result = this.buildTree(expanded)
+          .filter((root) => rootIds.has(root.id))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        if (options.order === "desc") result.reverse();
+      } else {
+        result = await this.attachIncludes(tags, options.include ?? []);
+      }
       const total = result.length;
       return {
         data: result.slice((page - 1) * limit, page * limit),
@@ -67,22 +179,36 @@ export class TagsService {
     const offset = (page - 1) * limit;
 
     if (tree) {
-      return this.listTreeWithPagination(page, limit, search, sort, order);
+      return this.listTreeWithPagination(
+        page,
+        limit,
+        search,
+        sort,
+        order,
+        options.category_id,
+        options.include ?? []
+      );
     }
 
     // Build WHERE conditions
     const whereClauses = [];
     if (search) {
-      whereClauses.push(
-        or(
-          ilike(tagsTable.name, `%${search}%`),
-          ilike(tagsTable.description, `%${search}%`)
-        )
-      );
+      whereClauses.push(or(
+        ilike(tagsTable.name, `%${search}%`),
+        ilike(tagsTable.description, `%${search}%`),
+        sql`EXISTS (
+          SELECT 1 FROM tag_aliases ta
+          WHERE ta.tag_id = ${tagsTable.id}
+            AND ta.name ILIKE ${`%${search}%`}
+        )`
+      ));
+    }
+    if (options.category_id !== undefined) {
+      whereClauses.push(eq(tagsTable.categoryId, options.category_id));
     }
 
     const whereCondition =
-      whereClauses.length > 0 ? whereClauses[0] : undefined;
+      whereClauses.length > 0 ? and(...whereClauses) : undefined;
 
     // Get total count
     const countResult = await db
@@ -110,7 +236,10 @@ export class TagsService {
       .offset(offset);
 
     return {
-      data: tags.map((tag) => this.mapToSnakeCase(tag)),
+      data: await this.attachIncludes(
+        tags.map((tag) => this.mapToSnakeCase(tag)),
+        options.include ?? []
+      ),
       pagination: {
         page,
         limit,
@@ -125,7 +254,9 @@ export class TagsService {
     limit: number,
     search: string | undefined,
     sortColumn: string,
-    sortOrder: string
+    sortOrder: string,
+    categoryId: number | undefined,
+    include: TagInclude[]
   ): Promise<PaginatedTags> {
     const offset = (page - 1) * limit;
 
@@ -136,13 +267,20 @@ export class TagsService {
     let countResult;
     let rootTags;
 
-    if (search) {
-      const searchPattern = `%${search}%`;
+    if (search || categoryId !== undefined) {
+      const searchPattern = search ? `%${search}%` : null;
       const matchingRootsSubquery = sql`
         WITH RECURSIVE matching_roots AS (
           SELECT id, parent_id
           FROM tags
-          WHERE name ILIKE ${searchPattern} OR description ILIKE ${searchPattern}
+          WHERE
+            (${searchPattern}::text IS NULL OR name ILIKE ${searchPattern}
+              OR description ILIKE ${searchPattern}
+              OR EXISTS (
+                SELECT 1 FROM tag_aliases ta
+                WHERE ta.tag_id = tags.id AND ta.name ILIKE ${searchPattern}
+              ))
+            AND (${categoryId ?? null}::int IS NULL OR category_id = ${categoryId ?? null})
           
           UNION ALL
           
@@ -188,8 +326,10 @@ export class TagsService {
     const totalPages = Math.ceil(total / limit);
 
     // Fetch all tags once to build tree in-memory
-    const allTags = await this.list({ limit: 10000 }).then(
-      (r) => r.data as Tag[]
+    const allTagRows = await db.select().from(tagsTable);
+    const allTags = await this.attachIncludes(
+      allTagRows.map((tag) => this.mapToSnakeCase(tag)),
+      include
     );
 
     // Build tree with children
@@ -272,9 +412,12 @@ export class TagsService {
     return this.mapToSnakeCase(tag);
   }
 
-  async findByIdWithPath(id: number): Promise<TagWithPath> {
+  async findByIdWithPath(
+    id: number,
+    include: TagInclude[] = []
+  ): Promise<TagWithPath> {
     if (env.DEMO_MODE) {
-      const tag = await this.findById(id);
+      const [tag] = await this.attachIncludes([await this.findById(id)], include);
       const ancestors = await this.getAncestors(id);
       return {
         ...tag,
@@ -284,7 +427,7 @@ export class TagsService {
       };
     }
 
-    const tag = await this.findById(id);
+    const [tag] = await this.attachIncludes([await this.findById(id)], include);
     const ancestors = await this.getAncestors(id);
     const path = [...ancestors.map((a) => a.name), tag.name].join(" > ");
 
@@ -524,6 +667,9 @@ export class TagsService {
     >(sql`
       SELECT DISTINCT 
         v.*, 
+        CASE WHEN EXISTS (SELECT 1 FROM video_studios vs_status WHERE vs_status.video_id = v.id) THEN 'assigned'
+             WHEN v.studio_absence_confirmed_at IS NOT NULL THEN 'confirmed_none'
+             ELSE 'unknown' END AS studio_assignment_status,
         t.id as thumbnail_id
       FROM videos v
       INNER JOIN video_tags vt ON v.id = vt.video_id
@@ -707,6 +853,91 @@ export class TagsService {
     if (val instanceof Date) return val.toISOString();
     if (typeof val === "string") return val;
     return new Date().toISOString(); // fallback
+  }
+
+  private async attachIncludes(tags: Tag[], include: TagInclude[]): Promise<Tag[]> {
+    if (tags.length === 0 || include.length === 0) return tags;
+    const ids = tags.map((tag) => tag.id);
+    const wantsCategory = include.includes("category");
+    const wantsAliases = include.includes("aliases");
+
+    const assignments = wantsCategory
+      ? env.DEMO_MODE
+        ? getDemoDatabase()
+            .select({
+              tagId: demoSchema.demoTagsTable.id,
+              categoryId: demoSchema.demoTagsTable.categoryId,
+            })
+            .from(demoSchema.demoTagsTable)
+            .where(inArray(demoSchema.demoTagsTable.id, ids))
+            .all()
+        : await db
+            .select({ tagId: tagsTable.id, categoryId: tagsTable.categoryId })
+            .from(tagsTable)
+            .where(inArray(tagsTable.id, ids))
+      : [];
+    const categoryIds = assignments.flatMap((row) =>
+      row.categoryId === null ? [] : [row.categoryId]
+    );
+    const categories = !wantsCategory || categoryIds.length === 0
+      ? []
+      : env.DEMO_MODE
+        ? getDemoDatabase()
+            .select()
+            .from(demoSchema.demoTagCategoriesTable)
+            .where(inArray(demoSchema.demoTagCategoriesTable.id, categoryIds))
+            .all()
+        : await db
+            .select()
+            .from(tagCategoriesTable)
+            .where(inArray(tagCategoriesTable.id, categoryIds));
+    const aliases = !wantsAliases
+      ? []
+      : env.DEMO_MODE
+        ? getDemoDatabase()
+            .select()
+            .from(demoSchema.demoTagAliasesTable)
+            .where(inArray(demoSchema.demoTagAliasesTable.tagId, ids))
+            .orderBy(asc(demoSchema.demoTagAliasesTable.name))
+            .all()
+        : await db
+            .select()
+            .from(tagAliasesTable)
+            .where(inArray(tagAliasesTable.tagId, ids))
+            .orderBy(tagAliasesTable.name);
+
+    return tags.map((tag) => {
+      const assignment = assignments.find((row) => row.tagId === tag.id);
+      const category = categories.find(
+        (row) => row.id === assignment?.categoryId
+      );
+      return {
+        ...tag,
+        ...(wantsCategory
+          ? {
+              category: category
+                ? {
+                    id: category.id,
+                    name: category.name,
+                    group: category.group,
+                    description: category.description,
+                  }
+                : null,
+            }
+          : {}),
+        ...(wantsAliases
+          ? {
+              aliases: aliases
+                .filter((alias) => alias.tagId === tag.id)
+                .map((alias) => ({
+                  id: alias.id,
+                  name: alias.name,
+                  note: alias.note,
+                })),
+            }
+          : {}),
+      };
+    });
   }
 
   // Helper to map Drizzle result to snake_case API format

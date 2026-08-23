@@ -10,10 +10,12 @@ export const playlistsTable = pgTable('playlists', {
   userId: integer('user_id').notNull().references(() => usersTable.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   description: text('description'),
+  artworkSourceVideoId: integer('artwork_source_video_id').references(() => videosTable.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('idx_playlists_user').on(table.userId),
+  artworkSourceIdx: index('idx_playlists_artwork_source').on(table.artworkSourceVideoId),
 }));
 
 // Playlist-Video relationship (many-to-many with position)

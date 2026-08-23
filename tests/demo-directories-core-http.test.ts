@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { rmSync } from "fs";
 import { resolve, sep } from "path";
 import Fastify from "fastify";
+import swagger from "@fastify/swagger";
 import {
+  jsonSchemaTransform,
   serializerCompiler,
   validatorCompiler,
 } from "fastify-type-provider-zod";
@@ -39,6 +41,21 @@ describe("demo directories and core video HTTP contracts", () => {
 
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
+    await app.register(swagger, {
+      openapi: { info: { title: "Directory contract", version: "1" } },
+      transform: jsonSchemaTransform,
+    });
+    app.setErrorHandler((error, _request, reply) => {
+      const caught = error as { message?: string; statusCode?: number };
+      const statusCode = caught.statusCode ?? 500;
+      return reply.status(statusCode).send({
+        success: false,
+        error: {
+          message: caught.message ?? "Request failed",
+          statusCode,
+        },
+      });
+    });
     const { directoriesRoutes } =
       await import("@/modules/directories/directories.routes");
     const { videosRoutes } = await import("@/modules/videos/videos.routes");
@@ -97,12 +114,165 @@ describe("demo directories and core video HTTP contracts", () => {
       method: "POST",
       url: `/api/directories/${id}/scan`,
     });
-    expect(scan.statusCode, scan.body).toBe(200);
+    expect(scan.statusCode, scan.body).toBe(202);
+    const run = scan.json().data;
+    expect(run).toMatchObject({ directory_id: id, status: "running" });
+    expect(scan.headers.location).toBe(
+      `/api/directories/${id}/scans/${run.id}`
+    );
+
+    const detail = await app.inject({
+      method: "GET",
+      url: scan.headers.location,
+    });
+    expect(detail.statusCode, detail.body).toBe(200);
+    expect(detail.json().data).toMatchObject({
+      id: run.id,
+      directory_id: id,
+      status: "completed",
+      files_added: 0,
+      files_updated: 0,
+      files_removed: 0,
+      error_count: 0,
+    });
+
+    const history = await app.inject({
+      method: "GET",
+      url: `/api/directories/${id}/scans?page=1&limit=1`,
+    });
+    expect(history.statusCode, history.body).toBe(200);
+    expect(history.json().data).toHaveLength(1);
+    expect(history.json().pagination).toMatchObject({ page: 1, limit: 1 });
+
+    const scheduler = await app.inject({
+      method: "GET",
+      url: "/api/directories/scheduler/status",
+    });
+    expect(scheduler.statusCode, scheduler.body).toBe(200);
+    expect(scheduler.json().data).toEqual({
+      is_running: false,
+      scheduled_directories: 0,
+      schedules: [],
+      system_tasks: [],
+    });
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/directories",
+      payload: { path: "demo_mode/other", auto_scan: false },
+    });
+    const crossDirectory = await app.inject({
+      method: "GET",
+      url: `/api/directories/${second.json().data.id}/scans/${run.id}`,
+    });
+    expect(crossDirectory.statusCode, crossDirectory.body).toBe(404);
     const remove = await app.inject({
       method: "DELETE",
       url: `/api/directories/${id}`,
     });
     expect(remove.statusCode, remove.body).toBe(200);
+  });
+
+  it("bounds and sanitizes stored scan errors", async () => {
+    const errors = [
+      "/home/user/private/movie.mkv: decoder failed",
+      "second",
+      "third",
+      "fourth",
+      "fifth",
+      "sixth",
+    ];
+    sqlite.run(
+      "INSERT INTO demo_resources (kind,id,payload_json,created_at,updated_at) VALUES (?,?,?,?,?)",
+      [
+        "directory_scan",
+        "900",
+        JSON.stringify({
+          id: 900,
+          directory_id: 1,
+          status: "completed",
+          files_found: 1,
+          files_added: 0,
+          files_updated: 0,
+          files_removed: 0,
+          errors,
+          started_at: "2026-01-03T00:00:00.000Z",
+          completed_at: "2026-01-03T00:00:01.000Z",
+        }),
+        "2026-01-03T00:00:00.000Z",
+        "2026-01-03T00:00:01.000Z",
+      ]
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/directories/1/scans/900",
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data.error_count).toBe(6);
+    expect(response.json().data.error_summaries).toHaveLength(5);
+    expect(response.body).not.toContain("/home/user/private/movie.mkv");
+    expect(response.body).not.toContain("movie.mkv");
+  });
+
+  it("documents scan failures and the accepted-run Location header", () => {
+    const paths = app.swagger().paths as Record<
+      string,
+      Record<
+        string,
+        {
+          responses?: Record<
+            string,
+            { headers?: Record<string, { description?: string }> }
+          >;
+        }
+      >
+    >;
+
+    expect(paths["/api/directories/{id}/scans"]?.get?.responses).toEqual(
+      expect.objectContaining({
+        "200": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "404": expect.anything(),
+        "500": expect.anything(),
+      })
+    );
+    expect(
+      paths["/api/directories/{id}/scans/{scanId}"]?.get?.responses
+    ).toEqual(
+      expect.objectContaining({
+        "200": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "404": expect.anything(),
+        "500": expect.anything(),
+      })
+    );
+    expect(
+      paths["/api/directories/scheduler/status"]?.get?.responses
+    ).toEqual(
+      expect.objectContaining({
+        "200": expect.anything(),
+        "401": expect.anything(),
+        "500": expect.anything(),
+      })
+    );
+
+    const startResponses =
+      paths["/api/directories/{id}/scan"]?.post?.responses;
+    expect(startResponses).toEqual(
+      expect.objectContaining({
+        "202": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "404": expect.anything(),
+        "409": expect.anything(),
+        "500": expect.anything(),
+      })
+    );
+    expect(startResponses?.["202"]?.headers?.Location?.description).toContain(
+      "accepted scan-run resource"
+    );
   });
 
   it("serves video metadata, verification, duplicates, and unavailable contracts", async () => {
@@ -239,14 +409,56 @@ describe("demo directories and core video HTTP contracts", () => {
         .statusCode
     ).toBe(200);
 
+    sqlite.run("DELETE FROM demo_video_studios WHERE video_id = 1");
+    const confirmNone = await app.inject({
+      method: "PATCH",
+      url: "/api/videos/1/studio-assignment",
+      payload: { status: "confirmed_none" },
+    });
+    expect(confirmNone.statusCode, confirmNone.body).toBe(200);
+    expect(confirmNone.json().data.studio_assignment_status).toBe(
+      "confirmed_none"
+    );
+
+    const confirmedNoneList = await app.inject({
+      method: "GET",
+      url: "/api/videos?studioAssignmentStatus=confirmed_none&limit=100",
+    });
+    expect(confirmedNoneList.statusCode, confirmedNoneList.body).toBe(200);
     expect(
-      (await app.inject({ method: "POST", url: "/api/videos/1/studios/21" }))
-        .statusCode
-    ).toBe(200);
+      confirmedNoneList
+        .json()
+        .data.some((video: { id: number }) => video.id === 1)
+    ).toBe(true);
+
+    const addStudio = await app.inject({
+      method: "POST",
+      url: "/api/videos/1/studios/21",
+    });
+    expect(addStudio.statusCode, addStudio.body).toBe(200);
     expect(
-      (await app.inject({ method: "DELETE", url: "/api/videos/1/studios/21" }))
-        .statusCode
-    ).toBe(200);
+      (await app.inject({ method: "GET", url: "/api/videos/1" })).json().data
+        .studio_assignment_status
+    ).toBe("assigned");
+
+    const conflictingConfirmation = await app.inject({
+      method: "PATCH",
+      url: "/api/videos/1/studio-assignment",
+      payload: { status: "confirmed_none" },
+    });
+    expect(conflictingConfirmation.statusCode, conflictingConfirmation.body).toBe(
+      409
+    );
+
+    const removeStudio = await app.inject({
+      method: "DELETE",
+      url: "/api/videos/1/studios/21",
+    });
+    expect(removeStudio.statusCode, removeStudio.body).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/videos/1" })).json().data
+        .studio_assignment_status
+    ).toBe("unknown");
 
     const bulkDelete = await app.inject({
       method: "POST",
@@ -259,5 +471,20 @@ describe("demo directories and core video HTTP contracts", () => {
       url: "/api/videos/132",
     });
     expect(remove.statusCode, remove.body).toBe(200);
+  });
+
+  it("documents assignment validation and conflict responses", () => {
+    const paths = app.swagger().paths as Record<
+      string,
+      Record<string, { responses?: Record<string, unknown> }>
+    >;
+    expect(paths["/api/videos/{id}/studio-assignment"]?.patch?.responses)
+      .toEqual(expect.objectContaining({
+        "200": expect.anything(),
+        "400": expect.anything(),
+        "401": expect.anything(),
+        "404": expect.anything(),
+        "409": expect.anything(),
+      }));
   });
 });

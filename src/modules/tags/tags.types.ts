@@ -8,7 +8,28 @@ export interface Tag {
   color: string | null;
   created_at: string;
   updated_at: string;
+  category?: TagCategory | null;
+  aliases?: TaxonomyAlias[];
 }
+
+export interface TaxonomyAlias {
+  id: number;
+  name: string;
+  note: string | null;
+}
+
+export interface TagCategory {
+  id: number;
+  name: string;
+  group: string | null;
+  description: string | null;
+}
+
+export interface TagCategoryWithCount extends TagCategory {
+  tag_count: number;
+}
+
+export type TagInclude = "category" | "aliases";
 
 export interface TagWithPath extends Tag {
   path: string; // "Genre > Action > Sci-Fi"
@@ -25,6 +46,8 @@ export interface ListTagsOptions {
   sort?: "name" | "created_at";
   order?: "asc" | "desc";
   tree?: boolean;
+  category_id?: number;
+  include?: TagInclude[];
 }
 
 export interface PaginatedTags {

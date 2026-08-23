@@ -4,8 +4,17 @@ import {
   listVideosQuerySchema,
   randomVideoQuerySchema,
 } from "@/modules/videos/videos.schemas";
+import { triageBulkActionsSchema } from "@/modules/triage/triage.schemas";
 
 describe("video route schemas", () => {
+  it("accepts precise studio assignment filters", () => {
+    expect(listVideosQuerySchema.parse({ studioAssignmentStatus: "unknown" }).studioAssignmentStatus).toBe("unknown");
+    expect(randomVideoQuerySchema.parse({ studioAssignmentStatus: "confirmed_none" }).studioAssignmentStatus).toBe("confirmed_none");
+  });
+
+  it("rejects triage status mixed with studio link mutations", () => {
+    expect(triageBulkActionsSchema.safeParse({ videoIds: [1], actions: { studioAssignmentStatus: "confirmed_none", addStudioIds: [2] } }).success).toBe(false);
+  });
   it("coerces and normalizes list query parameters", () => {
     const parsed = listVideosQuerySchema.parse({
       page: "3",

@@ -92,11 +92,23 @@ export function restoreDemoBaselineSnapshot(): void {
         .map((row) => row.name);
     const liveTables = tables("main");
     const baselineTables = tables("demo_baseline");
-    if (JSON.stringify(liveTables) !== JSON.stringify(baselineTables)) {
+    const liveTableSet = new Set(liveTables);
+    const missingBaselineTables = baselineTables.filter(
+      (table) => !liveTableSet.has(table)
+    );
+    if (missingBaselineTables.length > 0) {
       throw new Error(
-        "Demo baseline schema does not match the current demo migrations. Run bun run demo:download to rebuild it, or bun run demo:migrate-json for a legacy JSON migration."
+        `Demo baseline contains tables missing from the current demo migrations: ${missingBaselineTables.join(", ")}. Run bun run demo:download to rebuild it, or bun run demo:migrate-json for a legacy JSON migration.`
       );
     }
+
+    const columns = (schema: "main" | "demo_baseline", table: string) =>
+      sqlite
+        .query<{ name: string }, []>(
+          `PRAGMA ${schema}.table_info(${quoteIdentifier(table)})`
+        )
+        .all()
+        .map((column) => column.name);
 
     sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
@@ -105,10 +117,25 @@ export function restoreDemoBaselineSnapshot(): void {
           for (const table of [...liveTables].reverse()) {
             sqlite.exec(`DELETE FROM main.${quoteIdentifier(table)}`);
           }
-          for (const table of liveTables) {
+          // New additive tables are intentionally absent from older immutable
+          // baselines. They remain empty here and are populated by the current
+          // deterministic seed after the restore completes.
+          for (const table of baselineTables) {
             const identifier = quoteIdentifier(table);
+            const liveColumns = new Set(columns("main", table));
+            const sharedColumns = columns("demo_baseline", table).filter(
+              (column) => liveColumns.has(column)
+            );
+            if (sharedColumns.length === 0) {
+              throw new Error(
+                `Demo baseline table ${table} has no columns in common with the current schema`
+              );
+            }
+            const columnList = sharedColumns
+              .map((column) => `"${column.replaceAll('"', '""')}"`)
+              .join(", ");
             sqlite.exec(
-              `INSERT INTO main.${identifier} SELECT * FROM demo_baseline.${identifier}`
+              `INSERT INTO main.${identifier} (${columnList}) SELECT ${columnList} FROM demo_baseline.${identifier}`
             );
           }
           sqlite.exec(

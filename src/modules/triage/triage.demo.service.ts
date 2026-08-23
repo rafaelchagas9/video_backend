@@ -3,6 +3,8 @@ import {
   initializeDemoDatabase,
   withDemoTransaction,
 } from "@/database/demo";
+import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
+import { ConflictError } from "@/utils/errors";
 import type {
   GetTriageProgressInput,
   SaveTriageProgressInput,
@@ -245,18 +247,17 @@ export class TriageDemoService {
           input.videoIds,
           input.actions.removeTagIds
         );
-        details.studios_added = this.addRelationships(
-          "demo_video_studios",
-          "studio_id",
-          input.videoIds,
-          input.actions.addStudioIds
-        );
-        details.studios_removed = this.removeRelationships(
-          "demo_video_studios",
-          "studio_id",
-          input.videoIds,
-          input.actions.removeStudioIds
-        );
+        if (input.actions.addStudioIds?.length) {
+          details.studios_added = studioAssignmentDemoService.linkMany(input.videoIds, input.actions.addStudioIds);
+        }
+        if (input.actions.removeStudioIds?.length) {
+          details.studios_removed = studioAssignmentDemoService.unlinkMany(input.videoIds, input.actions.removeStudioIds);
+        }
+        if (input.actions.studioAssignmentStatus === "confirmed_none") {
+          studioAssignmentDemoService.confirmNone(input.videoIds);
+        } else if (input.actions.studioAssignmentStatus === "unknown") {
+          studioAssignmentDemoService.markUnknown(input.videoIds);
+        }
       });
       return {
         success: true,
@@ -264,7 +265,8 @@ export class TriageDemoService {
         errors: 0,
         details,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof ConflictError) throw error;
       return {
         success: false,
         processed: input.videoIds.length,

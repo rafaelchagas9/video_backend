@@ -4,17 +4,24 @@ import {
   getDemoDatabase,
   withDemoTransaction,
 } from "@/database/demo";
-import { ConflictError, ForbiddenError, NotFoundError } from "@/utils/errors";
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from "@/utils/errors";
 import type {
   CreatePlaylistInput,
   Playlist,
   UpdatePlaylistInput,
 } from "./playlists.types";
+import { isVideoWatched } from "@/modules/video-stats/video-watch-state";
 
 const {
   demoPlaylistsTable,
   demoPlaylistVideosTable,
   demoThumbnailsTable,
+  demoVideoStatsTable,
   demoVideosTable,
 } = demoSchema;
 
@@ -32,20 +39,40 @@ export class PlaylistsDemoService {
       })
       .returning()
       .get();
-    return this.findById(row.id);
+    return this.findById(row.id, userId);
   }
 
-  findById(id: number): Playlist {
+  findById(id: number, userId?: number): Playlist {
     const row = getDemoDatabase()
       .select()
       .from(demoPlaylistsTable)
       .where(eq(demoPlaylistsTable.id, id))
       .get();
     if (!row) throw new NotFoundError(`Playlist not found with id: ${id}`);
+    const ownerId = userId ?? row.userId;
     const entries = getDemoDatabase()
-      .select({ videoId: demoPlaylistVideosTable.videoId })
+      .select({
+        videoId: demoPlaylistVideosTable.videoId,
+        position: demoPlaylistVideosTable.position,
+        durationSeconds: demoVideosTable.durationSeconds,
+        playCount: demoVideoStatsTable.playCount,
+        positionSeconds: demoVideoStatsTable.lastPositionSeconds,
+        lastPlayedAt: demoVideoStatsTable.lastPlayedAt,
+      })
       .from(demoPlaylistVideosTable)
+      .innerJoin(
+        demoVideosTable,
+        eq(demoVideosTable.id, demoPlaylistVideosTable.videoId)
+      )
+      .leftJoin(
+        demoVideoStatsTable,
+        and(
+          eq(demoVideoStatsTable.videoId, demoPlaylistVideosTable.videoId),
+          eq(demoVideoStatsTable.userId, ownerId)
+        )
+      )
       .where(eq(demoPlaylistVideosTable.playlistId, id))
+      .orderBy(asc(demoPlaylistVideosTable.position))
       .all();
     const first = getDemoDatabase()
       .select({ thumbnail: demoThumbnailsTable.videoId })
@@ -65,6 +92,40 @@ export class PlaylistsDemoService {
       created_at: row.createdAt,
       updated_at: row.updatedAt,
       video_count: entries.length,
+      watched_count: entries.filter((entry) =>
+        isVideoWatched({
+          playCount: entry.playCount,
+          positionSeconds: entry.positionSeconds,
+          durationSeconds: entry.durationSeconds,
+        })
+      ).length,
+      runtime_seconds: entries.reduce(
+        (sum, entry) => sum + (entry.durationSeconds ?? 0),
+        0
+      ),
+      last_played_at:
+        entries
+          .map((entry) => entry.lastPlayedAt)
+          .filter((value): value is string => Boolean(value))
+          .sort()
+          .at(-1) ?? null,
+      resume: (() => {
+        const entry = entries.find(
+          (candidate) =>
+            !isVideoWatched({
+              playCount: candidate.playCount,
+              positionSeconds: candidate.positionSeconds,
+              durationSeconds: candidate.durationSeconds,
+            })
+        );
+        return entry
+          ? {
+              video_id: entry.videoId,
+              position_seconds: entry.positionSeconds ?? 0,
+            }
+          : null;
+      })(),
+      artwork_source_video_id: row.artworkSourceVideoId,
       thumbnail_url: first?.thumbnail
         ? `/api/thumbnails/${first.thumbnail}/image`
         : null,
@@ -78,24 +139,48 @@ export class PlaylistsDemoService {
       .where(eq(demoPlaylistsTable.userId, userId))
       .orderBy(desc(demoPlaylistsTable.createdAt))
       .all()
-      .map(({ id }) => this.findById(id));
+      .map(({ id }) => this.findById(id, userId));
   }
 
   update(id: number, userId: number, input: UpdatePlaylistInput): Playlist {
     const existing = this.findOwned(id, userId);
-    getDemoDatabase()
-      .update(demoPlaylistsTable)
-      .set({
-        name: input.name ?? existing.name,
-        description:
-          input.description !== undefined
-            ? input.description
-            : existing.description,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(demoPlaylistsTable.id, id))
-      .run();
-    return this.findById(id);
+    withDemoTransaction(() => {
+      if (input.artwork_source_video_id !== undefined) {
+        const member = getDemoDatabase()
+          .select({ videoId: demoPlaylistVideosTable.videoId })
+          .from(demoPlaylistVideosTable)
+          .where(
+            and(
+              eq(demoPlaylistVideosTable.playlistId, id),
+              eq(
+                demoPlaylistVideosTable.videoId,
+                input.artwork_source_video_id
+              )
+            )
+          )
+          .get();
+        if (!member) {
+          throw new BadRequestError(
+            "Artwork source video must belong to this playlist"
+          );
+        }
+      }
+      getDemoDatabase()
+        .update(demoPlaylistsTable)
+        .set({
+          name: input.name ?? existing.name,
+          description:
+            input.description !== undefined
+              ? input.description
+              : existing.description,
+          artworkSourceVideoId:
+            input.artwork_source_video_id ?? existing.artwork_source_video_id,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(demoPlaylistsTable.id, id))
+        .run();
+    });
+    return this.findById(id, userId);
   }
 
   delete(id: number, userId: number): void {
@@ -144,19 +229,42 @@ export class PlaylistsDemoService {
         addedAt: new Date().toISOString(),
       })
       .run();
+    if (this.findById(playlistId, userId).artwork_source_video_id === null) {
+      getDemoDatabase()
+        .update(demoPlaylistsTable)
+        .set({ artworkSourceVideoId: videoId })
+        .where(eq(demoPlaylistsTable.id, playlistId))
+        .run();
+    }
   }
 
   removeVideo(playlistId: number, userId: number, videoId: number): void {
-    this.findOwned(playlistId, userId);
-    getDemoDatabase()
-      .delete(demoPlaylistVideosTable)
-      .where(
-        and(
-          eq(demoPlaylistVideosTable.playlistId, playlistId),
-          eq(demoPlaylistVideosTable.videoId, videoId)
+    withDemoTransaction(() => {
+      this.findOwned(playlistId, userId);
+      getDemoDatabase()
+        .delete(demoPlaylistVideosTable)
+        .where(
+          and(
+            eq(demoPlaylistVideosTable.playlistId, playlistId),
+            eq(demoPlaylistVideosTable.videoId, videoId)
+          )
         )
-      )
-      .run();
+        .run();
+      const playlist = this.findById(playlistId, userId);
+      if (playlist.artwork_source_video_id === videoId) {
+        const replacement = getDemoDatabase()
+          .select({ videoId: demoPlaylistVideosTable.videoId })
+          .from(demoPlaylistVideosTable)
+          .where(eq(demoPlaylistVideosTable.playlistId, playlistId))
+          .orderBy(asc(demoPlaylistVideosTable.position))
+          .get();
+        getDemoDatabase()
+          .update(demoPlaylistsTable)
+          .set({ artworkSourceVideoId: replacement?.videoId ?? null })
+          .where(eq(demoPlaylistsTable.id, playlistId))
+          .run();
+      }
+    });
   }
 
   getVideos(
@@ -170,6 +278,8 @@ export class PlaylistsDemoService {
         position: demoPlaylistVideosTable.position,
         addedAt: demoPlaylistVideosTable.addedAt,
         thumbnailId: demoThumbnailsTable.videoId,
+        playCount: demoVideoStatsTable.playCount,
+        positionSeconds: demoVideoStatsTable.lastPositionSeconds,
       })
       .from(demoPlaylistVideosTable)
       .innerJoin(
@@ -180,21 +290,44 @@ export class PlaylistsDemoService {
         demoThumbnailsTable,
         eq(demoThumbnailsTable.videoId, demoVideosTable.id)
       )
+      .leftJoin(
+        demoVideoStatsTable,
+        and(
+          eq(demoVideoStatsTable.videoId, demoVideosTable.id),
+          eq(demoVideoStatsTable.userId, userId)
+        )
+      )
       .where(eq(demoPlaylistVideosTable.playlistId, playlistId))
       .orderBy(asc(demoPlaylistVideosTable.position))
       .all()
-      .map(({ video, position, addedAt, thumbnailId }) => ({
+      .map(
+        ({
+          video,
+          position,
+          addedAt,
+          thumbnailId,
+          playCount,
+          positionSeconds,
+        }) => ({
         ...video,
         file_path: video.filePath,
         file_name: video.fileName,
         is_available: video.isAvailable,
+        duration_seconds: video.durationSeconds,
+        watched: isVideoWatched({
+          playCount,
+          positionSeconds,
+          durationSeconds: video.durationSeconds,
+        }),
+        position_seconds: positionSeconds,
         position,
         added_to_playlist_at: addedAt,
         thumbnail_id: thumbnailId,
         thumbnail_url: thumbnailId
           ? `/api/thumbnails/${thumbnailId}/image`
           : null,
-      }));
+      })
+      );
   }
 
   reorderVideos(
@@ -247,7 +380,7 @@ export class PlaylistsDemoService {
   }
 
   private findOwned(id: number, userId: number): Playlist {
-    const playlist = this.findById(id);
+    const playlist = this.findById(id, userId);
     if (playlist.user_id !== userId)
       throw new ForbiddenError(
         "You do not have permission to modify this playlist"

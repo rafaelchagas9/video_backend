@@ -1,10 +1,11 @@
 import { demoRepository } from "@/database/demo";
 import { directoriesDemoService } from "@/modules/directories/directories.demo.service";
-import { NotFoundError } from "@/utils/errors";
+import { ConflictError, NotFoundError } from "@/utils/errors";
 import { canonicalizeOutputFileName } from "./edits.output";
 import { validateEditRequest } from "./edits.validation";
 import type {
   CreateEditJobInput,
+  CloneEditJobInput,
   EditJob,
   EditJobListOptions,
   EditJobListResult,
@@ -138,6 +139,17 @@ export class EditsDemoService {
 
     demoRepository.putResource(RESOURCE_KIND, id, advanced);
     return advanced;
+  }
+
+  async clone(id: number, input: CloneEditJobInput): Promise<EditJob> {
+    const sourceJob = this.readById(id);
+    if (!["completed", "failed", "cancelled"].includes(sourceJob.status)) {
+      throw new ConflictError("Only terminal edit jobs can be cloned");
+    }
+    return this.create(sourceJob.videoId, {
+      output: input.output,
+      timeline: input.timeline ?? sourceJob.timelineConfig,
+    });
   }
 
   async list(

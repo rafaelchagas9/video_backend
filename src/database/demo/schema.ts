@@ -1,6 +1,7 @@
 import {
   index,
   integer,
+  foreignKey,
   primaryKey,
   real,
   sqliteTable,
@@ -20,6 +21,14 @@ export const demoMetaTable = sqliteTable("demo_meta", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const demoTagCategoriesTable = sqliteTable("demo_tag_categories", {
+  id: integer("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  group: text("group"),
+  description: text("description"),
+  ...timestamps,
+});
+
 export const demoTagsTable = sqliteTable(
   "demo_tags",
   {
@@ -29,6 +38,7 @@ export const demoTagsTable = sqliteTable(
       (): AnySQLiteColumn => demoTagsTable.id,
       { onDelete: "cascade" }
     ),
+    categoryId: integer("category_id"),
     description: text("description"),
     color: text("color"),
     ...timestamps,
@@ -36,16 +46,69 @@ export const demoTagsTable = sqliteTable(
   (table) => [
     uniqueIndex("demo_tags_name_parent_unique").on(table.name, table.parentId),
     index("demo_tags_parent_idx").on(table.parentId),
+    foreignKey({
+      columns: [table.categoryId],
+      foreignColumns: [demoTagCategoriesTable.id],
+      name: "demo_tags_category_id_demo_tag_categories_id_fk",
+    }).onDelete("set null"),
   ]
 );
 
-export const demoStudiosTable = sqliteTable("demo_studios", {
-  id: integer("id").primaryKey(),
-  name: text("name").notNull().unique(),
-  description: text("description"),
-  profilePicturePath: text("profile_picture_path"),
-  ...timestamps,
-});
+export const demoTagAliasesTable = sqliteTable(
+  "demo_tag_aliases",
+  {
+    id: integer("id").primaryKey(),
+    tagId: integer("tag_id")
+      .notNull()
+      .references(() => demoTagsTable.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    note: text("note"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("demo_tag_aliases_tag_idx").on(table.tagId),
+    uniqueIndex("demo_tag_aliases_tag_name_unique").on(table.tagId, table.name),
+  ]
+);
+
+export const demoStudiosTable = sqliteTable(
+  "demo_studios",
+  {
+    id: integer("id").primaryKey(),
+    name: text("name").notNull().unique(),
+    description: text("description"),
+    profilePicturePath: text("profile_picture_path"),
+    parentStudioId: integer("parent_studio_id"),
+    ...timestamps,
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.parentStudioId],
+      foreignColumns: [table.id],
+      name: "demo_studios_parent_studio_id_demo_studios_id_fk",
+    }).onDelete("set null"),
+  ]
+);
+
+export const demoStudioAliasesTable = sqliteTable(
+  "demo_studio_aliases",
+  {
+    id: integer("id").primaryKey(),
+    studioId: integer("studio_id")
+      .notNull()
+      .references(() => demoStudiosTable.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    note: text("note"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("demo_studio_aliases_studio_idx").on(table.studioId),
+    uniqueIndex("demo_studio_aliases_studio_name_unique").on(
+      table.studioId,
+      table.name
+    ),
+  ]
+);
 
 export const demoStudioSocialLinksTable = sqliteTable(
   "demo_studio_social_links",
@@ -172,6 +235,7 @@ export const demoVideosTable = sqliteTable(
     themes: text("themes"),
     isAvailable: integer("is_available", { mode: "boolean" }).notNull(),
     lastVerifiedAt: text("last_verified_at"),
+    studioAbsenceConfirmedAt: text("studio_absence_confirmed_at"),
     indexedAt: text("indexed_at").notNull(),
     ...timestamps,
   },
@@ -322,6 +386,10 @@ export const demoPlaylistsTable = sqliteTable("demo_playlists", {
   userId: integer("user_id").notNull(),
   name: text("name").notNull(),
   description: text("description"),
+  artworkSourceVideoId: integer("artwork_source_video_id").references(
+    () => demoVideosTable.id,
+    { onDelete: "set null" }
+  ),
   ...timestamps,
 });
 export const demoPlaylistVideosTable = sqliteTable(
@@ -345,6 +413,10 @@ export const demoCollectionsTable = sqliteTable("demo_collections", {
   description: text("description"),
   releaseYear: integer("release_year"),
   externalIdsJson: text("external_ids_json"),
+  artworkSourceVideoId: integer("artwork_source_video_id").references(
+    () => demoVideosTable.id,
+    { onDelete: "set null" }
+  ),
   ...timestamps,
 });
 export const demoCollectionEntriesTable = sqliteTable(

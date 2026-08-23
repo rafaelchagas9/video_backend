@@ -8,6 +8,7 @@ import {
   withDemoTransaction,
 } from "@/database/demo";
 import { NotFoundError } from "@/utils/errors";
+import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
 
 const {
   demoCreatorsTable,
@@ -216,6 +217,12 @@ export class VideosDemoService {
     action: BulkAction
   ): void {
     if (videoIds.length === 0) return;
+    if (kind === "studios") {
+      if (action === "add") studioAssignmentDemoService.linkMany(videoIds, targetIds);
+      else if (action === "remove") studioAssignmentDemoService.unlinkMany(videoIds, targetIds);
+      else studioAssignmentDemoService.replaceMany(videoIds, targetIds);
+      return;
+    }
     const spec = this.relationship(kind);
     withDemoTransaction(() => {
       const existingVideos = getDemoDatabase()
@@ -249,9 +256,7 @@ export class VideosDemoService {
           targetIds.map((targetId) =>
             kind === "creators"
               ? { videoId, creatorId: targetId }
-              : kind === "studios"
-                ? { videoId, studioId: targetId }
-                : { videoId, tagId: targetId }
+              : { videoId, tagId: targetId }
           )
         );
         getDemoDatabase()

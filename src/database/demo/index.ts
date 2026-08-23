@@ -32,6 +32,7 @@ export {
 export type { DemoArtworkDatabaseSnapshot } from "./artwork";
 export {
   exportDemoSeedDocument,
+  ensureDemoEntityPageData,
   hasDemoSeed,
   importDemoJsonFile,
   importDemoSeedDocument,

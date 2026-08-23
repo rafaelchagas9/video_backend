@@ -17,6 +17,7 @@ import { creatorsRelationshipsService } from "./creators.relationships.service";
 import { creatorsBulkService } from "./creators.bulk.service";
 import { creatorFavoritesService } from "./creators.favorites.service";
 import { creatorsAliasesService } from "./creators.aliases.service";
+import { creatorsMergeService } from "./creators.merge.service";
 import {
   idParamSchema,
   listCreatorsQuerySchema,
@@ -62,6 +63,7 @@ import {
   recentResponseSchema,
   quickCreateCreatorSchema,
   quickCreateResponseSchema,
+  mergeCreatorSchema,
 } from "./creators.schemas";
 
 export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -246,6 +248,44 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({
         success: true,
         message: "Creator deleted successfully",
+      });
+    }
+  );
+
+  // Merge a duplicate creator into the canonical creator
+  app.post(
+    "/:id/merge",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Merge duplicate creator",
+        description:
+          "Atomically moves all data from this creator into the target creator, records an audit snapshot, and removes the duplicate.",
+        params: idParamSchema,
+        body: mergeCreatorSchema,
+        response: {
+          200: creatorResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const fromId = request.params.id;
+      const intoId = request.body.into_creator_id;
+      await creatorsMergeService.mergeCreators(
+        fromId,
+        intoId,
+        request.body.reason
+      );
+      const creator = await creatorsService.findById(intoId, request.user!.id);
+
+      return reply.send({
+        success: true,
+        data: creator,
+        message: "Creators merged successfully",
       });
     }
   );

@@ -44,6 +44,8 @@ const DELETE_ORDER = [
   "demo_creator_social_links",
   "demo_creator_gallery",
   "demo_creator_face_embeddings",
+  "demo_tag_aliases",
+  "demo_studio_aliases",
   "demo_studio_social_links",
   "demo_playlist_videos",
   "demo_playlists",
@@ -53,6 +55,7 @@ const DELETE_ORDER = [
   "demo_creators",
   "demo_studios",
   "demo_tags",
+  "demo_tag_categories",
   "demo_settings",
   "demo_artwork_assets",
   "demo_artwork",
@@ -65,6 +68,24 @@ function validateDocument(data: unknown): asserts data is DemoSeedDocument {
   for (const key of ["tags", "studios", "creators", "videos"] as const) {
     if (!Array.isArray((data as DemoSeedDocument)[key])) {
       throw new Error(`Demo seed field ${key} must be an array`);
+    }
+  }
+  for (const [index, video] of (data as DemoSeedDocument).videos.entries()) {
+    if (
+      video.studioAssignmentStatus !== undefined &&
+      video.studioAssignmentStatus !== "confirmed_none"
+    ) {
+      throw new Error(
+        `Demo seed videos[${index}].studioAssignmentStatus must be confirmed_none when present`
+      );
+    }
+    if (
+      video.studioAssignmentStatus === "confirmed_none" &&
+      (video.studios ?? []).length > 0
+    ) {
+      throw new Error(
+        `Demo seed videos[${index}] cannot confirm no studio while studios are assigned`
+      );
     }
   }
 }
@@ -160,7 +181,24 @@ export function importDemoSeedDocument(
     }
 
     const insertTag = sqlite.prepare(
-      "INSERT INTO demo_tags (id,name,parent_id,description,color,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
+      "INSERT INTO demo_tags (id,name,parent_id,category_id,description,color,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)"
+    );
+    sqlite.run(
+      "INSERT INTO demo_tag_categories (id,name,\"group\",description,created_at,updated_at) VALUES (?,?,?,?,?,?),(?,?,?,?,?,?)",
+      [
+        1,
+        "Genre",
+        "Content",
+        "Genre and format labels",
+        DEMO_TIMESTAMP,
+        DEMO_TIMESTAMP,
+        2,
+        "Theme",
+        "Content",
+        "Subject and mood labels",
+        DEMO_TIMESTAMP,
+        DEMO_TIMESTAMP,
+      ]
     );
     const tagIds = new Map<string, number>();
     input.tags.forEach((tag, index) => tagIds.set(tag.name, index + 1));
@@ -169,15 +207,22 @@ export function importDemoSeedDocument(
         index + 1,
         tag.name,
         tag.parentName ? (tagIds.get(tag.parentName) ?? null) : null,
+        index % 2 === 0 ? 1 : 2,
         tag.description ?? null,
         tag.color ?? null,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP
       )
     );
+    if (input.tags[0]) {
+      sqlite.run(
+        "INSERT INTO demo_tag_aliases (id,tag_id,name,note,created_at) VALUES (?,?,?,?,?)",
+        [1, 1, `${input.tags[0].name} alternative`, "Demo alias", DEMO_TIMESTAMP]
+      );
+    }
 
     const insertStudio = sqlite.prepare(
-      "INSERT INTO demo_studios (id,name,description,profile_picture_path,created_at,updated_at) VALUES (?,?,?,?,?,?)"
+      "INSERT INTO demo_studios (id,name,description,profile_picture_path,parent_studio_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
     );
     const insertStudioSocial = sqlite.prepare(
       "INSERT INTO demo_studio_social_links (id,studio_id,platform_name,url,created_at) VALUES (?,?,?,?,?)"
@@ -191,6 +236,7 @@ export function importDemoSeedDocument(
         studio.name,
         studio.description ?? null,
         studio.profilePicturePath ?? null,
+        index === 1 || index === 2 ? 1 : null,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP
       );
@@ -205,6 +251,12 @@ export function importDemoSeedDocument(
           )
       );
     });
+    if (input.studios[0]) {
+      sqlite.run(
+        "INSERT INTO demo_studio_aliases (id,studio_id,name,note,created_at) VALUES (?,?,?,?,?)",
+        [1, 1, `${input.studios[0].name} network`, "Demo alias", DEMO_TIMESTAMP]
+      );
+    }
 
     const insertCreator = sqlite.prepare(
       "INSERT INTO demo_creators (id,name,description,profile_picture_path,main_picture_path,face_thumbnail_path,extra_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
@@ -342,7 +394,7 @@ export function importDemoSeedDocument(
     });
 
     const insertVideo = sqlite.prepare(
-      "INSERT INTO demo_videos (id,source_video_id,file_path,file_name,directory_id,file_size_bytes,file_hash,duration_seconds,width,height,codec,bitrate,fps,audio_codec,title,description,themes,is_available,last_verified_at,indexed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO demo_videos (id,source_video_id,file_path,file_name,directory_id,file_size_bytes,file_hash,duration_seconds,width,height,codec,bitrate,fps,audio_codec,title,description,themes,is_available,last_verified_at,studio_absence_confirmed_at,indexed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     );
     const insertVideoCreator = sqlite.prepare(
       "INSERT OR IGNORE INTO demo_video_creators (video_id,creator_id) VALUES (?,?)"
@@ -394,6 +446,7 @@ export function importDemoSeedDocument(
         video.themes ?? null,
         1,
         null,
+        video.studioAssignmentStatus === "confirmed_none" ? DEMO_TIMESTAMP : null,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP
@@ -464,6 +517,10 @@ export function importDemoSeedDocument(
         )
       );
       const stats = video.stats || {};
+      const activityAt =
+        (stats.playCount ?? 0) > 0
+          ? new Date(Date.parse(DEMO_TIMESTAMP) + id * 60 * 60 * 1000).toISOString()
+          : null;
       insertStats.run(
         DEMO_USER_ID,
         id,
@@ -472,8 +529,8 @@ export function importDemoSeedDocument(
         0,
         0,
         stats.lastPositionSeconds ?? 0,
-        null,
-        null,
+        stats.lastPlayedAt ?? activityAt,
+        stats.lastWatchAt ?? activityAt,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP
       );
@@ -516,7 +573,7 @@ function seedMutableLibrary(
     if (videoIds.has(id)) favorite.run(DEMO_USER_ID, id, DEMO_TIMESTAMP);
 
   const playlist = sqlite.prepare(
-    "INSERT INTO demo_playlists (id,user_id,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?)"
+    "INSERT INTO demo_playlists (id,user_id,name,description,artwork_source_video_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
   );
   const playlistVideo = sqlite.prepare(
     "INSERT INTO demo_playlist_videos (playlist_id,video_id,position,added_at) VALUES (?,?,?,?)"
@@ -541,6 +598,7 @@ function seedMutableLibrary(
       DEMO_USER_ID,
       name,
       description,
+      ids.find((videoId) => videoIds.has(videoId)) ?? null,
       DEMO_TIMESTAMP,
       DEMO_TIMESTAMP
     );
@@ -552,7 +610,7 @@ function seedMutableLibrary(
   }
 
   const collection = sqlite.prepare(
-    "INSERT INTO demo_collections (id,title,kind,description,release_year,external_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)"
+    "INSERT INTO demo_collections (id,title,kind,description,release_year,external_ids_json,artwork_source_video_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
   );
   const entry = sqlite.prepare(
     "INSERT INTO demo_collection_entries (id,collection_id,video_id,entry_kind,sequence_number,season_number,episode_number,episode_part,absolute_number,display_title_override,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
@@ -564,6 +622,7 @@ function seedMutableLibrary(
     "Demo anthology of animated shorts.",
     null,
     null,
+    videoIds.has(2) ? 2 : null,
     DEMO_TIMESTAMP,
     DEMO_TIMESTAMP
   );
@@ -574,6 +633,7 @@ function seedMutableLibrary(
     "Demo collection of related trailer content.",
     null,
     null,
+    videoIds.has(5) ? 5 : null,
     DEMO_TIMESTAMP,
     DEMO_TIMESTAMP
   );
@@ -642,8 +702,81 @@ export function hasDemoSeed(): boolean {
   );
 }
 
+export function ensureDemoEntityPageData(): void {
+  initializeDemoDatabase();
+  getDemoSqlite().exec(`
+    INSERT OR IGNORE INTO demo_tag_categories
+      (id, name, "group", description, created_at, updated_at)
+    VALUES
+      (1, 'Genre', 'Content', 'Genre and format labels', '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      (2, 'Theme', 'Content', 'Subject and mood labels', '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}');
+
+    UPDATE demo_tags
+    SET category_id = CASE WHEN id % 2 = 1 THEN 1 ELSE 2 END
+    WHERE category_id IS NULL;
+
+    INSERT OR IGNORE INTO demo_tag_aliases
+      (id, tag_id, name, note, created_at)
+    SELECT 1, id, name || ' alternative', 'Demo alias', '${DEMO_TIMESTAMP}'
+    FROM demo_tags
+    WHERE id = 1;
+
+    UPDATE demo_studios
+    SET parent_studio_id = 1
+    WHERE id IN (2, 3)
+      AND EXISTS (SELECT 1 FROM demo_studios parent WHERE parent.id = 1)
+      AND parent_studio_id IS NULL;
+
+    INSERT OR IGNORE INTO demo_studio_aliases
+      (id, studio_id, name, note, created_at)
+    SELECT 1, id, name || ' network', 'Demo alias', '${DEMO_TIMESTAMP}'
+    FROM demo_studios
+    WHERE id = 1;
+
+    UPDATE demo_playlists
+    SET artwork_source_video_id = (
+      SELECT pv.video_id
+      FROM demo_playlist_videos pv
+      WHERE pv.playlist_id = demo_playlists.id
+      ORDER BY pv.position, pv.added_at
+      LIMIT 1
+    )
+    WHERE artwork_source_video_id IS NULL;
+
+    UPDATE demo_collections
+    SET artwork_source_video_id = (
+      SELECT e.video_id
+      FROM demo_collection_entries e
+      WHERE e.collection_id = demo_collections.id
+      ORDER BY
+        CASE WHEN e.sequence_number IS NULL THEN 1 ELSE 0 END,
+        e.sequence_number,
+        e.season_number,
+        e.episode_number,
+        e.episode_part,
+        e.absolute_number,
+        e.created_at
+      LIMIT 1
+    )
+    WHERE artwork_source_video_id IS NULL;
+
+    UPDATE demo_video_stats
+    SET
+      last_played_at = COALESCE(
+        last_played_at,
+        strftime('%Y-%m-%dT%H:%M:%fZ', '2026-01-01 00:00:00', '+' || video_id || ' hours')
+      ),
+      last_watch_at = COALESCE(
+        last_watch_at,
+        strftime('%Y-%m-%dT%H:%M:%fZ', '2026-01-01 00:00:00', '+' || video_id || ' hours')
+      )
+    WHERE play_count > 0;
+  `);
+}
+
 export function resetDemoRuntimeState(): void {
   restoreDemoBaselineSnapshot();
+  ensureDemoEntityPageData();
   resetDemoRuntimeAssets();
 }
 
@@ -746,6 +879,10 @@ export function exportDemoSeedDocument(): DemoSeedDocument {
         themes: video.themes,
         creators: video.creators.map((creator: any) => creator.name),
         studios: video.studios.map((studio: any) => studio.name),
+        studioAssignmentStatus:
+          video.studio_assignment_status === "confirmed_none"
+            ? "confirmed_none"
+            : undefined,
         tags: video.tags.map((tag: any) => tag.name),
         thumbnail: video.thumbnail
           ? {

@@ -18,6 +18,7 @@ import type { Video } from "@/modules/videos/videos.types";
 import { env } from "@/config/env";
 import { demoRepository } from "@/database/demo";
 import { studiosDemoService } from "./studios.demo.service";
+import { studioAssignmentService } from "./studio-assignment.service";
 
 export class StudiosRelationshipsService {
   // Creator Relationship Methods
@@ -164,10 +165,7 @@ export class StudiosRelationshipsService {
     }
 
     try {
-      await db.insert(videoStudiosTable).values({
-        videoId,
-        studioId,
-      });
+      await studioAssignmentService.linkMany([videoId], [studioId]);
     } catch (error: any) {
       if (isUniqueViolation(error)) {
         // PostgreSQL UNIQUE violation
@@ -186,11 +184,7 @@ export class StudiosRelationshipsService {
       studiosDemoService.unlinkVideo(studioId, videoId);
       return;
     }
-    await db
-      .delete(videoStudiosTable)
-      .where(
-        sql`${videoStudiosTable.videoId} = ${videoId} AND ${videoStudiosTable.studioId} = ${studioId}`
-      );
+    await studioAssignmentService.unlinkMany([videoId], [studioId]);
 
     // Note: Drizzle postgres-js doesn't return rowCount, so we can't verify if deletion happened
     // The delete will silently succeed even if no rows match
@@ -204,7 +198,11 @@ export class StudiosRelationshipsService {
     await this.findStudioById(studioId); // Ensure studio exists
 
     const videos = await db.execute<any>(sql`
-      SELECT v.*, t.id as thumbnail_id
+      SELECT v.*,
+        CASE WHEN EXISTS (SELECT 1 FROM video_studios vs_status WHERE vs_status.video_id = v.id) THEN 'assigned'
+             WHEN v.studio_absence_confirmed_at IS NOT NULL THEN 'confirmed_none'
+             ELSE 'unknown' END AS studio_assignment_status,
+        t.id as thumbnail_id
       FROM videos v
       INNER JOIN video_studios vs ON v.id = vs.video_id
       LEFT JOIN (

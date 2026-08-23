@@ -8,7 +8,23 @@ export interface Studio {
   profile_picture_url?: string; // Computed field
   created_at: string;
   updated_at: string;
+  parent?: StudioSummary | null;
+  children?: StudioSummary[];
+  aliases?: StudioAliasSummary[];
 }
+
+export interface StudioSummary {
+  id: number;
+  name: string;
+}
+
+export interface StudioAliasSummary {
+  id: number;
+  name: string;
+  note: string | null;
+}
+
+export type StudioInclude = "hierarchy" | "aliases";
 
 export interface StudioSocialLink {
   id: number;
@@ -41,6 +57,7 @@ export interface ListStudiosOptions {
   order?: 'asc' | 'desc';
   missing?: 'picture' | 'social' | 'linked' | 'any';
   complete?: boolean;
+  include?: StudioInclude[];
 }
 
 export interface PaginatedStudios {
@@ -128,4 +145,3 @@ export interface BulkStudioImportResult {
     errors: number;
   };
 }
-

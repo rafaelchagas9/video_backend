@@ -4,7 +4,6 @@ import {
   triageProgressTable,
   videoCreatorsTable,
   videoTagsTable,
-  videoStudiosTable,
 } from "@/database/schema";
 import type {
   TriageProgress,
@@ -16,6 +15,8 @@ import type {
 } from "./triage.types";
 import { env } from "@/config/env";
 import { triageDemoService } from "./triage.demo.service";
+import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
+import { ConflictError } from "@/utils/errors";
 
 export class TriageService {
   async saveProgress(
@@ -284,38 +285,21 @@ export class TriageService {
 
         // Add studios
         if (actions.addStudioIds && actions.addStudioIds.length > 0) {
-          const values = videoIds.flatMap((videoId) =>
-            actions.addStudioIds!.map((studioId) => ({
-              videoId,
-              studioId,
-            }))
-          );
-
-          const result = await tx
-            .insert(videoStudiosTable)
-            .values(values)
-            .onConflictDoNothing()
-            .returning({ videoId: videoStudiosTable.videoId });
-
-          studiosAdded = result.length;
+          studiosAdded = await studioAssignmentService.linkMany(videoIds, actions.addStudioIds, tx);
         }
 
         // Remove studios
         if (actions.removeStudioIds && actions.removeStudioIds.length > 0) {
-          const result = await tx
-            .delete(videoStudiosTable)
-            .where(
-              and(
-                inArray(videoStudiosTable.videoId, videoIds),
-                inArray(videoStudiosTable.studioId, actions.removeStudioIds)
-              )
-            )
-            .returning({ videoId: videoStudiosTable.videoId });
-
-          studiosRemoved = result.length;
+          studiosRemoved = await studioAssignmentService.unlinkMany(videoIds, actions.removeStudioIds, tx);
+        }
+        if (actions.studioAssignmentStatus === "confirmed_none") {
+          await studioAssignmentService.confirmNone(videoIds, tx);
+        } else if (actions.studioAssignmentStatus === "unknown") {
+          await studioAssignmentService.markUnknown(videoIds, tx);
         }
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ConflictError) throw error;
       errors++;
     }
 

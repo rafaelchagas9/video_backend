@@ -15,6 +15,8 @@ import { canonicalizeOutputFileName } from "./edits.output";
 import { validateEditRequest } from "./edits.validation";
 import type {
   CreateEditJobInput,
+  CloneEditJobInput,
+  EditRecipe,
   EditJob,
   EditJobListOptions,
   EditJobListResult,
@@ -23,6 +25,10 @@ import type {
   EditQueuePayload,
   EditTimelineConfig,
 } from "./edits.types";
+import {
+  editOutputConfigSchema,
+  editTimelineConfigSchema,
+} from "./edits.schemas";
 
 const ACTIVE_STATUSES: EditJobStatus[] = ["pending", "queued", "running"];
 const TERMINAL_STATUSES: EditJobStatus[] = ["completed", "failed", "cancelled"];
@@ -159,6 +165,35 @@ export class EditsService {
     });
     if (!job) throw new NotFoundError(`Edit job not found with id: ${id}`);
     return this.mapToDto(job);
+  }
+
+  recipeFor(job: EditJob): EditRecipe {
+    const output = editOutputConfigSchema.parse(job.outputConfig);
+    const timeline = editTimelineConfigSchema.parse(job.timelineConfig);
+    return {
+      source_video_id: job.videoId,
+      output_defaults: {
+        directory_id: output.directory_id,
+        format: output.format,
+        video_codec: output.video_codec,
+        audio_codec: output.audio_codec,
+      },
+      timeline,
+    };
+  }
+
+  async clone(id: number, input: CloneEditJobInput): Promise<EditJob> {
+    if (env.DEMO_MODE) return editsDemoService.clone(id, input);
+
+    const sourceJob = await this.getById(id);
+    if (!TERMINAL_STATUSES.includes(sourceJob.status)) {
+      throw new ConflictError("Only terminal edit jobs can be cloned");
+    }
+    const recipe = this.recipeFor(sourceJob);
+    return this.create(recipe.source_video_id, {
+      output: input.output,
+      timeline: input.timeline ?? recipe.timeline,
+    });
   }
 
   async list(options: EditJobListOptions): Promise<EditJobListResult> {

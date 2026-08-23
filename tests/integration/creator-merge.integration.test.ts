@@ -32,11 +32,12 @@ describe("creator merge (Phase 0.5)", () => {
       creatorExternalIdsTable,
       creatorPlatformsTable,
       creatorMergesTable,
+      enrichmentSuggestionsTable,
+      enrichmentRunsTable,
       platformsTable,
     } = await import("@/database/schema");
-    const { creatorsMergeService } = await import(
-      "@/modules/creators/creators.merge.service"
-    );
+    const { creatorsMergeService } =
+      await import("@/modules/creators/creators.merge.service");
 
     // --- Arrange ----------------------------------------------------------
     const [platform] = await db
@@ -46,11 +47,15 @@ describe("creator merge (Phase 0.5)", () => {
 
     const [into] = await db
       .insert(creatorsTable)
-      .values({ name: "Canonical Creator" })
+      .values({ name: "Canonical Creator", country: "Brazil" })
       .returning();
     const [from] = await db
       .insert(creatorsTable)
-      .values({ name: "Duplicate Creator" })
+      .values({
+        name: "Duplicate Creator",
+        description: "Source-only description",
+        country: "Canada",
+      })
       .returning();
 
     // Aliases: one shared (collision) + one unique per creator.
@@ -68,12 +73,19 @@ describe("creator merge (Phase 0.5)", () => {
       url: "https://x.com/dupe",
     });
 
-    // Global-unique external id, carried by `from`.
-    await db.insert(creatorExternalIdsTable).values({
-      creatorId: from.id,
-      source: "theporndb",
-      externalId: "tpdb-111",
-    });
+    // Equal-looking IDs from different providers are both valid identities.
+    await db.insert(creatorExternalIdsTable).values([
+      {
+        creatorId: into.id,
+        source: "stashdb",
+        externalId: "shared-111",
+      },
+      {
+        creatorId: from.id,
+        source: "theporndb",
+        externalId: "shared-111",
+      },
+    ]);
 
     // Platform profile collision: both have a profile on the same platform.
     await db.insert(creatorPlatformsTable).values([
@@ -86,16 +98,30 @@ describe("creator merge (Phase 0.5)", () => {
       {
         creatorId: from.id,
         platformId: platform.id,
-        username: "from_handle",
-        profileUrl: "https://onlyfans.com/from",
+        username: "into_handle",
+        profileUrl: "https://onlyfans.com/into",
       },
     ]);
+
+    await db.insert(enrichmentSuggestionsTable).values({
+      entityType: "creator",
+      entityId: from.id,
+      type: "alias",
+      value: "Suggested Alias",
+      source: "stashdb",
+      dedupHash: `creator-merge-${from.id}`,
+    });
+    await db.insert(enrichmentRunsTable).values({
+      entityType: "creator",
+      entityId: from.id,
+      status: "success",
+    });
 
     // --- Act --------------------------------------------------------------
     const merged = await creatorsMergeService.mergeCreators(
       from.id,
       into.id,
-      "integration test",
+      "integration test"
     );
     expect(merged.id).toBe(into.id);
 
@@ -114,7 +140,7 @@ describe("creator merge (Phase 0.5)", () => {
       .where(eq(creatorAliasesTable.creatorId, into.id));
     const aliasNames = aliases.map((a) => a.name).sort();
     expect(aliasNames).toEqual(
-      ["Duplicate Creator", "From Only", "Into Only", "Shared Alias"].sort(),
+      ["Duplicate Creator", "From Only", "Into Only", "Shared Alias"].sort()
     );
 
     // Social link moved.
@@ -130,8 +156,11 @@ describe("creator merge (Phase 0.5)", () => {
       .select()
       .from(creatorExternalIdsTable)
       .where(eq(creatorExternalIdsTable.creatorId, into.id));
-    expect(externalIds).toHaveLength(1);
-    expect(externalIds[0].externalId).toBe("tpdb-111");
+    expect(externalIds).toHaveLength(2);
+    expect(externalIds.map((row) => row.source).sort()).toEqual([
+      "stashdb",
+      "theporndb",
+    ]);
 
     // Platform collision resolved: only `into`'s original profile survives.
     const platforms = await db
@@ -140,6 +169,24 @@ describe("creator merge (Phase 0.5)", () => {
       .where(eq(creatorPlatformsTable.creatorId, into.id));
     expect(platforms).toHaveLength(1);
     expect(platforms[0].username).toBe("into_handle");
+
+    const [survivor] = await db
+      .select()
+      .from(creatorsTable)
+      .where(eq(creatorsTable.id, into.id));
+    expect(survivor.description).toBe("Source-only description");
+    expect(survivor.country).toBe("Brazil");
+
+    const suggestions = await db
+      .select()
+      .from(enrichmentSuggestionsTable)
+      .where(eq(enrichmentSuggestionsTable.entityId, into.id));
+    expect(suggestions).toHaveLength(1);
+    const runs = await db
+      .select()
+      .from(enrichmentRunsTable)
+      .where(eq(enrichmentRunsTable.entityId, into.id));
+    expect(runs).toHaveLength(1);
 
     // Audit row with snapshot.
     const merges = await db
@@ -150,13 +197,108 @@ describe("creator merge (Phase 0.5)", () => {
     expect(merges[0].fromCreatorId).toBe(from.id);
     expect(merges[0].fromName).toBe("Duplicate Creator");
     expect(merges[0].reason).toBe("integration test");
-    expect(merges[0].snapshot).toMatchObject({ id: from.id, name: "Duplicate Creator" });
+    expect(merges[0].snapshot).toMatchObject({
+      id: from.id,
+      name: "Duplicate Creator",
+    });
+    expect(merges[0].snapshot).toMatchObject({
+      auditVersion: 2,
+      discardedConflicts: {
+        platforms: [expect.objectContaining({ creatorId: from.id })],
+      },
+    });
+  });
+
+  it("rolls back instead of discarding a different profile on the same platform", async () => {
+    const { db } = await import("@/config/drizzle");
+    const { creatorsTable, creatorPlatformsTable, platformsTable } =
+      await import("@/database/schema");
+    const { creatorsMergeService } =
+      await import("@/modules/creators/creators.merge.service");
+    const [platform] = await db
+      .insert(platformsTable)
+      .values({ name: "Conflicting Platform" })
+      .returning();
+    const [into] = await db
+      .insert(creatorsTable)
+      .values({ name: "Conflict Into" })
+      .returning();
+    const [from] = await db
+      .insert(creatorsTable)
+      .values({ name: "Conflict From" })
+      .returning();
+    await db.insert(creatorPlatformsTable).values([
+      {
+        creatorId: into.id,
+        platformId: platform.id,
+        username: "canonical",
+        profileUrl: "https://example.invalid/canonical",
+      },
+      {
+        creatorId: from.id,
+        platformId: platform.id,
+        username: "duplicate",
+        profileUrl: "https://example.invalid/duplicate",
+      },
+    ]);
+
+    await expect(
+      creatorsMergeService.mergeCreators(from.id, into.id)
+    ).rejects.toThrow("resolve that profile before merging");
+    expect(
+      await db.select().from(creatorsTable).where(eq(creatorsTable.id, from.id))
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(creatorPlatformsTable)
+        .where(eq(creatorPlatformsTable.creatorId, from.id))
+    ).toHaveLength(1);
+  });
+
+  it("exposes the authenticated merge endpoint with an API-shaped survivor", async () => {
+    const { db } = await import("@/config/drizzle");
+    const { creatorsTable } = await import("@/database/schema");
+    const [into] = await db
+      .insert(creatorsTable)
+      .values({ name: "HTTP Merge Into" })
+      .returning();
+    const [from] = await db
+      .insert(creatorsTable)
+      .values({ name: "HTTP Merge From" })
+      .returning();
+
+    const unauthorized = await ctx!.inject({
+      method: "POST",
+      url: `/api/creators/${from.id}/merge`,
+      payload: { into_creator_id: into.id },
+    });
+    expect(unauthorized.statusCode, unauthorized.body).toBe(401);
+
+    const response = await ctx!.authInject({
+      method: "POST",
+      url: `/api/creators/${from.id}/merge`,
+      payload: {
+        into_creator_id: into.id,
+        reason: "HTTP integration test",
+      },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        id: into.id,
+        name: "HTTP Merge Into",
+        is_favorite: false,
+      },
+      message: "Creators merged successfully",
+    });
+    expect(response.json().data.created_at).toBeString();
   });
 
   it("rejects merging a creator into itself", async () => {
-    const { creatorsMergeService } = await import(
-      "@/modules/creators/creators.merge.service"
-    );
+    const { creatorsMergeService } =
+      await import("@/modules/creators/creators.merge.service");
     await expect(creatorsMergeService.mergeCreators(1, 1)).rejects.toThrow();
   });
 });

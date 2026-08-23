@@ -29,6 +29,9 @@ allowed GET /api/directories/{id} http-contract
 allowed PATCH /api/directories/{id} http-contract
 allowed DELETE /api/directories/{id} http-contract
 allowed POST /api/directories/{id}/scan http-contract
+allowed GET /api/directories/{id}/scans http-contract
+allowed GET /api/directories/{id}/scans/{scanId} http-contract
+allowed GET /api/directories/scheduler/status http-contract
 allowed GET /api/directories/{id}/stats http-contract
 allowed GET /api/videos/
 allowed GET /api/videos/compression-suggestions
@@ -70,6 +73,7 @@ allowed POST /api/videos/{id}/ratings
 allowed GET /api/videos/{id}/bookmarks
 allowed POST /api/videos/{id}/bookmarks
 allowed GET /api/videos/{id}/studios
+allowed PATCH /api/videos/{id}/studio-assignment http-contract
 allowed POST /api/videos/{id}/studios/{studio_id} http-contract
 allowed DELETE /api/videos/{id}/studios/{studio_id} http-contract
 allowed GET /api/creators/
@@ -77,6 +81,7 @@ allowed POST /api/creators/
 allowed GET /api/creators/{id}
 allowed PATCH /api/creators/{id}
 allowed DELETE /api/creators/{id}
+allowed POST /api/creators/{id}/merge http-contract
 allowed POST /api/creators/bulk http-contract
 allowed POST /api/creators/{id}/favorite
 allowed DELETE /api/creators/{id}/favorite
@@ -140,6 +145,7 @@ allowed GET /api/studios/recent
 allowed POST /api/studios/quick-create
 allowed GET /api/tags/
 allowed POST /api/tags/
+allowed GET /api/tags/categories
 allowed GET /api/tags/{id}
 allowed PATCH /api/tags/{id}
 allowed DELETE /api/tags/{id}
@@ -278,6 +284,7 @@ allowed POST /api/videos/{id}/edits
 allowed GET /api/edits/jobs
 allowed GET /api/edits/jobs/{id}
 allowed POST /api/edits/jobs/{id}/cancel
+allowed POST /api/edits/jobs/{id}/clone http-contract
 allowed POST /api/multiplayer-remote/display-devices http-contract
 allowed POST /api/multiplayer-remote/sessions http-contract
 allowed GET /api/multiplayer-remote/sessions/{id} http-contract
@@ -345,6 +352,7 @@ const HTTP_CONTRACT_OPERATIONS = new Set([
   "GET /api/edits/jobs",
   "GET /api/edits/jobs/{id}",
   "POST /api/edits/jobs/{id}/cancel",
+  "POST /api/edits/jobs/{id}/clone",
 ]);
 
 export const DEMO_ROUTE_SCENARIOS: DemoRouteScenario[] = MANIFEST_SOURCE.trim()

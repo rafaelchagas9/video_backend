@@ -4,7 +4,6 @@ import {
   videosTable,
   videoCreatorsTable,
   videoTagsTable,
-  videoStudiosTable,
   favoritesTable,
   thumbnailsTable,
   storyboardsTable,
@@ -19,6 +18,7 @@ import type { ListVideosOptions } from "./videos.types";
 import { buildVideoFilters } from "./videos.query-builder";
 import { env } from "@/config/env";
 import { videosDemoService } from "./videos.demo.service";
+import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
 import { editsDemoService } from "@/modules/edits/edits.demo.service";
 import {
   demoRepository,
@@ -312,26 +312,10 @@ export class VideosBulkService {
 
     await db.transaction(async (tx) => {
       if (action === "add") {
-        // Generate all combinations of videoId x studioId
-        const values = videoIds.flatMap((videoId) =>
-          studioIds.map((studioId) => ({
-            videoId,
-            studioId,
-          }))
-        );
-
-        // Bulk insert with conflict handling
-        await tx.insert(videoStudiosTable).values(values).onConflictDoNothing();
+        await studioAssignmentService.linkMany(videoIds, studioIds, tx);
       } else {
         // Remove all specified studio-video relationships
-        await tx
-          .delete(videoStudiosTable)
-          .where(
-            and(
-              inArray(videoStudiosTable.videoId, videoIds),
-              inArray(videoStudiosTable.studioId, studioIds)
-            )
-          );
+        await studioAssignmentService.unlinkMany(videoIds, studioIds, tx);
       }
     });
   }
@@ -627,35 +611,12 @@ export class VideosBulkService {
 
         // Add studios
         if (actions.addStudioIds && actions.addStudioIds.length > 0) {
-          const values = videoIds.flatMap((videoId) =>
-            actions.addStudioIds!.map((studioId) => ({
-              videoId,
-              studioId,
-            }))
-          );
-
-          const result = await tx
-            .insert(videoStudiosTable)
-            .values(values)
-            .onConflictDoNothing()
-            .returning({ videoId: videoStudiosTable.videoId });
-
-          studiosAdded = result.length;
+          studiosAdded = await studioAssignmentService.linkMany(videoIds, actions.addStudioIds, tx);
         }
 
         // Remove studios
         if (actions.removeStudioIds && actions.removeStudioIds.length > 0) {
-          const result = await tx
-            .delete(videoStudiosTable)
-            .where(
-              and(
-                inArray(videoStudiosTable.videoId, videoIds),
-                inArray(videoStudiosTable.studioId, actions.removeStudioIds)
-              )
-            )
-            .returning({ videoId: videoStudiosTable.videoId });
-
-          studiosRemoved = result.length;
+          studiosRemoved = await studioAssignmentService.unlinkMany(videoIds, actions.removeStudioIds, tx);
         }
       } catch (error) {
         errors++;

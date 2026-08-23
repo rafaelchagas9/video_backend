@@ -5,6 +5,8 @@ import { directoriesService } from "./directories.service";
 import { watcherService } from "./watcher.service";
 import { env } from "@/config/env";
 import { directoriesDemoService } from "./directories.demo.service";
+import { directoryScansService } from "./directory-scans.service";
+import { schedulerService } from "@/modules/scheduler/scheduler.service";
 import {
   idParamSchema,
   createDirectorySchema,
@@ -14,6 +16,12 @@ import {
   directoryStatsResponseSchema,
   messageResponseSchema,
   errorResponseSchema,
+  scanIdParamSchema,
+  scanPaginationSchema,
+  scanRunResponseSchema,
+  scanStartedResponseSchema,
+  scanRunListResponseSchema,
+  schedulerStatusResponseSchema,
 } from "./directories.schemas";
 
 export async function directoriesRoutes(
@@ -23,6 +31,39 @@ export async function directoriesRoutes(
 
   // All routes require authentication
   app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/scheduler/status",
+    {
+      schema: {
+        tags: ["directories"],
+        summary: "Get directory scheduler status",
+        response: {
+          200: schedulerStatusResponseSchema,
+          401: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      const status = schedulerService.getStatus();
+      return reply.send({
+        success: true,
+        data: {
+          is_running: status.isRunning,
+          scheduled_directories: status.scheduledDirectories,
+          schedules: status.schedules.map((schedule) => ({
+            directory_id: schedule.directoryId,
+            interval_minutes: schedule.intervalMinutes,
+          })),
+          system_tasks: status.systemTasks.map((task) => ({
+            name: task.name,
+            cron_expression: task.cronExpression,
+          })),
+        },
+      });
+    }
+  );
 
   // Create directory
   app.post(
@@ -52,7 +93,7 @@ export async function directoriesRoutes(
 
       // Trigger initial scan
       const scan = env.DEMO_MODE
-        ? Promise.resolve(directoriesDemoService.virtualScan(directory.id))
+        ? directoriesDemoService.startScan(directory.id).completion
         : watcherService.scanDirectory(directory.id);
       scan.catch((error) => {
         fastify.log.error(
@@ -94,6 +135,59 @@ export async function directoriesRoutes(
   );
 
   // Get directory by ID
+  app.get(
+    "/:id/scans",
+    {
+      schema: {
+        tags: ["directories"],
+        summary: "List directory scan runs",
+        params: idParamSchema,
+        querystring: scanPaginationSchema,
+        response: {
+          200: scanRunListResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await directoriesService.findById(request.params.id);
+      const result = await directoryScansService.list(
+        request.params.id,
+        request.query.page,
+        request.query.limit
+      );
+      return reply.send({ success: true, ...result });
+    }
+  );
+
+  app.get(
+    "/:id/scans/:scanId",
+    {
+      schema: {
+        tags: ["directories"],
+        summary: "Get a directory scan run",
+        params: scanIdParamSchema,
+        response: {
+          200: scanRunResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const run = await directoryScansService.findById(
+        request.params.id,
+        request.params.scanId
+      );
+      return reply.send({ success: true, data: run });
+    }
+  );
+
   app.get(
     "/:id",
     {
@@ -189,9 +283,12 @@ export async function directoriesRoutes(
           "Manually triggers a scan of the directory for new videos.",
         params: idParamSchema,
         response: {
-          200: messageResponseSchema,
+          202: scanStartedResponseSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
+          409: errorResponseSchema,
+          500: errorResponseSchema,
         },
       },
     },
@@ -207,21 +304,26 @@ export async function directoriesRoutes(
         "Manual scan triggered by user"
       );
 
-      // Trigger scan asynchronously
-      const scan = env.DEMO_MODE
-        ? Promise.resolve(directoriesDemoService.virtualScan(request.params.id))
-        : watcherService.scanDirectory(request.params.id);
-      scan.catch((error) => {
+      const { run, completion } = env.DEMO_MODE
+        ? directoriesDemoService.startScan(request.params.id)
+        : await watcherService.startScan(request.params.id);
+      completion.catch((error) => {
         fastify.log.error(
           { error, directoryId: request.params.id },
           "Directory scan failed"
         );
       });
 
-      return reply.send({
-        success: true,
-        message: "Directory scan started",
-      });
+      return reply
+        .header(
+          "Location",
+          `/api/directories/${request.params.id}/scans/${run.id}`
+        )
+        .status(202)
+        .send({
+          success: true,
+          data: run,
+        });
     }
   );
 

@@ -21,6 +21,10 @@ export const videoCollectionsTable = pgTable(
     description: text("description"),
     releaseYear: integer("release_year"),
     externalIdsJson: text("external_ids_json"),
+    artworkSourceVideoId: integer("artwork_source_video_id").references(
+      () => videosTable.id,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -29,6 +33,9 @@ export const videoCollectionsTable = pgTable(
     kindIdx: index("idx_video_collections_kind").on(table.kind),
     releaseYearIdx: index("idx_video_collections_release_year").on(
       table.releaseYear,
+    ),
+    artworkSourceIdx: index("idx_video_collections_artwork_source").on(
+      table.artworkSourceVideoId,
     ),
     kindCheck: check(
       "video_collections_kind_check",

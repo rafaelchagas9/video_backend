@@ -335,6 +335,83 @@ describe("SQLite demo edit simulation", () => {
     });
   });
 
+  it("clones every terminal state with stored or overridden timelines", async () => {
+    const service = new EditsDemoService();
+    const storedTimeline = {
+      segments: [
+        {
+          start: 2,
+          end: 8,
+          speed: 2,
+          transform: { rotate: 90 as const },
+          audio: { volume: 0.5, fade_in_seconds: 0.25 },
+        },
+      ],
+      transform: { rotate: 180 as const },
+      audio: { muted: false, volume: 1.2 },
+    };
+
+    const completedSource = await service.create(1, {
+      output: output("clone-completed-source"),
+      timeline: storedTimeline,
+    });
+    await service.getById(completedSource.id);
+    await service.getById(completedSource.id);
+    await service.getById(completedSource.id);
+
+    const clonedStored = await service.clone(completedSource.id, {
+      output: output("clone-completed-target"),
+    });
+    expect(clonedStored).toMatchObject({
+      status: "queued",
+      videoId: 1,
+      outputConfig: { file_name: "clone-completed-target.mkv" },
+      timelineConfig: storedTimeline,
+    });
+    expect(clonedStored.id).not.toBe(completedSource.id);
+
+    const failedSource = await service.create(1, {
+      output: output("demo-fail-clone-source"),
+      timeline: storedTimeline,
+    });
+    await service.getById(failedSource.id);
+    await service.getById(failedSource.id);
+    await service.getById(failedSource.id);
+    const override = { segments: [{ start: 20, end: 25, speed: 1 }] };
+    expect(
+      await service.clone(failedSource.id, {
+        output: output("clone-failed-target"),
+        timeline: override,
+      })
+    ).toMatchObject({ timelineConfig: override });
+
+    const cancelledSource = await service.create(1, {
+      output: output("clone-cancelled-source"),
+      timeline: storedTimeline,
+    });
+    await service.cancel(cancelledSource.id);
+    expect(
+      await service.clone(cancelledSource.id, {
+        output: output("clone-cancelled-target"),
+      })
+    ).toMatchObject({ status: "queued", timelineConfig: storedTimeline });
+  });
+
+  it("rejects active and missing source jobs when cloning", async () => {
+    const service = new EditsDemoService();
+    const active = await service.create(1, {
+      output: output("clone-active-source"),
+      timeline,
+    });
+
+    await expect(
+      service.clone(active.id, { output: output("clone-active-target") })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      service.clone(999_999, { output: output("clone-missing-target") })
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it("has no production database, queue, Redis, or FFmpeg dependency", () => {
     const source = readFileSync(
       new URL("../src/modules/edits/edits.demo.service.ts", import.meta.url),

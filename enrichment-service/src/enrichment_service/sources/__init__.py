@@ -30,6 +30,7 @@ def build_sources(
                 api_key=settings.theporndb_api_key,
                 auth_style="bearer",
                 dialect="tpdb",
+                exact_endpoint=settings.theporndb_rest_url,
             )
         )
 

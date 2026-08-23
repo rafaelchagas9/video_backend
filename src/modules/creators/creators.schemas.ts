@@ -47,6 +47,11 @@ export const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
+export const mergeCreatorSchema = z.object({
+  into_creator_id: z.number().int().positive(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
 export const listCreatorsQuerySchema = z
   .object({
     page: z.coerce.number().int().positive().default(1),

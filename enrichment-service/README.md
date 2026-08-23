@@ -10,8 +10,9 @@ and phased rollout.
 ## Status
 
 Phase 0 — a working FastAPI service exposing `/health` and `/enrich`, with **ThePornDB**
-wired up via the StashBox GraphQL source. The Node backend calls `/enrich` and turns the
-returned candidates into reviewable suggestions.
+wired up via GraphQL name search and exact REST lookup by URL slug, numeric ID, or UUID.
+The Node backend calls `/enrich` and turns the returned candidates into reviewable
+suggestions.
 
 ## Setup
 

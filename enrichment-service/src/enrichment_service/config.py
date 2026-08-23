@@ -28,9 +28,11 @@ class Settings(BaseSettings):
     port: int = 8200
 
     # --- Metadata databases (both implement the StashBox GraphQL schema) ---
-    # ThePornDB: GraphQL endpoint, authenticated with `Authorization: Bearer`.
+    # ThePornDB name search uses its StashBox-compatible GraphQL endpoint, while
+    # exact identifiers (slug, numeric id, or UUID) use the official REST API.
     theporndb_api_key: str = ""
     theporndb_base_url: str = "https://theporndb.net/graphql"
+    theporndb_rest_url: str = "https://api.theporndb.net"
     # StashDB: GraphQL endpoint, authenticated with the `ApiKey` header.
     stashdb_api_key: str = ""
     stashdb_endpoint: str = "https://stashdb.org/graphql"

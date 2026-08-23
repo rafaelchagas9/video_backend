@@ -35,6 +35,7 @@ export interface Video {
   description: string | null;
   themes: string | null;
   is_available: boolean;
+  studio_assignment_status: StudioAssignmentStatus;
   last_verified_at: string | null;
   indexed_at: string;
   created_at: string;
@@ -48,6 +49,16 @@ export interface Video {
   tags?: Tag[];
   studios?: Studio[];
   artwork?: VideoArtworkSummary | null;
+}
+
+export type StudioAssignmentStatus = "assigned" | "confirmed_none" | "unknown";
+
+export function deriveStudioAssignmentStatus(
+  hasStudio: boolean,
+  confirmedAt: Date | string | null | undefined,
+): StudioAssignmentStatus {
+  if (hasStudio) return "assigned";
+  return confirmedAt ? "confirmed_none" : "unknown";
 }
 
 export interface VideoMetadata {
@@ -127,6 +138,7 @@ export interface ListVideosOptions {
   hasTags?: boolean;
   hasCreator?: boolean;
   hasStudio?: boolean;
+  studioAssignmentStatus?: StudioAssignmentStatus;
   hasRating?: boolean;
   include?: VideoListInclude[];
 }
@@ -138,6 +150,7 @@ export interface RandomVideoOptions {
   hasTags?: boolean;
   hasCreator?: boolean;
   hasStudio?: boolean;
+  studioAssignmentStatus?: StudioAssignmentStatus;
   hasRating?: boolean;
   creatorIds?: number[];
   tagIds?: number[];

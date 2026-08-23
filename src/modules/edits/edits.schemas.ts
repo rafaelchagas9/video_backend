@@ -107,16 +107,25 @@ export const editOutputConfigSchema = z
   })
   .strict();
 
+export const editTimelineConfigSchema = z
+  .object({
+    segments: z.array(timelineSegmentSchema).min(1),
+    transform: editTransformSchema.optional(),
+    audio: editAudioSchema.optional(),
+  })
+  .strict();
+
 export const createEditJobBodySchema = z
   .object({
     output: editOutputConfigSchema,
-    timeline: z
-      .object({
-        segments: z.array(timelineSegmentSchema).min(1),
-        transform: editTransformSchema.optional(),
-        audio: editAudioSchema.optional(),
-      })
-      .strict(),
+    timeline: editTimelineConfigSchema,
+  })
+  .strict();
+
+export const cloneEditJobBodySchema = z
+  .object({
+    output: editOutputConfigSchema,
+    timeline: editTimelineConfigSchema.optional(),
   })
   .strict();
 
@@ -291,9 +300,25 @@ export const jobStatusDataSchema = z.object({
   error: jobErrorSchema.optional(),
 });
 
+export const editRecipeSchema = z.object({
+  source_video_id: z.number().int().positive(),
+  output_defaults: z.object({
+    directory_id: z.number().int().positive(),
+    format: z.literal("mkv"),
+    video_codec: z.literal("av1"),
+    audio_codec: z.enum(["opus", "aac"]),
+  }),
+  timeline: editTimelineConfigSchema,
+});
+
 export const jobStatusResponseSchema = z.object({
   success: z.literal(true),
   data: jobStatusDataSchema,
+});
+
+export const jobDetailResponseSchema = z.object({
+  success: z.literal(true),
+  data: jobStatusDataSchema.extend({ recipe: editRecipeSchema }),
 });
 
 export const editJobListItemSchema = jobStatusDataSchema.extend({

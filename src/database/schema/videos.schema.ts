@@ -45,6 +45,7 @@ export const videosTable = pgTable(
     // Status tracking
     isAvailable: boolean("is_available").default(true).notNull(),
     lastVerifiedAt: timestamp("last_verified_at"),
+    studioAbsenceConfirmedAt: timestamp("studio_absence_confirmed_at"),
     indexedAt: timestamp("indexed_at").defaultNow().notNull(),
 
     createdAt: timestamp("created_at").defaultNow().notNull(),

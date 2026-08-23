@@ -109,7 +109,7 @@ describe("demo mode runtime route coverage", () => {
     expect(existsSync(`${productionCastSession}/sentinel.txt`)).toBe(true);
   });
 
-  it("requires an explicit manifest record for all 275 primary operations", () => {
+  it("requires an explicit manifest record for all 282 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -120,8 +120,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(275);
-    expect(manifestKeys).toHaveLength(275);
+    expect(runtimeOperationKeys).toHaveLength(282);
+    expect(manifestKeys).toHaveLength(282);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -149,7 +149,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 275,
+      allowed: 282,
       blocked: 0,
       conditional: 0,
     });
@@ -157,7 +157,7 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(166);
+    ).toHaveLength(172);
   });
 
   it("allows only reviewed methods across every concrete manifest path", () => {
@@ -179,11 +179,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 114 generated HEAD counterparts", () => {
+  it("registers and classifies all 118 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(114);
+    expect(getScenarios).toHaveLength(118);
 
     for (const scenario of getScenarios) {
       expect(
@@ -310,8 +310,30 @@ describe("demo mode runtime route coverage", () => {
       });
     const added = await addEntry();
     expect(added.statusCode, added.body).toBe(201);
+    const collectionCover = await app.inject({
+      method: "PATCH",
+      url: `/api/video-collections/${collectionId}`,
+      payload: { artwork_source_video_id: unassignedVideo!.id },
+    });
+    expect(collectionCover.statusCode, collectionCover.body).toBe(200);
+    expect(collectionCover.json().data.artwork_source_video_id).toBe(
+      unassignedVideo!.id
+    );
     const duplicateEntry = await addEntry();
     expect(duplicateEntry.statusCode).toBe(409);
+
+    const nonMemberVideo = getDemoSqlite()
+      .query<{ id: number }, [number]>(
+        `SELECT id FROM demo_videos WHERE id <> ? ORDER BY id LIMIT 1`
+      )
+      .get(unassignedVideo!.id);
+    expect(nonMemberVideo).toBeDefined();
+    const rejectedCollectionCover = await app.inject({
+      method: "PATCH",
+      url: `/api/video-collections/${collectionId}`,
+      payload: { artwork_source_video_id: nonMemberVideo!.id },
+    });
+    expect(rejectedCollectionCover.statusCode).toBe(400);
 
     const playlist = await app.inject({
       method: "POST",
@@ -328,6 +350,21 @@ describe("demo mode runtime route coverage", () => {
       });
     const playlistAdded = await addPlaylistVideo();
     expect(playlistAdded.statusCode, playlistAdded.body).toBe(201);
+    const playlistCover = await app.inject({
+      method: "PATCH",
+      url: `/api/playlists/${playlistId}`,
+      payload: { artwork_source_video_id: unassignedVideo!.id },
+    });
+    expect(playlistCover.statusCode, playlistCover.body).toBe(200);
+    expect(playlistCover.json().data.artwork_source_video_id).toBe(
+      unassignedVideo!.id
+    );
+    const rejectedPlaylistCover = await app.inject({
+      method: "PATCH",
+      url: `/api/playlists/${playlistId}`,
+      payload: { artwork_source_video_id: nonMemberVideo!.id },
+    });
+    expect(rejectedPlaylistCover.statusCode).toBe(400);
     const duplicatePlaylistVideo = await addPlaylistVideo();
     expect(duplicatePlaylistVideo.statusCode).toBe(409);
   });
@@ -536,6 +573,16 @@ describe("demo mode runtime route coverage", () => {
       status: "running",
       progress: 25,
     });
+    expect(status.json().data.recipe).toMatchObject({
+      source_video_id: 1,
+      output_defaults: {
+        directory_id: 1,
+        format: "mkv",
+        video_codec: "av1",
+        audio_codec: "opus",
+      },
+      timeline: { segments: [{ start: 0, end: 10, speed: 1 }] },
+    });
 
     const cancel = await app.inject({
       method: "POST",
@@ -543,5 +590,25 @@ describe("demo mode runtime route coverage", () => {
     });
     expect(cancel.statusCode).toBe(200);
     expect(cancel.json().data.status).toBe("cancelled");
+
+    const clone = await app.inject({
+      method: "POST",
+      url: `/api/edits/jobs/${jobId}/clone`,
+      payload: {
+        output: {
+          directory_id: 1,
+          file_name: "demo-edit-again.mkv",
+          format: "mkv",
+          video_codec: "av1",
+          audio_codec: "aac",
+        },
+      },
+    });
+    expect(clone.statusCode).toBe(202);
+    expect(clone.json().data).toMatchObject({
+      status: "queued",
+      video_id: 1,
+      output: { file_name: "demo-edit-again.mkv" },
+    });
   });
 });

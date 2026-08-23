@@ -159,6 +159,7 @@ export const listVideosQuerySchema = z
     hasTags: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    studioAssignmentStatus: z.enum(["assigned", "confirmed_none", "unknown"]).optional(),
     hasRating: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     include: z
       .preprocess(
@@ -244,6 +245,7 @@ export const randomVideoQuerySchema = z
     hasTags: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    studioAssignmentStatus: z.enum(["assigned", "confirmed_none", "unknown"]).optional(),
     hasRating: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     creatorIds: z
       .preprocess(
@@ -399,6 +401,7 @@ const videoSchema = z.object({
   description: z.string().nullable(),
   themes: z.string().nullable(),
   is_available: z.boolean(),
+  studio_assignment_status: z.enum(["assigned", "confirmed_none", "unknown"]),
   last_verified_at: z.string().nullable(),
   indexed_at: z.string(),
   created_at: z.string(),
@@ -594,6 +597,10 @@ export const bulkUpdateStudiosSchema = z.object({
 export const bulkUpdateFavoritesSchema = z.object({
   videoIds: z.array(z.number().int().positive()).min(1),
   isFavorite: z.boolean(),
+});
+
+export const studioAssignmentBodySchema = z.object({
+  status: z.enum(["confirmed_none", "unknown"]),
 });
 
 // Next video navigation
