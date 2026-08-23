@@ -23,6 +23,7 @@ allowed POST /api/auth/register
 allowed POST /api/auth/login
 allowed POST /api/auth/logout
 allowed GET /api/auth/me
+allowed GET /api/search/
 allowed GET /api/directories/ http-contract
 allowed POST /api/directories/ http-contract
 allowed GET /api/directories/{id} http-contract

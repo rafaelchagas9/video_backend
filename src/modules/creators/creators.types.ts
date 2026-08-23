@@ -7,7 +7,7 @@ export interface Creator {
   profile_picture_path: string | null;
   main_picture_path: string | null;
   face_thumbnail_path: string | null;
-  profile_picture_url?: string; // Computed field
+  profile_picture_url?: string | null; // Computed field
   main_picture_url?: string; // Computed field
   face_thumbnail_url?: string; // Computed field
   gallery_media?: CreatorGalleryMedia[];

@@ -50,7 +50,7 @@ const parseNullableNumber = (val: unknown) => {
 };
 
 // Response schemas
-const playlistSchema = z.object({
+export const playlistSchema = z.object({
   id: z.number(),
   user_id: z.number(),
   name: z.string(),

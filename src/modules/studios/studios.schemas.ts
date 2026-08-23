@@ -85,12 +85,12 @@ const studioAliasSummarySchema = z.object({
 });
 
 // Response schemas - Enhanced studio with counts and completeness
-const studioSchema = z.object({
+export const studioSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().nullable(),
-  profile_picture_url: z.string().optional(),
+  profile_picture_url: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   // Enhanced fields
@@ -109,7 +109,7 @@ const creatorSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().nullable(),
-  profile_picture_url: z.string().optional(),
+  profile_picture_url: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });

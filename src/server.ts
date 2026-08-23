@@ -504,6 +504,7 @@ export async function buildServer() {
       const { studiosRoutes } =
         await import("./modules/studios/studios.routes");
       const { tagsRoutes } = await import("./modules/tags/tags.routes");
+      const { searchRoutes } = await import("./modules/search/search.routes");
       const { ratingsRoutes } =
         await import("./modules/ratings/ratings.routes");
       const { thumbnailsRoutes, videoThumbnailsRoutes } =
@@ -557,6 +558,7 @@ export async function buildServer() {
       await instance.register(creatorsRoutes, { prefix: "/creators" });
       await instance.register(studiosRoutes, { prefix: "/studios" });
       await instance.register(tagsRoutes, { prefix: "/tags" });
+      await instance.register(searchRoutes, { prefix: "/search" });
       await instance.register(ratingsRoutes, { prefix: "/ratings" });
       await instance.register(videoThumbnailsRoutes, { prefix: "/videos" });
       await instance.register(thumbnailsRoutes, { prefix: "/thumbnails" });

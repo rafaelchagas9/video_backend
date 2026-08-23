@@ -98,6 +98,10 @@ export const listVideosQuerySchema = z
     include_hidden: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
     createdFrom: z.iso.datetime({ offset: true }).optional(),
     createdBefore: z.iso.datetime({ offset: true }).optional(),
+    minPlayCount: z.coerce.number().int().min(0).optional(),
+    maxPlayCount: z.coerce.number().int().min(0).optional(),
+    lastPlayedBefore: z.iso.datetime({ offset: true }).optional(),
+    lastPlayedAfter: z.iso.datetime({ offset: true }).optional(),
 
     // Resolution filters
     minWidth: z.coerce.number().int().positive().optional(),
@@ -165,7 +169,7 @@ export const listVideosQuerySchema = z
       .preprocess(
         parseIncludeList,
         z
-          .array(z.enum(["collection", "creators", "tags", "studios", "artwork"]))
+          .array(z.enum(["collection", "creators", "tags", "studios", "artwork", "stats"]))
           .optional(),
       )
       .optional(),
@@ -230,6 +234,21 @@ export const listVideosQuerySchema = z
       ) {
         return false;
       }
+      if (
+        data.minPlayCount !== undefined &&
+        data.maxPlayCount !== undefined &&
+        data.minPlayCount > data.maxPlayCount
+      ) {
+        return false;
+      }
+      if (
+        data.lastPlayedAfter !== undefined &&
+        data.lastPlayedBefore !== undefined &&
+        new Date(data.lastPlayedAfter).getTime() >=
+          new Date(data.lastPlayedBefore).getTime()
+      ) {
+        return false;
+      }
       return true;
     },
     {
@@ -268,6 +287,8 @@ export const randomVideoQuerySchema = z
     matchMode: z.enum(["any", "all"]).default("any"),
     minPlayCount: z.coerce.number().int().min(0).optional(),
     maxPlayCount: z.coerce.number().int().min(0).optional(),
+    lastPlayedBefore: z.iso.datetime({ offset: true }).optional(),
+    lastPlayedAfter: z.iso.datetime({ offset: true }).optional(),
     limit: z.coerce.number().int().positive().max(32).optional(),
   })
   .refine(
@@ -279,6 +300,18 @@ export const randomVideoQuerySchema = z
       ),
     {
       message: "Minimum value cannot be greater than maximum value",
+    },
+  )
+  .refine(
+    (data) =>
+      !(
+        data.lastPlayedAfter !== undefined &&
+        data.lastPlayedBefore !== undefined &&
+        new Date(data.lastPlayedAfter).getTime() >=
+          new Date(data.lastPlayedBefore).getTime()
+      ),
+    {
+      message: "lastPlayedAfter must be before lastPlayedBefore",
     },
   );
 
@@ -323,6 +356,7 @@ export const getVideoQuerySchema = z.object({
             "tags",
             "studios",
             "artwork",
+            "stats",
           ]),
         )
         .optional(),
@@ -331,19 +365,19 @@ export const getVideoQuerySchema = z.object({
 });
 
 // Response schemas
-const creatorSchema = z.object({
+export const creatorSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().nullable().optional(),
   face_thumbnail_path: z.string().nullable().optional(),
-  profile_picture_url: z.string().optional(),
+  profile_picture_url: z.string().nullable().optional(),
   face_thumbnail_url: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });
 
-const tagSchema = z.object({
+export const tagSchema = z.object({
   id: z.number(),
   name: z.string(),
   parent_id: z.number().nullable(),
@@ -373,17 +407,17 @@ const bookmarkSchema = z.object({
   created_at: z.string(),
 });
 
-const studioSchema = z.object({
+export const studioSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().nullable(),
-  profile_picture_url: z.string().optional(),
+  profile_picture_url: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });
 
-const videoSchema = z.object({
+export const videoSchema = z.object({
   id: z.number(),
   file_path: z.string(),
   file_name: z.string(),
@@ -415,6 +449,8 @@ const videoSchema = z.object({
   tags: z.array(tagSchema).optional(),
   studios: z.array(studioSchema).optional(),
   artwork: artworkSummarySchema.nullable().optional(),
+  play_count: z.number().optional(),
+  last_played_at: z.string().nullable().optional(),
 });
 
 const errorSchema = z.object({

@@ -8,6 +8,7 @@ export interface Tag {
   color: string | null;
   created_at: string;
   updated_at: string;
+  video_count?: number;
   category?: TagCategory | null;
   aliases?: TaxonomyAlias[];
 }
@@ -43,7 +44,7 @@ export interface ListTagsOptions {
   page?: number;
   limit?: number;
   search?: string;
-  sort?: "name" | "created_at";
+  sort?: "name" | "created_at" | "video_count";
   order?: "asc" | "desc";
   tree?: boolean;
   category_id?: number;

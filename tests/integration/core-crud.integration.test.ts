@@ -1554,7 +1554,7 @@ describe("Fastify app integration", () => {
     const tagResponse = await ctx!.authInject({
       method: "POST",
       url: "/api/tags",
-      payload: { name: "Video Relationship Tag" },
+      payload: { name: "Video Relationship Tag", color: "#336699" },
     });
     expect(tagResponse.statusCode).toBe(201);
     const tagId = tagResponse.json().data.id as number;
@@ -1619,6 +1619,65 @@ describe("Fastify app integration", () => {
         })
       ).json().data,
     ).toEqual(expect.arrayContaining([expect.objectContaining({ id: studioId })]));
+
+    const enrichedVideo = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/${fixture.videoId}?include=creators,tags,studios,stats`,
+    });
+    expect(enrichedVideo.statusCode).toBe(200);
+    expect(enrichedVideo.json().data).toMatchObject({
+      play_count: 0,
+      last_played_at: null,
+      creators: [
+        expect.objectContaining({
+          id: creatorId,
+          profile_picture_url: null,
+        }),
+      ],
+      tags: [
+        expect.objectContaining({
+          id: tagId,
+          color: "#336699",
+          parent_id: null,
+        }),
+      ],
+      studios: [
+        expect.objectContaining({
+          id: studioId,
+          profile_picture_url: null,
+        }),
+      ],
+    });
+
+    const tagsByVideoCount = await ctx!.authInject({
+      method: "GET",
+      url: "/api/tags?sort=video_count&order=desc&limit=100",
+    });
+    expect(tagsByVideoCount.statusCode).toBe(200);
+    expect(tagsByVideoCount.json().data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: tagId, video_count: 1 }),
+      ]),
+    );
+
+    const crossEntitySearch = await ctx!.authInject({
+      method: "GET",
+      url: "/api/search?q=Relationship&limit=3",
+    });
+    expect(crossEntitySearch.statusCode).toBe(200);
+    expect(crossEntitySearch.json()).toMatchObject({
+      creators: [expect.objectContaining({ id: creatorId })],
+      studios: [expect.objectContaining({ id: studioId })],
+      tags: [expect.objectContaining({ id: tagId })],
+      totals: {
+        videos: 0,
+        creators: 1,
+        studios: 1,
+        tags: 1,
+        collections: 0,
+        playlists: 0,
+      },
+    });
 
     const metadataCreate = await ctx!.authInject({
       method: "POST",
@@ -2180,7 +2239,7 @@ describe("Fastify app integration", () => {
 
     const history = await ctx!.authInject({
       method: "GET",
-      url: "/api/videos/history?limit=10",
+      url: "/api/videos/history?limit=10&include=artwork,creators,tags,studios",
     });
     expect(history.statusCode).toBe(200);
     expect(history.json()).toMatchObject({
@@ -2190,6 +2249,10 @@ describe("Fastify app integration", () => {
           video: expect.objectContaining({
             id: fixture.videoId,
             file_name: "watch-stats.mp4",
+            artwork: null,
+            creators: [],
+            tags: [],
+            studios: [],
           }),
           play_count: 1,
           last_position_seconds: 6,
@@ -2200,6 +2263,28 @@ describe("Fastify app integration", () => {
         limit: 10,
       }),
     });
+
+    const playedAt = new Date(watch.json().data.stats.last_played_at).getTime();
+    const rediscoveryList = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos?minPlayCount=1&lastPlayedAfter=${encodeURIComponent(new Date(playedAt - 1_000).toISOString())}&lastPlayedBefore=${encodeURIComponent(new Date(playedAt + 1_000).toISOString())}&include=stats&limit=100`,
+    });
+    expect(rediscoveryList.statusCode).toBe(200);
+    expect(rediscoveryList.json().data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: fixture.videoId,
+          play_count: 1,
+          last_played_at: expect.any(String),
+        }),
+      ]),
+    );
+
+    const rediscoveryRandom = await ctx!.authInject({
+      method: "GET",
+      url: `/api/videos/random?minPlayCount=1&lastPlayedAfter=${encodeURIComponent(new Date(playedAt - 1_000).toISOString())}&lastPlayedBefore=${encodeURIComponent(new Date(playedAt + 1_000).toISOString())}`,
+    });
+    expect(rediscoveryRandom.statusCode).toBe(200);
   });
 
   it("covers standalone rating and bookmark update/delete endpoints", async () => {

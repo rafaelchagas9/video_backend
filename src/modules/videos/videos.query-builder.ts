@@ -5,6 +5,7 @@ import {
   videoCreatorsTable,
   videoTagsTable,
   videoStudiosTable,
+  videoStatsTable,
 } from "@/database/schema";
 import type { ListVideosOptions } from "./videos.types";
 
@@ -13,7 +14,7 @@ import type { ListVideosOptions } from "./videos.types";
  * Reusable helper for list(), getNextVideo(), and getTriageQueue()
  */
 export function buildVideoFilters(
-  _userId: number,
+  userId: number,
   options: ListVideosOptions,
 ): {
   conditions: SQL[];
@@ -31,6 +32,10 @@ export function buildVideoFilters(
     include_hidden = false,
     createdFrom,
     createdBefore,
+    minPlayCount,
+    maxPlayCount,
+    lastPlayedBefore,
+    lastPlayedAfter,
     // Resolution filters
     minWidth,
     maxWidth,
@@ -102,6 +107,35 @@ export function buildVideoFilters(
   }
   if (createdBefore !== undefined) {
     conditions.push(lt(videosTable.createdAt, new Date(createdBefore)));
+  }
+
+  const playCountExpression = sql`COALESCE((
+    SELECT ${videoStatsTable.playCount}
+    FROM ${videoStatsTable}
+    WHERE ${videoStatsTable.videoId} = ${videosTable.id}
+      AND ${videoStatsTable.userId} = ${userId}
+  ), 0)`;
+  if (minPlayCount !== undefined) {
+    conditions.push(sql`${playCountExpression} >= ${minPlayCount}`);
+  }
+  if (maxPlayCount !== undefined) {
+    conditions.push(sql`${playCountExpression} <= ${maxPlayCount}`);
+  }
+  if (lastPlayedBefore !== undefined) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM ${videoStatsTable}
+      WHERE ${videoStatsTable.videoId} = ${videosTable.id}
+        AND ${videoStatsTable.userId} = ${userId}
+        AND ${videoStatsTable.lastPlayedAt} < ${lastPlayedBefore}::timestamptz
+    )`);
+  }
+  if (lastPlayedAfter !== undefined) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM ${videoStatsTable}
+      WHERE ${videoStatsTable.videoId} = ${videosTable.id}
+        AND ${videoStatsTable.userId} = ${userId}
+        AND ${videoStatsTable.lastPlayedAt} >= ${lastPlayedAfter}::timestamptz
+    )`);
   }
 
   // Search filter

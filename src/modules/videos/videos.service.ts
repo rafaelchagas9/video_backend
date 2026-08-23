@@ -6,7 +6,6 @@ import { videosDemoService } from "./videos.demo.service";
 import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 import {
   videosTable,
-  videoStatsTable,
   studiosTable,
   videoCreatorsTable,
   videoTagsTable,
@@ -45,6 +44,7 @@ import { tagsService } from "@/modules/tags/tags.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
 import { buildVideoFilters } from "./videos.query-builder";
 import { videosBulkService } from "./videos.bulk.service";
+import { videoStatsService } from "@/modules/video-stats/video-stats.service";
 
 // Import specialized services
 export { videosSearchService } from "./videos.search.service";
@@ -126,11 +126,18 @@ export class VideosService {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       const video = demoMockService.getVideoById(id);
-      if (!include.includes("artwork")) return video;
-      const { artworkService } =
-        await import("@/modules/artwork/artwork.service");
-      const summaries = await artworkService.getSummariesByVideoIds([id]);
-      return { ...video, artwork: summaries.get(id) ?? null };
+      const response = { ...video } as Video;
+      if (include.includes("artwork")) {
+        const { artworkService } =
+          await import("@/modules/artwork/artwork.service");
+        const summaries = await artworkService.getSummariesByVideoIds([id]);
+        response.artwork = summaries.get(id) ?? null;
+      }
+      if (include.includes("stats") && userId !== undefined) {
+        const summaries = await videoStatsService.getSummariesForVideos(userId, [id]);
+        Object.assign(response, summaries.get(id));
+      }
+      return response;
     }
     const results = await db
       .select({
@@ -268,6 +275,14 @@ export class VideosService {
       );
     }
 
+    if (include.includes("stats") && userId !== undefined) {
+      promises.push(
+        videoStatsService.getSummariesForVideos(userId, [id]).then((res) => {
+          Object.assign(response, res.get(id));
+        }),
+      );
+    }
+
     if (promises.length > 0) {
       await Promise.all(promises);
     }
@@ -373,34 +388,6 @@ export class VideosService {
           )
         `);
       }
-    }
-
-    if (resolvedOptions.minPlayCount !== undefined) {
-      conditions.push(sql`
-        COALESCE(
-          (
-            SELECT ${videoStatsTable.playCount}
-            FROM ${videoStatsTable}
-            WHERE ${videoStatsTable.videoId} = ${videosTable.id}
-              AND ${videoStatsTable.userId} = ${userId}
-          ),
-          0
-        ) >= ${resolvedOptions.minPlayCount}
-      `);
-    }
-
-    if (resolvedOptions.maxPlayCount !== undefined) {
-      conditions.push(sql`
-        COALESCE(
-          (
-            SELECT ${videoStatsTable.playCount}
-            FROM ${videoStatsTable}
-            WHERE ${videoStatsTable.videoId} = ${videosTable.id}
-              AND ${videoStatsTable.userId} = ${userId}
-          ),
-          0
-        ) <= ${resolvedOptions.maxPlayCount}
-      `);
     }
 
     const limit =

@@ -1,4 +1,4 @@
-import { eq, sql, isNull, or, and, ilike, inArray, asc } from "drizzle-orm";
+import { eq, sql, isNull, or, and, ilike, inArray, asc, getTableColumns } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import {
@@ -89,7 +89,21 @@ export class TagsService {
     if (env.DEMO_MODE) {
       const page = options.page ?? 1;
       const limit = options.limit ?? 20;
-      const allTags = tagsDemoService.list();
+      const countRows = getDemoDatabase()
+        .select({
+          tagId: demoSchema.demoVideoTagsTable.tagId,
+          videoCount: sql<number>`count(*)`,
+        })
+        .from(demoSchema.demoVideoTagsTable)
+        .groupBy(demoSchema.demoVideoTagsTable.tagId)
+        .all();
+      const counts = new Map(
+        countRows.map((row) => [row.tagId, Number(row.videoCount)]),
+      );
+      const allTags = tagsDemoService.list().map((tag) => ({
+        ...tag,
+        video_count: counts.get(tag.id) ?? 0,
+      }));
       let tags = allTags;
 
       const aliases = getDemoDatabase()
@@ -126,7 +140,14 @@ export class TagsService {
         tags = tags.filter((tag) => matchingIds.has(tag.id));
       }
 
-      tags.sort((left, right) => left.name.localeCompare(right.name));
+      tags.sort((left, right) =>
+        options.sort === "video_count"
+          ? (left.video_count ?? 0) - (right.video_count ?? 0) ||
+            left.name.localeCompare(right.name)
+          : options.sort === "created_at"
+            ? left.created_at.localeCompare(right.created_at)
+            : left.name.localeCompare(right.name),
+      );
       if (options.order === "desc") {
         tags.reverse();
       }
@@ -151,7 +172,14 @@ export class TagsService {
         );
         result = this.buildTree(expanded)
           .filter((root) => rootIds.has(root.id))
-          .sort((left, right) => left.name.localeCompare(right.name));
+          .sort((left, right) =>
+            options.sort === "video_count"
+              ? (left.video_count ?? 0) - (right.video_count ?? 0) ||
+                left.name.localeCompare(right.name)
+              : options.sort === "created_at"
+                ? left.created_at.localeCompare(right.created_at)
+                : left.name.localeCompare(right.name),
+          );
         if (options.order === "desc") result.reverse();
       } else {
         result = await this.attachIncludes(tags, options.include ?? []);
@@ -221,14 +249,21 @@ export class TagsService {
     const totalPages = Math.ceil(total / limit);
 
     // Get tags with sorting
-    const validSortColumns = ["name", "created_at"];
+    const validSortColumns = ["name", "created_at", "video_count"];
     const sortColumn = validSortColumns.includes(sort) ? sort : "name";
-    const sortField =
-      sortColumn === "created_at" ? tagsTable.createdAt : tagsTable.name;
+    const videoCountExpression = sql<number>`(
+      SELECT count(*) FROM ${videoTagsTable} vt_count
+      WHERE vt_count.tag_id = ${tagsTable.id}
+    )`;
+    const sortField = sortColumn === "video_count"
+      ? videoCountExpression
+      : sortColumn === "created_at"
+        ? tagsTable.createdAt
+        : tagsTable.name;
     const sortOrder = order === "asc" ? sql`asc` : sql`desc`;
 
     const tags = await db
-      .select()
+      .select({ ...getTableColumns(tagsTable), videoCount: videoCountExpression })
       .from(tagsTable)
       .where(whereCondition)
       .orderBy(sql`${sortField} ${sortOrder}`)
@@ -260,8 +295,15 @@ export class TagsService {
   ): Promise<PaginatedTags> {
     const offset = (page - 1) * limit;
 
-    const sortField =
-      sortColumn === "created_at" ? tagsTable.createdAt : tagsTable.name;
+    const videoCountExpression = sql<number>`(
+      SELECT count(*) FROM ${videoTagsTable} vt_count
+      WHERE vt_count.tag_id = ${tagsTable.id}
+    )`;
+    const sortField = sortColumn === "video_count"
+      ? videoCountExpression
+      : sortColumn === "created_at"
+        ? tagsTable.createdAt
+        : tagsTable.name;
     const sortDir = sortOrder === "asc" ? sql`asc` : sql`desc`;
 
     let countResult;
@@ -298,7 +340,7 @@ export class TagsService {
         .then((rows) => rows[0]);
 
       rootTags = await db
-        .select()
+        .select({ ...getTableColumns(tagsTable), videoCount: videoCountExpression })
         .from(tagsTable)
         .where(sql`id IN (${matchingRootsSubquery})`)
         .orderBy(sql`${sortField} ${sortDir}`)
@@ -314,7 +356,7 @@ export class TagsService {
         .then((rows) => rows[0]);
 
       rootTags = await db
-        .select()
+        .select({ ...getTableColumns(tagsTable), videoCount: videoCountExpression })
         .from(tagsTable)
         .where(whereCondition)
         .orderBy(sql`${sortField} ${sortDir}`)
@@ -326,7 +368,9 @@ export class TagsService {
     const totalPages = Math.ceil(total / limit);
 
     // Fetch all tags once to build tree in-memory
-    const allTagRows = await db.select().from(tagsTable);
+    const allTagRows = await db
+      .select({ ...getTableColumns(tagsTable), videoCount: videoCountExpression })
+      .from(tagsTable);
     const allTags = await this.attachIncludes(
       allTagRows.map((tag) => this.mapToSnakeCase(tag)),
       include
@@ -950,6 +994,9 @@ export class TagsService {
       color: tag.color,
       created_at: this.toIsoString(tag.createdAt),
       updated_at: this.toIsoString(tag.updatedAt),
+      ...(tag.videoCount !== undefined || tag.video_count !== undefined
+        ? { video_count: Number(tag.videoCount ?? tag.video_count ?? 0) }
+        : {}),
     };
   }
 }

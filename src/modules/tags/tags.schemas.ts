@@ -50,7 +50,7 @@ export const listTagsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
   search: z.string().optional(),
-  sort: z.enum(["name", "created_at"]).default("name"),
+  sort: z.enum(["name", "created_at", "video_count"]).default("name"),
   order: z.enum(["asc", "desc"]).default("asc"),
   tree: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
   category_id: z.coerce.number().int().positive().optional(),
@@ -75,7 +75,7 @@ const tagCategorySchema = z.object({
   description: z.string().nullable(),
 });
 
-const tagSchema = z.object({
+export const tagSchema = z.object({
   id: z.number(),
   name: z.string(),
   parent_id: z.number().nullable(),
@@ -83,6 +83,7 @@ const tagSchema = z.object({
   color: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+  video_count: z.number().optional(),
   category: tagCategorySchema.nullable().optional(),
   aliases: z.array(taxonomyAliasSchema).optional(),
 });

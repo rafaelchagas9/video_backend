@@ -27,6 +27,7 @@ import { videoCollectionsService } from "@/modules/video-collections/video-colle
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
 import { artworkService } from "@/modules/artwork/artwork.service";
+import { videoStatsService } from "@/modules/video-stats/video-stats.service";
 import type {
   ListVideosOptions,
   NextVideoOptions,
@@ -96,15 +97,11 @@ export class VideosSearchService {
     if (env.DEMO_MODE) {
       const { demoMockService } = await import("@/utils/demo-mock");
       const result = demoMockService.getVideos(options) as PaginatedVideos;
-      if (options.include?.includes("artwork")) {
-        const summaries = await artworkService.getSummariesByVideoIds(
-          result.data.map((video) => video.id),
-        );
-        result.data = result.data.map((video) => ({
-          ...video,
-          artwork: summaries.get(video.id) ?? null,
-        }));
-      }
+      result.data = await this.attachIncludes(
+        result.data,
+        options.include ?? [],
+        userId,
+      );
       return result;
     }
     const {
@@ -404,6 +401,7 @@ export class VideosSearchService {
       const enrichedVideos = await this.attachIncludes(
         videosWithFavorites as Video[],
         include,
+        userId,
       );
 
       return {
@@ -544,6 +542,7 @@ export class VideosSearchService {
     const enrichedVideos = await this.attachIncludes(
       videosWithFavorites as Video[],
       include,
+      userId,
     );
 
     return {
@@ -560,13 +559,14 @@ export class VideosSearchService {
   private async attachIncludes(
     videos: Video[],
     include: VideoListInclude[],
+    userId: number,
   ): Promise<Video[]> {
     if (videos.length === 0 || include.length === 0) {
       return videos;
     }
 
     const videoIds = videos.map((video) => video.id);
-    const [collections, creators, tags, studios, artwork] = await Promise.all([
+    const [collections, creators, tags, studios, artwork, stats] = await Promise.all([
       include.includes("collection")
         ? videoCollectionsService.getCollectionContextsByVideoIds(videoIds)
         : Promise.resolve(new Map()),
@@ -581,6 +581,9 @@ export class VideosSearchService {
         : Promise.resolve(new Map()),
       include.includes("artwork")
         ? artworkService.getSummariesByVideoIds(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("stats")
+        ? videoStatsService.getSummariesForVideos(userId, videoIds)
         : Promise.resolve(new Map()),
     ]);
 
@@ -598,6 +601,9 @@ export class VideosSearchService {
         : {}),
       ...(include.includes("artwork")
         ? { artwork: artwork.get(video.id) ?? null }
+        : {}),
+      ...(include.includes("stats")
+        ? stats.get(video.id) ?? { play_count: 0, last_played_at: null }
         : {}),
     }));
   }

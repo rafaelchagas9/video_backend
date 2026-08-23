@@ -109,7 +109,54 @@ describe("demo mode runtime route coverage", () => {
     expect(existsSync(`${productionCastSession}/sentinel.txt`)).toBe(true);
   });
 
-  it("requires an explicit manifest record for all 282 primary operations", () => {
+  it("serves the mobile discovery contract entirely from demo data", async () => {
+    const [search, history, tags, rediscovery] = await Promise.all([
+      app.inject({ method: "GET", url: "/api/search?q=a&limit=3" }),
+      app.inject({
+        method: "GET",
+        url: "/api/videos/history?include=artwork,creators,tags,studios",
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/tags?sort=video_count&order=desc&limit=10",
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/videos?minPlayCount=1&include=stats&limit=10",
+      }),
+    ]);
+
+    expect(search.statusCode).toBe(200);
+    expect(search.json()).toMatchObject({
+      videos: expect.any(Array),
+      creators: expect.any(Array),
+      studios: expect.any(Array),
+      tags: expect.any(Array),
+      collections: expect.any(Array),
+      playlists: expect.any(Array),
+      totals: expect.objectContaining({ videos: expect.any(Number) }),
+    });
+    expect(history.statusCode).toBe(200);
+    const historyVideo = history.json().data[0].video;
+    expect(historyVideo).toEqual(
+      expect.objectContaining({
+        creators: expect.any(Array),
+        tags: expect.any(Array),
+        studios: expect.any(Array),
+      }),
+    );
+    expect(historyVideo).toHaveProperty("artwork");
+    expect(tags.statusCode).toBe(200);
+    expect(tags.json().data[0]).toHaveProperty("video_count");
+    expect(rediscovery.statusCode).toBe(200);
+    expect(rediscovery.json().data[0]).toEqual(
+      expect.objectContaining({
+        play_count: expect.any(Number),
+      }),
+    );
+  });
+
+  it("requires an explicit manifest record for all 283 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -120,8 +167,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(282);
-    expect(manifestKeys).toHaveLength(282);
+    expect(runtimeOperationKeys).toHaveLength(283);
+    expect(manifestKeys).toHaveLength(283);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -149,7 +196,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 282,
+      allowed: 283,
       blocked: 0,
       conditional: 0,
     });
@@ -179,11 +226,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 118 generated HEAD counterparts", () => {
+  it("registers and classifies all 119 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(118);
+    expect(getScenarios).toHaveLength(119);
 
     for (const scenario of getScenarios) {
       expect(

@@ -102,7 +102,7 @@ export class DemoRepository {
       profile_picture_path: row.profile_picture_path,
       profile_picture_url: row.profile_picture_path
         ? `${API_PREFIX}/studios/${row.id}/picture`
-        : undefined,
+        : null,
       social_links: socialLinks,
       linked_video_count: linkedVideoCount,
       social_link_count: socialLinks.length,
@@ -231,7 +231,7 @@ export class DemoRepository {
       face_thumbnail_path: row.face_thumbnail_path,
       profile_picture_url: row.profile_picture_path
         ? `${API_PREFIX}/creators/${id}/picture`
-        : undefined,
+        : null,
       main_picture_url: row.main_picture_path
         ? `${API_PREFIX}/creators/${id}/picture?variant=main`
         : undefined,
@@ -356,6 +356,12 @@ export class DemoRepository {
       playCount: Number(statsRow?.play_count ?? 0),
       totalWatchSeconds: Number(statsRow?.total_watch_seconds ?? 0),
       lastPositionSeconds: Number(statsRow?.last_position_seconds ?? 0),
+      sessionWatchSeconds: Number(statsRow?.session_watch_seconds ?? 0),
+      sessionPlayCounted: Number(statsRow?.session_play_counted ?? 0),
+      lastPlayedAt: statsRow?.last_played_at ?? null,
+      lastWatchAt: statsRow?.last_watch_at ?? null,
+      createdAt: statsRow?.created_at ?? null,
+      updatedAt: statsRow?.updated_at ?? null,
     };
     return {
       id,
@@ -437,7 +443,7 @@ export class DemoRepository {
     if (options.search) {
       const search = String(options.search).toLowerCase();
       list = list.filter((video) =>
-        [video.title, video.description, video.themes]
+        [video.title, video.description, video.themes, video.file_name]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(search))
       );
@@ -471,6 +477,30 @@ export class DemoRepository {
       list = list.filter(
         (video) => new Date(video.created_at).getTime() < timestamp
       );
+    }
+    if (options.minPlayCount !== undefined) {
+      list = list.filter(
+        (video) => Number(video.stats?.playCount ?? 0) >= Number(options.minPlayCount),
+      );
+    }
+    if (options.maxPlayCount !== undefined) {
+      list = list.filter(
+        (video) => Number(video.stats?.playCount ?? 0) <= Number(options.maxPlayCount),
+      );
+    }
+    if (options.lastPlayedBefore) {
+      const timestamp = new Date(options.lastPlayedBefore).getTime();
+      list = list.filter((video) => {
+        const value = video.stats?.lastPlayedAt;
+        return value !== null && value !== undefined && new Date(value).getTime() < timestamp;
+      });
+    }
+    if (options.lastPlayedAfter) {
+      const timestamp = new Date(options.lastPlayedAfter).getTime();
+      list = list.filter((video) => {
+        const value = video.stats?.lastPlayedAt;
+        return value !== null && value !== undefined && new Date(value).getTime() >= timestamp;
+      });
     }
     const page = Number(options.page || 1);
     const limit = Number(options.limit || 20);

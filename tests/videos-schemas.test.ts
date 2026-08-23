@@ -30,6 +30,10 @@ describe("video route schemas", () => {
       order: "asc",
       createdFrom: "2026-07-28T03:00:00.000Z",
       createdBefore: "2026-07-29T03:00:00.000Z",
+      minPlayCount: "1",
+      maxPlayCount: "5",
+      lastPlayedAfter: "2025-01-01T00:00:00.000Z",
+      lastPlayedBefore: "2026-01-01T00:00:00.000Z",
     });
 
     expect(parsed).toMatchObject({
@@ -47,6 +51,10 @@ describe("video route schemas", () => {
       matchMode: "any",
       createdFrom: "2026-07-28T03:00:00.000Z",
       createdBefore: "2026-07-29T03:00:00.000Z",
+      minPlayCount: 1,
+      maxPlayCount: 5,
+      lastPlayedAfter: "2025-01-01T00:00:00.000Z",
+      lastPlayedBefore: "2026-01-01T00:00:00.000Z",
     });
   });
 
@@ -91,6 +99,8 @@ describe("video route schemas", () => {
         creatorIds: "9,10",
         minPlayCount: "0",
         maxPlayCount: "5",
+        lastPlayedAfter: "2025-01-01T00:00:00.000Z",
+        lastPlayedBefore: "2026-01-01T00:00:00.000Z",
         limit: "4",
       }),
     ).toMatchObject({
@@ -99,6 +109,8 @@ describe("video route schemas", () => {
       creatorIds: [9, 10],
       minPlayCount: 0,
       maxPlayCount: 5,
+      lastPlayedAfter: "2025-01-01T00:00:00.000Z",
+      lastPlayedBefore: "2026-01-01T00:00:00.000Z",
       limit: 4,
     });
 
@@ -113,10 +125,10 @@ describe("video route schemas", () => {
   it("parses include lists for video detail queries", () => {
     expect(
       getVideoQuerySchema.parse({
-        include: "collection, collection_neighbors, creators, artwork",
+        include: "collection, collection_neighbors, creators, artwork, stats",
       }),
     ).toEqual({
-      include: ["collection", "collection_neighbors", "creators", "artwork"],
+      include: ["collection", "collection_neighbors", "creators", "artwork", "stats"],
     });
 
     expect(getVideoQuerySchema.safeParse({ include: "invalid" }).success).toBe(

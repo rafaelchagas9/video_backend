@@ -1,4 +1,10 @@
 import { z } from "zod";
+import type { VideoArtworkSummary } from "@/modules/artwork/artwork.types";
+import type { Creator } from "@/modules/creators/creators.types";
+import type { Studio } from "@/modules/studios/studios.types";
+import type { Tag } from "@/modules/tags/tags.types";
+
+export type WatchHistoryInclude = "artwork" | "creators" | "tags" | "studios";
 
 export interface VideoStats {
   user_id: number;
@@ -28,6 +34,10 @@ export interface WatchHistoryVideo {
   duration_seconds: number | null;
   thumbnail_id: number | null;
   thumbnail_url: string | null;
+  artwork?: VideoArtworkSummary | null;
+  creators?: Creator[];
+  tags?: Tag[];
+  studios?: Studio[];
 }
 
 export interface WatchHistoryEntry {
@@ -57,6 +67,15 @@ export const watchUpdateSchema = z.object({
 export const watchHistoryQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(24),
+  include: z
+    .preprocess(
+      (value) =>
+        typeof value === "string"
+          ? value.split(",").map((item) => item.trim()).filter(Boolean)
+          : value,
+      z.array(z.enum(["artwork", "creators", "tags", "studios"])),
+    )
+    .default([]),
 });
 
 export type WatchUpdateInput = z.infer<typeof watchUpdateSchema>;

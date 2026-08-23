@@ -1,4 +1,10 @@
 import { z } from "zod";
+import { artworkSummarySchema } from "@/modules/artwork/artwork.schemas";
+import {
+  creatorSchema,
+  studioSchema,
+  tagSchema,
+} from "@/modules/videos/videos.schemas";
 
 export { watchHistoryQuerySchema, watchUpdateSchema } from "./video-stats.types";
 
@@ -34,6 +40,10 @@ const watchHistoryVideoSchema = z.object({
   duration_seconds: z.number().nullable(),
   thumbnail_id: z.number().nullable(),
   thumbnail_url: z.string().nullable(),
+  artwork: artworkSummarySchema.nullable().optional(),
+  creators: z.array(creatorSchema).optional(),
+  tags: z.array(tagSchema).optional(),
+  studios: z.array(studioSchema).optional(),
 });
 
 const watchHistoryEntrySchema = z.object({

@@ -389,7 +389,7 @@ export class CreatorsRelationshipsService {
       profile_picture_url:
         (creator.profilePicturePath ?? creator.profile_picture_path)
           ? `/api/creators/${creator.id}/picture`
-          : undefined,
+          : null,
       main_picture_url:
         (creator.mainPicturePath ?? creator.main_picture_path)
           ? `/api/creators/${creator.id}/picture?variant=main`

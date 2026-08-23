@@ -222,6 +222,9 @@ export class StudiosRelationshipsService {
   }
 
   async getStudiosForVideo(videoId: number): Promise<Studio[]> {
+    if (env.DEMO_MODE) {
+      return (demoRepository.getVideoById(videoId).studios ?? []) as Studio[];
+    }
     const studios = await db.execute<{
       id: number;
       name: string;
@@ -242,6 +245,9 @@ export class StudiosRelationshipsService {
       name: s.name,
       description: s.description,
       profile_picture_path: s.profile_picture_path,
+      profile_picture_url: s.profile_picture_path
+        ? `${API_PREFIX}/studios/${s.id}/picture`
+        : null,
       created_at: new Date(s.created_at).toISOString(),
       updated_at: new Date(s.updated_at).toISOString(),
     }));
@@ -251,6 +257,15 @@ export class StudiosRelationshipsService {
     videoIds: number[]
   ): Promise<Map<number, Studio[]>> {
     const grouped = new Map<number, Studio[]>();
+    if (env.DEMO_MODE) {
+      for (const videoId of videoIds) {
+        grouped.set(
+          videoId,
+          (demoRepository.getVideoById(videoId).studios ?? []) as Studio[],
+        );
+      }
+      return grouped;
+    }
     if (videoIds.length === 0) {
       return grouped;
     }
@@ -285,6 +300,9 @@ export class StudiosRelationshipsService {
         name: row.name,
         description: row.description,
         profile_picture_path: row.profile_picture_path,
+        profile_picture_url: row.profile_picture_path
+          ? `${API_PREFIX}/studios/${row.id}/picture`
+          : null,
         created_at: new Date(row.created_at).toISOString(),
         updated_at: new Date(row.updated_at).toISOString(),
       };

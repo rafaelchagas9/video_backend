@@ -1,5 +1,5 @@
 import { db } from "@/config/drizzle";
-import { eq, and, sql, desc, isNotNull } from "drizzle-orm";
+import { eq, and, sql, desc, isNotNull, inArray } from "drizzle-orm";
 import { videoStatsTable, videosTable, thumbnailsTable } from "@/database/schema";
 import { NotFoundError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
@@ -9,10 +9,20 @@ import type {
   WatchHistoryEntry,
   WatchHistoryQuery,
   WatchHistoryResult,
+  WatchHistoryInclude,
   WatchUpdateInput,
 } from "./video-stats.types";
 import { settingsService } from "@/modules/settings/settings.service";
 import { env } from "@/config/env";
+import { artworkService } from "@/modules/artwork/artwork.service";
+import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
+import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
+import { tagsService } from "@/modules/tags/tags.service";
+
+export interface VideoStatsSummary {
+  play_count: number;
+  last_played_at: string | null;
+}
 
 interface RecordWatchResult {
   stats: VideoStats;
@@ -59,6 +69,94 @@ export class VideoStatsService {
       total_watch_seconds: stats.total_watch_seconds,
       last_played_at: stats.last_played_at,
     };
+  }
+
+  async getSummariesForVideos(
+    userId: number,
+    videoIds: number[],
+  ): Promise<Map<number, VideoStatsSummary>> {
+    const summaries = new Map<number, VideoStatsSummary>();
+    for (const videoId of videoIds) {
+      summaries.set(videoId, { play_count: 0, last_played_at: null });
+    }
+    if (videoIds.length === 0) return summaries;
+
+    if (env.DEMO_MODE) {
+      for (const videoId of videoIds) {
+        const stats = this.mapDemoStats(userId, await this.getDemoVideo(videoId));
+        summaries.set(videoId, {
+          play_count: stats.play_count,
+          last_played_at: stats.last_played_at,
+        });
+      }
+      return summaries;
+    }
+
+    const rows = await db
+      .select({
+        videoId: videoStatsTable.videoId,
+        playCount: videoStatsTable.playCount,
+        lastPlayedAt: videoStatsTable.lastPlayedAt,
+      })
+      .from(videoStatsTable)
+      .where(
+        and(
+          eq(videoStatsTable.userId, userId),
+          inArray(videoStatsTable.videoId, videoIds),
+        ),
+      );
+
+    for (const row of rows) {
+      summaries.set(row.videoId, {
+        play_count: row.playCount,
+        last_played_at:
+          row.lastPlayedAt instanceof Date
+            ? row.lastPlayedAt.toISOString()
+            : row.lastPlayedAt,
+      });
+    }
+    return summaries;
+  }
+
+  private async attachHistoryIncludes(
+    entries: WatchHistoryEntry[],
+    include: WatchHistoryInclude[],
+  ): Promise<WatchHistoryEntry[]> {
+    if (entries.length === 0 || include.length === 0) return entries;
+    const videoIds = entries.map((entry) => entry.video.id);
+    const [artwork, creators, tags, studios] = await Promise.all([
+      include.includes("artwork")
+        ? artworkService.getSummariesByVideoIds(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("creators")
+        ? creatorsRelationshipsService.getCreatorsForVideos(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("tags")
+        ? tagsService.getTagsForVideos(videoIds)
+        : Promise.resolve(new Map()),
+      include.includes("studios")
+        ? studiosRelationshipsService.getStudiosForVideos(videoIds)
+        : Promise.resolve(new Map()),
+    ]);
+
+    return entries.map((entry) => ({
+      ...entry,
+      video: {
+        ...entry.video,
+        ...(include.includes("artwork")
+          ? { artwork: artwork.get(entry.video.id) ?? null }
+          : {}),
+        ...(include.includes("creators")
+          ? { creators: creators.get(entry.video.id) ?? [] }
+          : {}),
+        ...(include.includes("tags")
+          ? { tags: tags.get(entry.video.id) ?? [] }
+          : {}),
+        ...(include.includes("studios")
+          ? { studios: studios.get(entry.video.id) ?? [] }
+          : {}),
+      },
+    }));
   }
 
   private async getAggregateStats(
@@ -349,7 +447,10 @@ export class VideoStatsService {
       const total = entries.length;
 
       return {
-        data: entries.slice(offset, offset + limit),
+        data: await this.attachHistoryIncludes(
+          entries.slice(offset, offset + limit),
+          query.include,
+        ),
         pagination: {
           page,
           limit,
@@ -392,8 +493,7 @@ export class VideoStatsService {
       .limit(limit)
       .offset(offset);
 
-    return {
-      data: rows.map((row): WatchHistoryEntry => ({
+    const entries = rows.map((row): WatchHistoryEntry => ({
         video: {
           id: row.videoId,
           file_name: row.fileName,
@@ -415,7 +515,10 @@ export class VideoStatsService {
           row.lastWatchAt instanceof Date
             ? row.lastWatchAt.toISOString()
             : String(row.lastWatchAt),
-      })),
+      }));
+
+    return {
+      data: await this.attachHistoryIncludes(entries, query.include),
       pagination: {
         page,
         limit,

@@ -15,6 +15,10 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(`^${API_PREFIX}/auth/me$`),
   },
   {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/search/?$`),
+  },
+  {
     methods: new Set(["PATCH"]),
     path: new RegExp(`^${API_PREFIX}/videos/\\d+/studio-assignment$`),
   },

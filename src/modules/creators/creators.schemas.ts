@@ -112,14 +112,14 @@ const creatorGalleryMediaSchema = z.object({
 });
 
 // Response schemas - Enhanced creator with counts and completeness
-const creatorSchema = z.object({
+export const creatorSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().optional().nullable(),
   main_picture_path: z.string().optional().nullable(),
   face_thumbnail_path: z.string().optional().nullable(),
-  profile_picture_url: z.string().optional(),
+  profile_picture_url: z.string().nullable().optional(),
   main_picture_url: z.string().optional(),
   face_thumbnail_url: z.string().optional(),
   gallery_media: z.array(creatorGalleryMediaSchema).optional(),
@@ -168,7 +168,7 @@ const studioSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   profile_picture_path: z.string().nullable(),
-  profile_picture_url: z.string().optional(),
+  profile_picture_url: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });

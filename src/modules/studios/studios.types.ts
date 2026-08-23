@@ -5,7 +5,7 @@ export interface Studio {
   name: string;
   description: string | null;
   profile_picture_path: string | null;
-  profile_picture_url?: string; // Computed field
+  profile_picture_url?: string | null; // Computed field
   created_at: string;
   updated_at: string;
   parent?: StudioSummary | null;

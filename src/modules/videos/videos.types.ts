@@ -14,7 +14,8 @@ export type VideoInclude =
   | "creators"
   | "tags"
   | "studios"
-  | "artwork";
+  | "artwork"
+  | "stats";
 export type VideoListInclude = Exclude<VideoInclude, "collection_neighbors">;
 
 export interface Video {
@@ -49,6 +50,8 @@ export interface Video {
   tags?: Tag[];
   studios?: Studio[];
   artwork?: VideoArtworkSummary | null;
+  play_count?: number;
+  last_played_at?: string | null;
 }
 
 export type StudioAssignmentStatus = "assigned" | "confirmed_none" | "unknown";
@@ -91,6 +94,10 @@ export interface ListVideosOptions {
   include_hidden?: boolean;
   createdFrom?: string;
   createdBefore?: string;
+  minPlayCount?: number;
+  maxPlayCount?: number;
+  lastPlayedBefore?: string;
+  lastPlayedAfter?: string;
 
   // Resolution filters
   minWidth?: number;
@@ -158,6 +165,8 @@ export interface RandomVideoOptions {
   matchMode?: "any" | "all";
   minPlayCount?: number;
   maxPlayCount?: number;
+  lastPlayedBefore?: string;
+  lastPlayedAfter?: string;
   limit?: number;
 }
 
