@@ -7,7 +7,10 @@ import { basename } from "path";
 import { getPreset } from "@/config/presets";
 import { metadataService } from "@/modules/videos/metadata.service";
 import { videosService } from "@/modules/videos/videos.service";
-import { ffmpegService } from "./conversion.ffmpeg.service";
+import {
+  ConversionCancelledError,
+  ffmpegService,
+} from "./conversion.ffmpeg.service";
 import { conversionJobsService } from "./conversion.jobs.service";
 import { conversionBatchService } from "./conversion.batch.service";
 import { conversionHistoryService } from "./conversion.history.service";
@@ -29,7 +32,10 @@ export class ConversionProcessorService {
   /**
    * Process a conversion job (called by queue)
    */
-  async processJob(payload: QueueJobPayload): Promise<void> {
+  async processJob(
+    payload: QueueJobPayload,
+    signal: AbortSignal = new AbortController().signal
+  ): Promise<void> {
     const {
       jobId,
       videoId,
@@ -46,8 +52,14 @@ export class ConversionProcessorService {
     try {
       const startedAt = new Date();
 
-      // Update job status to processing
-      await conversionJobsService.markAsProcessing(jobId);
+      if (!(await conversionJobsService.claimForProcessing(jobId))) {
+        logger.info(
+          { jobId },
+          "Skipping conversion job that is no longer pending"
+        );
+        return;
+      }
+      if (signal.aborted) throw new ConversionCancelledError();
 
       const preset = getPreset(presetId);
       if (!preset) {
@@ -99,7 +111,11 @@ export class ConversionProcessorService {
         (progress) => {
           progressUpdates = progressUpdates
             .then(async () => {
-              await conversionJobsService.updateProgress(jobId, progress);
+              const updated = await conversionJobsService.updateProgress(
+                jobId,
+                progress
+              );
+              if (!updated) return;
 
               this.emitEvent({
                 type: "conversion:progress",
@@ -118,16 +134,22 @@ export class ConversionProcessorService {
                 "Failed to persist conversion progress"
               );
             });
-        }
+        },
+        signal
       );
       await progressUpdates;
+      if (signal.aborted) throw new ConversionCancelledError();
 
       // Get output file size
       const stats = statSync(outputPath);
       const completedAt = new Date();
 
       // Update job as completed
-      await conversionJobsService.markAsCompleted(jobId, stats.size);
+      const completed = await conversionJobsService.markAsCompleted(
+        jobId,
+        stats.size
+      );
+      if (!completed) throw new ConversionCancelledError();
 
       const outputMetadata = this.withDerivedBitrate(
         await this.probeMedia(outputPath),
@@ -228,17 +250,34 @@ export class ConversionProcessorService {
       }
     } catch (error) {
       await progressUpdates;
+      if (signal.aborted || error instanceof ConversionCancelledError) {
+        this.removeOutputIfPresent(outputPath);
+        logger.info({ jobId }, "Conversion cancelled");
+        if (batchId) {
+          await conversionBatchService.checkBatchCompletion(batchId);
+        }
+        return;
+      }
+
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       const ffmpegOutput =
         (error as Error & { stderrOutput?: string }).stderrOutput ?? undefined;
 
       // Update job as failed
-      await conversionJobsService.markAsFailed(
+      const failed = await conversionJobsService.markAsFailed(
         jobId,
         errorMessage,
         ffmpegOutput
       );
+      if (!failed) {
+        // A cancellation won the database race before the queue signal arrived.
+        this.removeOutputIfPresent(outputPath);
+        if (batchId) {
+          await conversionBatchService.checkBatchCompletion(batchId);
+        }
+        return;
+      }
 
       // Notify via SSE
       this.emitEvent({
@@ -261,6 +300,19 @@ export class ConversionProcessorService {
       }
 
       throw error;
+    }
+  }
+
+  private removeOutputIfPresent(outputPath: string): void {
+    try {
+      unlinkSync(outputPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        logger.warn(
+          { error, outputPath },
+          "Failed to remove cancelled conversion output"
+        );
+      }
     }
   }
 

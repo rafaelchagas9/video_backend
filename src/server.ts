@@ -549,6 +549,8 @@ export async function buildServer() {
         await import("./modules/multiplayer-remote/multiplayer-remote.routes");
       const { enrichmentRoutes } =
         await import("./modules/enrichment/enrichment.routes");
+      const { cleanupRoutes } =
+        await import("./modules/cleanup/cleanup.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -586,6 +588,7 @@ export async function buildServer() {
         prefix: "/presets",
       });
       await instance.register(triageRoutes, { prefix: "/triage" });
+      await instance.register(cleanupRoutes, { prefix: "/cleanup" });
       await instance.register(usersTriageLegacyRoutes, { prefix: "/users" });
       await instance.register(videoStatsRoutes, { prefix: "/videos" });
       await instance.register(settingsRoutes, { prefix: "/settings" });

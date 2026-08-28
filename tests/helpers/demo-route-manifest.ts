@@ -56,6 +56,9 @@ allowed DELETE /api/videos/{id}
 allowed POST /api/videos/{id}/verify http-contract
 allowed POST /api/videos/{id}/refresh http-contract
 allowed GET /api/videos/{id}/stream
+allowed GET /api/cleanup/overview http-contract
+allowed GET /api/cleanup/candidates http-contract
+allowed PUT /api/cleanup/reviews/{videoId} http-contract
 allowed POST /api/videos/{id}/cast-sessions
 allowed GET /api/videos/{id}/cast-sessions/{sessionId}
 allowed DELETE /api/videos/{id}/cast-sessions/{sessionId}

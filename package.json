@@ -7,6 +7,7 @@
     "test": "bun run test:unit",
     "test:unit": "for f in tests/*.test.ts; do echo \"== $f ==\"; bun test --max-concurrency=1 \"$f\" || exit 1; done",
     "test:integration": "for f in tests/integration/*.integration.test.ts; do echo \"== $f ==\"; bun test --max-concurrency=1 \"$f\" || exit 1; done",
+    "test:files": "bun scripts/run-test-files.ts",
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun --sourcemap=external",
     "posthog:sourcemaps": "bun scripts/publish-posthog-sourcemaps.ts",

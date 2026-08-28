@@ -35,6 +35,9 @@ export * from "./tagging.schema";
 // Triage Progress
 export * from "./triage.schema";
 
+// Persistent library cleanup review decisions
+export * from "./cleanup.schema";
+
 // App Settings
 export * from "./app-settings.schema";
 

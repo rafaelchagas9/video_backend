@@ -34,7 +34,12 @@ import { ConflictError, NotFoundError } from "@/utils/errors";
 
 const databasePath = `/tmp/conversor-video-demo-catalog-${process.pid}.sqlite`;
 const timestamp = "2026-01-01T00:00:00.000Z";
+const originalProcessNodeEnv = process.env.NODE_ENV;
+const originalEnvNodeEnv = env.NODE_ENV;
 const originalDemoMode = env.DEMO_MODE;
+
+process.env.NODE_ENV = "test";
+env.NODE_ENV = "test";
 
 function removeDatabaseFiles(): void {
   closeDemoDatabase();
@@ -209,7 +214,12 @@ afterEach(() => {
   env.DEMO_MODE = originalDemoMode;
 });
 
-afterAll(() => setDemoDatabasePathForTests(null));
+afterAll(() => {
+  setDemoDatabasePathForTests(null);
+  env.NODE_ENV = originalEnvNodeEnv;
+  if (originalProcessNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = originalProcessNodeEnv;
+});
 
 describe("SQLite demo catalog adapters", () => {
   test("exposes navigable taxonomy with alias-aware search and tree parity", async () => {

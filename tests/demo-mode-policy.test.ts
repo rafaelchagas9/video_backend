@@ -104,6 +104,9 @@ describe("demo mode request policy", () => {
     expect(isDemoRequestAllowed("GET", "/api/videos/1/conversions")).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/videos/1/artwork")).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/artwork/11/image")).toBe(true);
+    expect(isDemoRequestAllowed("GET", "/api/cleanup/overview")).toBe(true);
+    expect(isDemoRequestAllowed("GET", "/api/cleanup/candidates")).toBe(true);
+    expect(isDemoRequestAllowed("PUT", "/api/cleanup/reviews/1")).toBe(true);
     expect(isDemoRequestAllowed("POST", "/api/playlists/1/videos/bulk")).toBe(
       true
     );

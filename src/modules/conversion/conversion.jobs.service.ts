@@ -7,7 +7,7 @@ import { db } from "@/config/drizzle";
 import { conversionJobsTable, videosTable } from "@/database/schema";
 import { NotFoundError, BadRequestError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
-import type { ConversionJob } from "./conversion.types";
+import type { ConversionJob, QueueJobPayload } from "./conversion.types";
 
 export class ConversionJobsService {
   /**
@@ -78,7 +78,7 @@ export class ConversionJobsService {
    */
   async findExisting(
     videoId: number,
-    preset: string,
+    preset: string
   ): Promise<ConversionJob | null> {
     const result = await db
       .select()
@@ -87,8 +87,8 @@ export class ConversionJobsService {
         and(
           eq(conversionJobsTable.videoId, videoId),
           eq(conversionJobsTable.preset, preset),
-          inArray(conversionJobsTable.status, ["pending", "processing"]),
-        ),
+          inArray(conversionJobsTable.status, ["pending", "processing"])
+        )
       );
 
     if (!result || result.length === 0) {
@@ -101,33 +101,50 @@ export class ConversionJobsService {
   /**
    * Update job status to processing
    */
-  async markAsProcessing(id: number): Promise<void> {
-    await db
+  async claimForProcessing(id: number): Promise<boolean> {
+    const [claimed] = await db
       .update(conversionJobsTable)
       .set({
         status: "processing",
         startedAt: sql`CURRENT_TIMESTAMP`,
+        completedAt: null,
+        errorMessage: null,
+        progressPercent: 0,
       })
-      .where(eq(conversionJobsTable.id, id));
+      .where(
+        and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "pending")
+        )
+      )
+      .returning({ id: conversionJobsTable.id });
+    return Boolean(claimed);
   }
 
   /**
    * Update job progress
    */
-  async updateProgress(id: number, progress: number): Promise<void> {
-    await db
+  async updateProgress(id: number, progress: number): Promise<boolean> {
+    const [updated] = await db
       .update(conversionJobsTable)
       .set({
         progressPercent: progress,
       })
-      .where(eq(conversionJobsTable.id, id));
+      .where(
+        and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "processing")
+        )
+      )
+      .returning({ id: conversionJobsTable.id });
+    return Boolean(updated);
   }
 
   /**
    * Mark job as completed
    */
-  async markAsCompleted(id: number, outputSizeBytes: number): Promise<void> {
-    await db
+  async markAsCompleted(id: number, outputSizeBytes: number): Promise<boolean> {
+    const [updated] = await db
       .update(conversionJobsTable)
       .set({
         status: "completed",
@@ -135,7 +152,14 @@ export class ConversionJobsService {
         outputSizeBytes,
         completedAt: sql`CURRENT_TIMESTAMP`,
       })
-      .where(eq(conversionJobsTable.id, id));
+      .where(
+        and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "processing")
+        )
+      )
+      .returning({ id: conversionJobsTable.id });
+    return Boolean(updated);
   }
 
   /**
@@ -144,9 +168,9 @@ export class ConversionJobsService {
   async markAsFailed(
     id: number,
     errorMessage: string,
-    ffmpegOutput?: string,
-  ): Promise<void> {
-    await db
+    ffmpegOutput?: string
+  ): Promise<boolean> {
+    const [updated] = await db
       .update(conversionJobsTable)
       .set({
         status: "failed",
@@ -154,16 +178,23 @@ export class ConversionJobsService {
         ffmpegOutput: ffmpegOutput ?? null,
         completedAt: sql`CURRENT_TIMESTAMP`,
       })
-      .where(eq(conversionJobsTable.id, id));
+      .where(
+        and(
+          eq(conversionJobsTable.id, id),
+          inArray(conversionJobsTable.status, ["pending", "processing"])
+        )
+      )
+      .returning({ id: conversionJobsTable.id });
+    return Boolean(updated);
   }
 
   /**
-   * Cancel a pending job
+   * Cancel a pending or processing job
    */
   async cancel(id: number): Promise<ConversionJob> {
     const job = await this.findById(id);
 
-    if (job.status !== "pending") {
+    if (job.status !== "pending" && job.status !== "processing") {
       throw new BadRequestError(`Cannot cancel job in ${job.status} status`);
     }
 
@@ -173,7 +204,12 @@ export class ConversionJobsService {
         status: "cancelled",
         completedAt: sql`CURRENT_TIMESTAMP`,
       })
-      .where(eq(conversionJobsTable.id, id));
+      .where(
+        and(
+          eq(conversionJobsTable.id, id),
+          inArray(conversionJobsTable.status, ["pending", "processing"])
+        )
+      );
 
     return this.findById(id);
   }
@@ -408,6 +444,54 @@ export class ConversionJobsService {
     }));
   }
 
+  /** Reset interrupted rows and rebuild their durable queue payloads. */
+  async recoverableQueuePayloads(): Promise<QueueJobPayload[]> {
+    await db
+      .update(conversionJobsTable)
+      .set({
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        errorMessage: null,
+        progressPercent: 0,
+      })
+      .where(eq(conversionJobsTable.status, "processing"));
+
+    const rows = await db
+      .select({
+        jobId: conversionJobsTable.id,
+        videoId: conversionJobsTable.videoId,
+        preset: conversionJobsTable.preset,
+        deleteOriginal: conversionJobsTable.deleteOriginal,
+        batchId: conversionJobsTable.batchId,
+        inputPath: videosTable.filePath,
+        outputPath: conversionJobsTable.outputPath,
+        createdAt: conversionJobsTable.createdAt,
+      })
+      .from(conversionJobsTable)
+      .innerJoin(videosTable, eq(videosTable.id, conversionJobsTable.videoId))
+      .where(eq(conversionJobsTable.status, "pending"))
+      .orderBy(conversionJobsTable.createdAt);
+
+    return rows.map((row) => {
+      if (!row.outputPath) {
+        throw new Error(
+          `Active conversion job ${row.jobId} has no output path`
+        );
+      }
+      return {
+        jobId: row.jobId,
+        videoId: row.videoId,
+        preset: row.preset,
+        inputPath: row.inputPath,
+        outputPath: row.outputPath,
+        createdAt: row.createdAt.toISOString(),
+        deleteOriginal: row.deleteOriginal,
+        batchId: row.batchId ?? undefined,
+      };
+    });
+  }
+
   /**
    * Get jobs by video IDs (for queue view)
    */
@@ -434,8 +518,8 @@ export class ConversionJobsService {
       .where(
         and(
           inArray(conversionJobsTable.videoId, videoIds),
-          inArray(conversionJobsTable.status, ["pending", "processing"]),
-        ),
+          inArray(conversionJobsTable.status, ["pending", "processing"])
+        )
       )
       .orderBy(sql`created_at ASC`);
 

@@ -3,6 +3,7 @@ import { mock } from "bun:test";
 import { writeFile } from "fs/promises";
 import {
   applyTestDatabaseEnv,
+  assertTestDatabaseEnvironment,
   migrateTestDatabase,
   startTestDatabase,
 } from "./test-database";
@@ -685,6 +686,8 @@ export async function createTestApp(): Promise<TestApp> {
       writeFile(TEST_CONVERSION_OUTPUT_PATH, Buffer.from("mkv")),
     ]);
     applyTestDatabaseEnv(database);
+    const { env } = await import("@/config/env");
+    assertTestDatabaseEnvironment(database, env);
     installExternalServiceMocks();
     await migrateTestDatabase();
 

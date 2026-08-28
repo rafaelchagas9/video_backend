@@ -72,7 +72,7 @@ artwork model.
 
 | Purpose | Command | Expected on success |
 |---|---|---|
-| Backend focused tests | `bun test tests/demo-content-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts` | all selected tests pass |
+| Backend focused tests | `bun run test:files -- tests/demo-content-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts` | all selected tests pass |
 | Backend typecheck | `bunx tsc --noEmit` | exit 0, no errors |
 | Backend build | `bun run build` | exit 0 |
 | Kura typecheck | `pnpm --filter @kura/web typecheck` | exit 0, no errors |
@@ -134,7 +134,7 @@ Mirror the same rules in SQLite through `src/database/demo/repository.ts` and
 the existing demo services. Preserve the current fallback when the chosen
 member is later removed and preserve the chosen source across reorder.
 
-**Verify**: `bun test tests/demo-content-sqlite.test.ts tests/integration/core-crud.integration.test.ts` -> new production and demo cases pass.
+**Verify**: `bun run test:files -- tests/demo-content-sqlite.test.ts tests/integration/core-crud.integration.test.ts` -> new production and demo cases pass.
 
 ### Step 3: Add the cover chooser to both Kura entity pages
 

@@ -80,7 +80,7 @@ it renders.
 |---|---|---|
 | Generate production migration if schema drift requires it | `bun db:generate` | generated SQL only for intended production changes; likely no new production migration |
 | Generate demo migration | `bun demo:db:generate` | one additive reviewed SQLite migration |
-| Backend focused | `bun test tests/demo-catalog-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/enrichment.integration.test.ts tests/integration/core-crud.integration.test.ts` | all pass |
+| Backend focused | `bun run test:files -- tests/demo-catalog-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/enrichment.integration.test.ts tests/integration/core-crud.integration.test.ts` | all pass |
 | Backend full gates | `bunx tsc --noEmit && bun run build && bun run test:unit` | all exit 0 |
 | Kura gates | `pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web typecheck && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web build && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web lint` | all exit 0 |
 
@@ -130,7 +130,7 @@ group, one tag alias, one parent studio with two direct children, and one studio
 alias. Do not create cycles.
 
 **Verify**: `bun demo:db:generate`, inspect the generated SQL, then
-`bun test tests/demo-reset-baseline.test.ts tests/demo-catalog-sqlite.test.ts` -> reset and reads pass.
+`bun run test:files -- tests/demo-reset-baseline.test.ts tests/demo-catalog-sqlite.test.ts` -> reset and reads pass.
 
 ### Step 3: Implement bounded tag taxonomy reads
 

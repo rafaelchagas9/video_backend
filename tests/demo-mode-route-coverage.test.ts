@@ -143,7 +143,7 @@ describe("demo mode runtime route coverage", () => {
         creators: expect.any(Array),
         tags: expect.any(Array),
         studios: expect.any(Array),
-      }),
+      })
     );
     expect(historyVideo).toHaveProperty("artwork");
     expect(tags.statusCode).toBe(200);
@@ -152,11 +152,11 @@ describe("demo mode runtime route coverage", () => {
     expect(rediscovery.json().data[0]).toEqual(
       expect.objectContaining({
         play_count: expect.any(Number),
-      }),
+      })
     );
   });
 
-  it("requires an explicit manifest record for all 283 primary operations", () => {
+  it("requires an explicit manifest record for all 286 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -167,8 +167,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(283);
-    expect(manifestKeys).toHaveLength(283);
+    expect(runtimeOperationKeys).toHaveLength(286);
+    expect(manifestKeys).toHaveLength(286);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -196,7 +196,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 283,
+      allowed: 286,
       blocked: 0,
       conditional: 0,
     });
@@ -204,7 +204,70 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(172);
+    ).toHaveLength(175);
+  });
+
+  it("persists cleanup review progress without deleting demo media", async () => {
+    const overviewBefore = await app.inject({
+      method: "GET",
+      url: "/api/cleanup/overview",
+    });
+    const candidates = await app.inject({
+      method: "GET",
+      url: "/api/cleanup/candidates?limit=10&offset=0",
+    });
+
+    expect(overviewBefore.statusCode).toBe(200);
+    expect(candidates.statusCode).toBe(200);
+    const candidate = candidates.json().data[0];
+    expect(candidate).toEqual(
+      expect.objectContaining({
+        id: expect.any(Number),
+        file_size_bytes: expect.any(Number),
+        disposition: "unreviewed",
+      })
+    );
+
+    const review = await app.inject({
+      method: "PUT",
+      url: `/api/cleanup/reviews/${candidate.id}`,
+      payload: { disposition: "delete", expected_revision: 0 },
+    });
+    expect(review.statusCode).toBe(200);
+    expect(review.json().data).toEqual(
+      expect.objectContaining({
+        video_id: candidate.id,
+        disposition: "delete",
+        revision: 1,
+      })
+    );
+
+    const overviewAfter = await app.inject({
+      method: "GET",
+      url: "/api/cleanup/overview",
+    });
+    expect(overviewAfter.json().data.decisions.delete.count).toBe(1);
+
+    const undo = await app.inject({
+      method: "PUT",
+      url: `/api/cleanup/reviews/${candidate.id}`,
+      payload: { disposition: "unreviewed", expected_revision: 1 },
+    });
+    expect(undo.statusCode).toBe(200);
+    expect(undo.json().data).toEqual(
+      expect.objectContaining({
+        video_id: candidate.id,
+        disposition: "unreviewed",
+        revision: 0,
+        reviewed_at: null,
+      })
+    );
+
+    const overviewUndone = await app.inject({
+      method: "GET",
+      url: "/api/cleanup/overview",
+    });
+    expect(overviewUndone.json().data.decisions.delete.count).toBe(0);
   });
 
   it("allows only reviewed methods across every concrete manifest path", () => {
@@ -226,11 +289,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 119 generated HEAD counterparts", () => {
+  it("registers and classifies all 121 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(119);
+    expect(getScenarios).toHaveLength(121);
 
     for (const scenario of getScenarios) {
       expect(
@@ -370,9 +433,10 @@ describe("demo mode runtime route coverage", () => {
     expect(duplicateEntry.statusCode).toBe(409);
 
     const nonMemberVideo = getDemoSqlite()
-      .query<{ id: number }, [number]>(
-        `SELECT id FROM demo_videos WHERE id <> ? ORDER BY id LIMIT 1`
-      )
+      .query<
+        { id: number },
+        [number]
+      >(`SELECT id FROM demo_videos WHERE id <> ? ORDER BY id LIMIT 1`)
       .get(unassignedVideo!.id);
     expect(nonMemberVideo).toBeDefined();
     const rejectedCollectionCover = await app.inject({

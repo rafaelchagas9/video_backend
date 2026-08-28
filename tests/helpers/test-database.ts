@@ -117,6 +117,7 @@ export async function startTestDatabase(): Promise<TestDatabase> {
 
 export function applyTestDatabaseEnv(database: TestDatabase): void {
   process.env.NODE_ENV = "test";
+  process.env.DEMO_MODE = "false";
   process.env.POSTGRES_HOST = database.host;
   process.env.POSTGRES_PORT = String(database.port);
   process.env.POSTGRES_DB = database.database;
@@ -130,6 +131,32 @@ export function applyTestDatabaseEnv(database: TestDatabase): void {
   process.env.POSTHOG_API_KEY = "";
   process.env.POSTHOG_CAPTURE_REQUEST_METRICS = "false";
   process.env.IMAGE_DOWNLOAD_MIN_INTERVAL_MS = "0";
+}
+
+export function assertTestDatabaseEnvironment(
+  database: TestDatabase,
+  effective: {
+    NODE_ENV: string;
+    DEMO_MODE: boolean;
+    POSTGRES_HOST: string;
+    POSTGRES_PORT: number;
+    POSTGRES_DB: string;
+    POSTGRES_USER: string;
+  },
+): void {
+  const matches =
+    effective.NODE_ENV === "test" &&
+    effective.DEMO_MODE === false &&
+    effective.POSTGRES_HOST === database.host &&
+    effective.POSTGRES_PORT === database.port &&
+    effective.POSTGRES_DB === database.database &&
+    effective.POSTGRES_USER === database.user;
+
+  if (!matches) {
+    throw new Error(
+      "Integration test database isolation failed: cached configuration does not match the disposable database",
+    );
+  }
 }
 
 export async function migrateTestDatabase(): Promise<void> {

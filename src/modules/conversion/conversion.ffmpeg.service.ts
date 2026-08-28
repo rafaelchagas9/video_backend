@@ -2,7 +2,7 @@
  * FFmpeg execution service
  * Handles FFmpeg command building and video encoding with VAAPI GPU acceleration
  */
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { unlink, mkdir, appendFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/config/env";
@@ -33,6 +33,15 @@ export class FfmpegProcessError extends Error {
   ) {
     super(message, options);
     Object.setPrototypeOf(this, FfmpegProcessError.prototype);
+  }
+}
+
+export class ConversionCancelledError extends Error {
+  readonly name = "ConversionCancelledError";
+
+  constructor() {
+    super("Conversion cancelled");
+    Object.setPrototypeOf(this, ConversionCancelledError.prototype);
   }
 }
 
@@ -99,8 +108,11 @@ export class FfmpegService {
     outputPath: string,
     preset: ConversionPreset,
     targetResolution: string | null,
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    signal: AbortSignal = new AbortController().signal
   ): Promise<FfmpegRunResult> {
+    if (signal.aborted) throw new ConversionCancelledError();
+
     const bitratePlan = buildConversionBitratePlan(
       video,
       preset,
@@ -147,8 +159,12 @@ export class FfmpegService {
         logPath,
         encodingMode: "hw",
         bitratePlan,
+        signal,
       });
     } catch (error) {
+      if (signal.aborted || error instanceof ConversionCancelledError) {
+        throw error;
+      }
       if (!this.shouldRetryWithFallback(error)) {
         throw error;
       }
@@ -180,8 +196,15 @@ export class FfmpegService {
           logPath,
           encodingMode: "sw_decode",
           bitratePlan,
+          signal,
         });
       } catch (swDecodeError) {
+        if (
+          signal.aborted ||
+          swDecodeError instanceof ConversionCancelledError
+        ) {
+          throw swDecodeError;
+        }
         if (!this.shouldRetryWithFallback(swDecodeError)) {
           throw swDecodeError;
         }
@@ -212,6 +235,7 @@ export class FfmpegService {
           logPath,
           encodingMode: "full_sw",
           bitratePlan,
+          signal,
         });
       }
     }
@@ -378,6 +402,7 @@ export class FfmpegService {
     logPath: string;
     encodingMode: ConversionEncodingMode;
     bitratePlan: ReturnType<typeof buildConversionBitratePlan>;
+    signal: AbortSignal;
   }): Promise<FfmpegRunResult> {
     const {
       jobId,
@@ -387,7 +412,10 @@ export class FfmpegService {
       logPath,
       encodingMode,
       bitratePlan,
+      signal,
     } = options;
+
+    if (signal.aborted) return Promise.reject(new ConversionCancelledError());
 
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
@@ -399,6 +427,17 @@ export class FfmpegService {
 
       const ffmpeg = spawn(env.FFMPEG_PATH, args);
       let stderrOutput = "";
+      let settled = false;
+      const settle = (result: FfmpegRunResult | Error): void => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        if (result instanceof Error) reject(result);
+        else resolve(result);
+      };
+      const onAbort = (): void => this.terminateProcess(ffmpeg);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
 
       ffmpeg.stdout.on("data", (data: Buffer) => {
         const output = data.toString();
@@ -428,8 +467,10 @@ export class FfmpegService {
         const exitLine = `\n[${new Date().toISOString()}] FFmpeg exited with code ${code}\n`;
         this.writeLogLine(logPath, exitLine);
 
-        if (code === 0) {
-          resolve({
+        if (signal.aborted) {
+          settle(new ConversionCancelledError());
+        } else if (code === 0) {
+          settle({
             command,
             durationMs: Date.now() - startedAt,
             ffmpegOutput: stderrOutput,
@@ -439,32 +480,43 @@ export class FfmpegService {
             plannedMaxBitrate: bitratePlan.maxBitrateBps,
             plannedQp: bitratePlan.qp,
           });
-          return;
+        } else {
+          const failureKind = classifyFfmpegFailure(stderrOutput);
+          settle(
+            new FfmpegProcessError(
+              `FFmpeg conversion failed (${failureKind}) with exit code ${code ?? "unknown"}`,
+              encodingMode,
+              code,
+              stderrOutput
+            )
+          );
         }
-
-        const failureKind = classifyFfmpegFailure(stderrOutput);
-        reject(
-          new FfmpegProcessError(
-            `FFmpeg conversion failed (${failureKind}) with exit code ${code ?? "unknown"}`,
-            encodingMode,
-            code,
-            stderrOutput
-          )
-        );
       });
 
       ffmpeg.on("error", (error) => {
-        reject(
-          new FfmpegProcessError(
-            "FFmpeg conversion process failed to start",
-            encodingMode,
-            null,
-            stderrOutput,
-            { cause: error }
-          )
+        settle(
+          signal.aborted
+            ? new ConversionCancelledError()
+            : new FfmpegProcessError(
+                "FFmpeg conversion process failed to start",
+                encodingMode,
+                null,
+                stderrOutput,
+                { cause: error }
+              )
         );
       });
     });
+  }
+
+  private terminateProcess(child: ChildProcess): void {
+    if (!child.pid || child.exitCode !== null || child.killed) return;
+    child.kill("SIGTERM");
+    const forceKill = setTimeout(() => {
+      if (child.exitCode !== null) return;
+      child.kill("SIGKILL");
+    }, 5_000);
+    forceKill.unref();
   }
 
   private shouldRetryWithFallback(error: unknown): boolean {

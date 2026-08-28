@@ -229,6 +229,20 @@ src/
 
 Face recognition requires a separate Python microservice at `face-service/` (InsightFace, FastAPI port 8100). See `face-service/README.md`.
 
+## Testing
+
+Do not pass multiple unit/demo/integration files to one `bun test` process.
+Those files mutate runtime configuration, and Bun shares the module cache between
+them. Use the process-isolated runner instead:
+
+```bash
+bun run test:files -- tests/example.test.ts tests/integration/example.integration.test.ts
+```
+
+`bun run test:unit` and `bun run test:integration` also isolate every file in a
+separate process. Test-mode PostgreSQL access fails closed unless the active
+target is the loopback `test_user@conversor_video_test` database.
+
 ## API
 
 All application routes are prefixed with `/api` and documented via Swagger at

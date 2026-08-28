@@ -94,7 +94,7 @@ Invariant operations:
 |---|---|---|
 | Generate PostgreSQL migration | `bun db:generate` | one additive nullable-column migration; no destructive SQL |
 | Generate demo migration | `bun demo:db:generate` | one additive nullable-column migration |
-| Focused backend | `bun test tests/videos-schemas.test.ts tests/demo-catalog-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts tests/integration/enrichment.integration.test.ts` | all pass |
+| Focused backend | `bun run test:files -- tests/videos-schemas.test.ts tests/demo-catalog-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts tests/integration/enrichment.integration.test.ts` | all pass |
 | Backend full gates | `bunx tsc --noEmit && bun run build && bun run test:unit && bun run test:integration` | all exit 0 |
 | Kura gates | `pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web typecheck && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web build && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web lint` | all exit 0 |
 
@@ -138,7 +138,7 @@ Review SQL before any migration execution. Do not run `bun db:migrate` unless
 the operator confirms the target database is disposable/local.
 
 **Verify**: migration files contain only additive nullable columns; then
-`bun test tests/demo-reset-baseline.test.ts tests/demo-catalog-sqlite.test.ts` -> pass.
+`bun run test:files -- tests/demo-reset-baseline.test.ts tests/demo-catalog-sqlite.test.ts` -> pass.
 
 ### Step 2: Create the single studio-assignment mutation service
 

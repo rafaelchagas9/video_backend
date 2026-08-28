@@ -239,6 +239,13 @@
       "when": 1787505078708,
       "tag": "0033_mysterious_trauma",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787776535281,
+      "tag": "0034_loud_makkari",
+      "breakpoints": true
     }
   ]
 }

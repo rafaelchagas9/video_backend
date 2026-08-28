@@ -43,6 +43,11 @@ export class ConversionService {
       conversionQueue.setProcessor(
         conversionProcessorService.processJob.bind(conversionProcessorService)
       );
+      conversionQueue.setRecoveryProvider(
+        conversionJobsService.recoverableQueuePayloads.bind(
+          conversionJobsService
+        )
+      );
     }
   }
 
@@ -288,11 +293,23 @@ export class ConversionService {
   }
 
   /**
-   * Cancel a pending job
+   * Cancel a pending or processing job
    */
   async cancel(id: number): Promise<ConversionJob> {
     if (env.DEMO_MODE) return conversionOperationsDemoService.cancel(id);
-    return conversionJobsService.cancel(id);
+    const job = await conversionJobsService.cancel(id);
+    if (job.status !== "cancelled") return job;
+    try {
+      await conversionQueue.cancel(id);
+    } catch (error) {
+      // The guarded database status is authoritative. A payload that survives
+      // a Redis outage will be skipped by claimForProcessing.
+      logger.warn(
+        { error, jobId: id },
+        "Conversion cancelled but queue cleanup was unavailable"
+      );
+    }
+    return job;
   }
 
   /**
@@ -427,6 +444,11 @@ export class ConversionService {
 
     // Update processing jobs to failed (these are stuck)
     const processingCount = await conversionJobsService.clearProcessing();
+
+    // Abort any encoders that are still alive and acknowledge their claims.
+    await Promise.allSettled(
+      processingJobs.map((job) => conversionQueue.cancel(job.id))
+    );
 
     // Emit SSE events for cancelled jobs
     const { eventsService } = await import("@/modules/events/events.service");

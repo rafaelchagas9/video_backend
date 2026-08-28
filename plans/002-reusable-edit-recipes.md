@@ -88,7 +88,7 @@ conflict uses the existing create errors.
 
 | Purpose | Command | Expected on success |
 |---|---|---|
-| Backend focused | `bun test tests/edits-routes.test.ts tests/demo-edit-lifecycle.test.ts tests/demo-mode-route-coverage.test.ts` | all pass |
+| Backend focused | `bun run test:files -- tests/edits-routes.test.ts tests/demo-edit-lifecycle.test.ts tests/demo-mode-route-coverage.test.ts` | all pass |
 | Backend typecheck/build | `bunx tsc --noEmit && bun run build` | exit 0 |
 | Kura typecheck/build | `pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web typecheck && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web build` | exit 0 |
 | Kura lint | `pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web lint` | exit 0 |
@@ -148,7 +148,7 @@ Do not copy processor or queue code. Ensure a deleted source returns the same
 safe 404 used by ordinary edit metadata. Add the authenticated 202 route and
 OpenAPI schema. Implement the identical state transition in demo mode.
 
-**Verify**: `bun test tests/edits-routes.test.ts tests/demo-edit-lifecycle.test.ts` -> clone happy path and error cases pass.
+**Verify**: `bun run test:files -- tests/edits-routes.test.ts tests/demo-edit-lifecycle.test.ts` -> clone happy path and error cases pass.
 
 ### Step 3: Hydrate the Kura editor from job history
 

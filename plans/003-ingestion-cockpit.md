@@ -73,7 +73,7 @@ and `error_count` describe the partial result. Never return raw stored errors.
 
 | Purpose | Command | Expected on success |
 |---|---|---|
-| Backend focused | `bun test tests/demo-directories-core-http.test.ts tests/demo-catalog-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts` | all pass |
+| Backend focused | `bun run test:files -- tests/demo-directories-core-http.test.ts tests/demo-catalog-sqlite.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts` | all pass |
 | Backend typecheck/build | `bunx tsc --noEmit && bun run build` | exit 0 |
 | Kura typecheck/build/lint | `pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web typecheck && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web build && pnpm --dir /home/rafael/Documentos/projetos/kura --filter @kura/web lint` | exit 0 |
 
@@ -140,7 +140,7 @@ and `Location`, then logs any completion rejection via Pino. Ensure detail check
 both `scanId` and `directoryId`; cross-directory lookup is 404. Add the routes to
 the demo allowlist and route manifest with identical contracts.
 
-**Verify**: `bun test tests/demo-directories-core-http.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts` -> 202/header, pagination, ownership, scheduler, conflict, and demo cases pass.
+**Verify**: `bun run test:files -- tests/demo-directories-core-http.test.ts tests/demo-mode-route-coverage.test.ts tests/integration/core-crud.integration.test.ts` -> 202/header, pagination, ownership, scheduler, conflict, and demo cases pass.
 
 ### Step 4: Build the Kura cockpit with bounded polling
 
