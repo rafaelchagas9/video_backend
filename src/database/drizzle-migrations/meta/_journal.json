@@ -246,6 +246,55 @@
       "when": 1787776535281,
       "tag": "0034_loud_makkari",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1787956333235,
+      "tag": "0035_useful_rictor",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787956392909,
+      "tag": "0036_wealthy_toxin",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787957077780,
+      "tag": "0037_military_toro",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787963497700,
+      "tag": "0038_abandoned_magus",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1787965940076,
+      "tag": "0039_freezing_daimon_hellstrom",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1787967297733,
+      "tag": "0040_overrated_dreaming_celestial",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787973443407,
+      "tag": "0041_fresh_talkback",
+      "breakpoints": true
     }
   ]
 }

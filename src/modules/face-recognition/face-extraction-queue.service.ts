@@ -23,6 +23,7 @@ import type {
   FaceProcessingOptions,
   RawFaceDetection,
 } from "./face-recognition.types";
+import { normalizeFaceBox } from "./face-recognition.coordinates";
 
 export class FaceExtractionQueueService {
   private processingJobId: number | null = null;
@@ -49,7 +50,7 @@ export class FaceExtractionQueueService {
    */
   async queueExtraction(
     videoId: number,
-    frames: ExtractedFrame[],
+    frames: ExtractedFrame[]
   ): Promise<void> {
     // Check if job already exists
     const existingJob = await db
@@ -65,7 +66,7 @@ export class FaceExtractionQueueService {
     ) {
       logger.debug(
         { videoId },
-        "Face extraction already queued or processing, skipping",
+        "Face extraction already queued or processing, skipping"
       );
       return;
     }
@@ -111,7 +112,7 @@ export class FaceExtractionQueueService {
       if (frames.length > 0) {
         const tempDir = frames[0].filePath.substring(
           0,
-          frames[0].filePath.lastIndexOf("/"),
+          frames[0].filePath.lastIndexOf("/")
         );
         this.pendingTempDirs.set(videoId, tempDir);
       }
@@ -122,7 +123,7 @@ export class FaceExtractionQueueService {
 
       logger.info(
         { videoId, queueLength: this.pendingQueue.length },
-        "Face extraction queued",
+        "Face extraction queued"
       );
     }
   }
@@ -160,7 +161,7 @@ export class FaceExtractionQueueService {
         if (!isAvailable) {
           logger.warn(
             { videoId, jobId: job.id },
-            "Face service unavailable, will retry later",
+            "Face service unavailable, will retry later"
           );
 
           // Update retry count and re-queue if under max retries
@@ -199,7 +200,7 @@ export class FaceExtractionQueueService {
 
         logger.info(
           { videoId, jobId: job.id, remaining: this.pendingQueue.length },
-          "Processing face extraction",
+          "Processing face extraction"
         );
 
         // Retrieve stored frames and temp directory
@@ -226,7 +227,7 @@ export class FaceExtractionQueueService {
     jobId: number,
     videoId: number,
     frames: ExtractedFrame[],
-    tempDir?: string,
+    tempDir?: string
   ): Promise<void> {
     const totalStart = Date.now();
     const video = await videosService.findById(videoId);
@@ -266,22 +267,15 @@ export class FaceExtractionQueueService {
       }
 
       const rawDetections: RawFaceDetection[] = [];
-      if (frames.length > 0) {
-        const detectStart = Date.now();
-        const detected = await this.processFrames(jobId, frames);
-        rawDetections.push(...detected);
-        await recordPerfStage(
-          { scenario: "face", videoId, jobId, mode: "queue_job" },
-          "detect_faces",
-          Date.now() - detectStart,
-          { frameCount: frames.length, detections: rawDetections.length },
-        );
-      } else {
-        logger.warn(
-          { videoId, jobId },
-          "No frames to process for face extraction",
-        );
-      }
+      const detectStart = Date.now();
+      const detected = await this.processFrames(jobId, frames);
+      rawDetections.push(...detected);
+      await recordPerfStage(
+        { scenario: "face", videoId, jobId, mode: "queue_job" },
+        "detect_faces",
+        Date.now() - detectStart,
+        { frameCount: frames.length, detections: rawDetections.length }
+      );
 
       const { getFaceRecognitionService } =
         await import("./face-recognition.service");
@@ -291,13 +285,13 @@ export class FaceExtractionQueueService {
         videoId,
         rawDetections,
         this.options.similarityThreshold,
-        this.options.autoTagThreshold,
+        this.options.autoTagThreshold
       );
       await recordPerfStage(
         { scenario: "face", videoId, jobId, mode: "queue_job" },
         "auto_match",
         Date.now() - matchStart,
-        { detections: rawDetections.length },
+        { detections: rawDetections.length }
       );
 
       // Mark as completed
@@ -314,7 +308,7 @@ export class FaceExtractionQueueService {
       await this.broadcastEvent({
         type: "face:extraction_complete",
         videoId,
-      message: {
+        message: {
           ...videoContext,
           message: "Face extraction complete",
           facesDetected: rawDetections.length,
@@ -323,14 +317,14 @@ export class FaceExtractionQueueService {
 
       logger.info(
         { videoId, jobId, facesDetected: job.facesDetected },
-        "Face extraction completed",
+        "Face extraction completed"
       );
 
       await recordPerfStage(
         { scenario: "face", videoId, jobId, mode: "queue_job" },
         "total",
         Date.now() - totalStart,
-        { frameCount: frames.length, detections: rawDetections.length },
+        { frameCount: frames.length, detections: rawDetections.length }
       );
 
       // Cleanup temp directory
@@ -340,12 +334,12 @@ export class FaceExtractionQueueService {
           await frameService.cleanupFrames(tempDir);
           logger.debug(
             { videoId, tempDir },
-            "Cleaned up temp frames directory",
+            "Cleaned up temp frames directory"
           );
         } catch (cleanupError) {
           logger.warn(
             { videoId, tempDir, error: cleanupError },
-            "Failed to cleanup temp frames directory",
+            "Failed to cleanup temp frames directory"
           );
         }
       }
@@ -390,10 +384,15 @@ export class FaceExtractionQueueService {
    */
   async processFrames(
     jobId: number,
-    frames: ExtractedFrame[],
+    frames: ExtractedFrame[]
   ): Promise<RawFaceDetection[]> {
+    if (frames.length === 0) {
+      throw new Error("No frames available for face inference");
+    }
+
     const faceClient = getFaceRecognitionClient();
     const rawDetections: RawFaceDetection[] = [];
+    let successfulInferences = 0;
 
     const batchSize = Math.max(1, env.FACE_DETECTION_BATCH_SIZE);
 
@@ -404,27 +403,42 @@ export class FaceExtractionQueueService {
         batch.map(async (frame) => {
           try {
             const result = await faceClient.detectFacesFromFile(frame.filePath);
-            return { frame, faces: result.faces };
+            return {
+              frame,
+              faces: result.faces,
+              imageWidth: result.image_width,
+              imageHeight: result.image_height,
+              succeeded: true,
+            };
           } catch (error) {
             logger.error(
               { frame: frame.filePath, error },
-              "Failed to process frame",
+              "Failed to process frame"
             );
-            return { frame, faces: [] };
+            return {
+              frame,
+              faces: [],
+              imageWidth: 0,
+              imageHeight: 0,
+              succeeded: false,
+            };
           }
-        }),
+        })
       );
 
       for (const item of batchResults) {
+        if (item.succeeded) successfulInferences += 1;
         for (const face of item.faces) {
           rawDetections.push({
             embedding: face.embedding,
             timestampSeconds: item.frame.timestampSeconds,
             frameIndex: item.frame.frameIndex,
-            bbox: face.bbox,
+            bbox: normalizeFaceBox(
+              face.bbox,
+              item.imageWidth,
+              item.imageHeight
+            ),
             detScore: face.det_score,
-            estimatedAge: face.age,
-            estimatedGender: face.gender,
           });
         }
       }
@@ -437,6 +451,10 @@ export class FaceExtractionQueueService {
           updatedAt: new Date(),
         })
         .where(eq(faceExtractionJobsTable.id, jobId));
+    }
+
+    if (successfulInferences === 0) {
+      throw new Error("No face inference succeeded");
     }
 
     return rawDetections;
@@ -458,7 +476,7 @@ export class FaceExtractionQueueService {
 
       logger.debug(
         { type: params.type, videoId: params.videoId },
-        "Broadcasted face extraction event",
+        "Broadcasted face extraction event"
       );
     } catch (error) {
       logger.warn({ error }, "Failed to broadcast face extraction event");

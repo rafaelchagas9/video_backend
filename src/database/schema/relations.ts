@@ -34,6 +34,8 @@ import {
   favoritesTable,
   creatorFavoritesTable,
   bookmarksTable,
+  bookmarkCategoriesTable,
+  bookmarkCategoryAssignmentsTable,
   ratingsTable,
 } from "./content.schema";
 import {
@@ -101,7 +103,7 @@ export const watchedDirectoriesRelations = relations(
   ({ many }) => ({
     videos: many(videosTable),
     scanLogs: many(scanLogsTable),
-  }),
+  })
 );
 
 // Scan logs relations
@@ -152,19 +154,25 @@ export const videosRelations = relations(videosTable, ({ one, many }) => ({
   taggingRuleLogs: many(taggingRuleLogTable),
 }));
 
-export const videoArtworkRelations = relations(videoArtworkTable, ({ one }) => ({
-  video: one(videosTable, {
-    fields: [videoArtworkTable.videoId],
-    references: [videosTable.id],
-  }),
-}));
+export const videoArtworkRelations = relations(
+  videoArtworkTable,
+  ({ one }) => ({
+    video: one(videosTable, {
+      fields: [videoArtworkTable.videoId],
+      references: [videosTable.id],
+    }),
+  })
+);
 
-export const artworkAssetsRelations = relations(artworkAssetsTable, ({ one }) => ({
-  video: one(videosTable, {
-    fields: [artworkAssetsTable.videoId],
-    references: [videosTable.id],
-  }),
-}));
+export const artworkAssetsRelations = relations(
+  artworkAssetsTable,
+  ({ one }) => ({
+    video: one(videosTable, {
+      fields: [artworkAssetsTable.videoId],
+      references: [videosTable.id],
+    }),
+  })
+);
 
 // Related-video score relations
 export const videoRelatedScoresRelations = relations(
@@ -180,7 +188,7 @@ export const videoRelatedScoresRelations = relations(
       references: [videosTable.id],
       relationName: "relatedScoresTo",
     }),
-  }),
+  })
 );
 
 // Video stats relations
@@ -203,14 +211,14 @@ export const videoMetadataRelations = relations(
       fields: [videoMetadataTable.videoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 export const videoCollectionsRelations = relations(
   videoCollectionsTable,
   ({ many }) => ({
     entries: many(videoCollectionEntriesTable),
-  }),
+  })
 );
 
 export const videoCollectionEntriesRelations = relations(
@@ -224,7 +232,7 @@ export const videoCollectionEntriesRelations = relations(
       fields: [videoCollectionEntriesTable.videoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 // Creators relations
@@ -248,7 +256,7 @@ export const creatorBodyModificationsRelations = relations(
       fields: [creatorBodyModificationsTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 // Creator external ids relations
@@ -259,7 +267,7 @@ export const creatorExternalIdsRelations = relations(
       fields: [creatorExternalIdsTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 export const creatorGalleryMediaRelations = relations(
@@ -269,7 +277,7 @@ export const creatorGalleryMediaRelations = relations(
       fields: [creatorGalleryMediaTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 // Video-Creator junction relations
@@ -284,7 +292,7 @@ export const videoCreatorsRelations = relations(
       fields: [videoCreatorsTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 // Tags relations (self-referencing)
@@ -337,7 +345,7 @@ export const studioAliasesRelations = relations(
       fields: [studioAliasesTable.studioId],
       references: [studiosTable.id],
     }),
-  }),
+  })
 );
 
 // Studio external ids relations
@@ -348,7 +356,7 @@ export const studioExternalIdsRelations = relations(
       fields: [studioExternalIdsTable.studioId],
       references: [studiosTable.id],
     }),
-  }),
+  })
 );
 
 // Video-Studio junction relations
@@ -363,7 +371,7 @@ export const videoStudiosRelations = relations(
       fields: [videoStudiosTable.studioId],
       references: [studiosTable.id],
     }),
-  }),
+  })
 );
 
 // Creator-Studio junction relations
@@ -378,7 +386,7 @@ export const creatorStudiosRelations = relations(
       fields: [creatorStudiosTable.studioId],
       references: [studiosTable.id],
     }),
-  }),
+  })
 );
 
 // Platforms relations
@@ -398,7 +406,7 @@ export const creatorPlatformsRelations = relations(
       fields: [creatorPlatformsTable.platformId],
       references: [platformsTable.id],
     }),
-  }),
+  })
 );
 
 // Creator social links relations
@@ -409,7 +417,7 @@ export const creatorSocialLinksRelations = relations(
       fields: [creatorSocialLinksTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 // Creator aliases relations
@@ -420,7 +428,7 @@ export const creatorAliasesRelations = relations(
       fields: [creatorAliasesTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 // Studio social links relations
@@ -431,7 +439,7 @@ export const studioSocialLinksRelations = relations(
       fields: [studioSocialLinksTable.studioId],
       references: [studiosTable.id],
     }),
-  }),
+  })
 );
 
 // Playlists relations
@@ -443,7 +451,7 @@ export const playlistsRelations = relations(
       references: [usersTable.id],
     }),
     playlistVideos: many(playlistVideosTable),
-  }),
+  })
 );
 
 // Playlist-Video junction relations
@@ -458,7 +466,7 @@ export const playlistVideosRelations = relations(
       fields: [playlistVideosTable.videoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 // Favorites relations
@@ -484,20 +492,49 @@ export const creatorFavoritesRelations = relations(
       fields: [creatorFavoritesTable.creatorId],
       references: [creatorsTable.id],
     }),
-  }),
+  })
 );
 
 // Bookmarks relations
-export const bookmarksRelations = relations(bookmarksTable, ({ one }) => ({
-  user: one(usersTable, {
-    fields: [bookmarksTable.userId],
-    references: [usersTable.id],
-  }),
-  video: one(videosTable, {
-    fields: [bookmarksTable.videoId],
-    references: [videosTable.id],
-  }),
-}));
+export const bookmarksRelations = relations(
+  bookmarksTable,
+  ({ many, one }) => ({
+    user: one(usersTable, {
+      fields: [bookmarksTable.userId],
+      references: [usersTable.id],
+    }),
+    video: one(videosTable, {
+      fields: [bookmarksTable.videoId],
+      references: [videosTable.id],
+    }),
+    categoryAssignments: many(bookmarkCategoryAssignmentsTable),
+  })
+);
+
+export const bookmarkCategoriesRelations = relations(
+  bookmarkCategoriesTable,
+  ({ many, one }) => ({
+    user: one(usersTable, {
+      fields: [bookmarkCategoriesTable.userId],
+      references: [usersTable.id],
+    }),
+    bookmarkAssignments: many(bookmarkCategoryAssignmentsTable),
+  })
+);
+
+export const bookmarkCategoryAssignmentsRelations = relations(
+  bookmarkCategoryAssignmentsTable,
+  ({ one }) => ({
+    bookmark: one(bookmarksTable, {
+      fields: [bookmarkCategoryAssignmentsTable.bookmarkId],
+      references: [bookmarksTable.id],
+    }),
+    category: one(bookmarkCategoriesTable, {
+      fields: [bookmarkCategoryAssignmentsTable.categoryId],
+      references: [bookmarkCategoriesTable.id],
+    }),
+  })
+);
 
 // Ratings relations
 export const ratingsRelations = relations(ratingsTable, ({ one }) => ({
@@ -531,7 +568,7 @@ export const conversionJobsRelations = relations(
       fields: [conversionJobsTable.videoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 export const conversionHistoryRelations = relations(
@@ -545,7 +582,7 @@ export const conversionHistoryRelations = relations(
       fields: [conversionHistoryTable.videoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 // Triage progress relations
@@ -560,7 +597,7 @@ export const triageProgressRelations = relations(
       fields: [triageProgressTable.lastVideoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 // Tagging rules relations
@@ -570,7 +607,7 @@ export const taggingRulesRelations = relations(
     conditions: many(taggingRuleConditionsTable),
     actions: many(taggingRuleActionsTable),
     logs: many(taggingRuleLogTable),
-  }),
+  })
 );
 
 // Tagging rule conditions relations
@@ -581,7 +618,7 @@ export const taggingRuleConditionsRelations = relations(
       fields: [taggingRuleConditionsTable.ruleId],
       references: [taggingRulesTable.id],
     }),
-  }),
+  })
 );
 
 // Tagging rule actions relations
@@ -592,7 +629,7 @@ export const taggingRuleActionsRelations = relations(
       fields: [taggingRuleActionsTable.ruleId],
       references: [taggingRulesTable.id],
     }),
-  }),
+  })
 );
 
 // Tagging rule log relations
@@ -607,7 +644,7 @@ export const taggingRuleLogRelations = relations(
       fields: [taggingRuleLogTable.videoId],
       references: [videosTable.id],
     }),
-  }),
+  })
 );
 
 export const multiplayerRemoteSessionsRelations = relations(
@@ -618,7 +655,7 @@ export const multiplayerRemoteSessionsRelations = relations(
       references: [usersTable.id],
     }),
     joinRequests: many(multiplayerRemoteJoinRequestsTable),
-  }),
+  })
 );
 
 export const multiplayerRemoteTrustedDevicesRelations = relations(
@@ -628,7 +665,7 @@ export const multiplayerRemoteTrustedDevicesRelations = relations(
       fields: [multiplayerRemoteTrustedDevicesTable.ownerUserId],
       references: [usersTable.id],
     }),
-  }),
+  })
 );
 
 export const multiplayerRemoteJoinRequestsRelations = relations(
@@ -646,5 +683,5 @@ export const multiplayerRemoteJoinRequestsRelations = relations(
       fields: [multiplayerRemoteJoinRequestsTable.requestingSessionId],
       references: [sessionsTable.id],
     }),
-  }),
+  })
 );

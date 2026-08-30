@@ -6,7 +6,7 @@
 
 import { join } from "path";
 import { existsSync, mkdirSync, unlinkSync, statSync } from "fs";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { faceImagesTable, videoFaceDetectionsTable } from "@/database/schema";
 import type {
@@ -21,6 +21,7 @@ import { cropFaceThumbnail } from "@/utils/image-processing";
 import { getFrameExtractionService } from "@/modules/frame-extraction/frame-extraction.service";
 import { videosService } from "@/modules/videos/videos.service";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
+import { persistedFaceBoxToPixels } from "./face-recognition.coordinates";
 
 export class FaceImagesService {
   private facesDir: string;
@@ -124,13 +125,18 @@ export class FaceImagesService {
         "Frame extracted for face cropping"
       );
 
-      // Bounding box is already in pixel coordinates
-      const bbox = [
-        Math.round(detection.bboxX1),
-        Math.round(detection.bboxY1),
-        Math.round(detection.bboxX2),
-        Math.round(detection.bboxY2),
-      ];
+      // Detections persist normalized coordinates so they remain valid when
+      // inference and thumbnail generation use different frame resolutions.
+      const bbox = persistedFaceBoxToPixels(
+        [
+          detection.bboxX1,
+          detection.bboxY1,
+          detection.bboxX2,
+          detection.bboxY2,
+        ],
+        video.width,
+        video.height
+      );
 
       // Generate output filename
       const format = env.FACE_THUMBNAIL_FORMAT;
@@ -262,7 +268,12 @@ export class FaceImagesService {
     const result = await db
       .select()
       .from(videoFaceDetectionsTable)
-      .where(eq(videoFaceDetectionsTable.id, detectionId))
+      .where(
+        and(
+          eq(videoFaceDetectionsTable.id, detectionId),
+          eq(videoFaceDetectionsTable.isPublished, true)
+        )
+      )
       .limit(1);
 
     if (!result[0]) {

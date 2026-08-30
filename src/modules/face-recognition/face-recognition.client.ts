@@ -1,37 +1,29 @@
 /**
- * Face Recognition Client
- * HTTP client for communicating with the Python face detection service
+ * Face recognition compatibility facade.
+ *
+ * Face callers keep their established pixel-based contract while transport,
+ * batching, and capability discovery are owned by VisualInferencePort.
  */
 
+import { env } from "@/config/env";
+import {
+  HttpVisualInferenceAdapter,
+  type VisualInferencePort,
+  type VisionFinding,
+} from "@/modules/content-analysis";
 import { logger } from "@/utils/logger";
+import { normalizedFaceBoxToPixels } from "./face-recognition.coordinates";
+import { faceRecognitionDemoService } from "./face-recognition.demo.service";
+import { FACE_EMBEDDING_DIMENSION } from "./face-recognition.embedding";
 import type {
   DetectFacesRequest,
   DetectFacesResponse,
+  FaceDetectionResult,
   HealthCheckResponse,
 } from "./face-recognition.types";
-import { env } from "@/config/env";
-import { faceRecognitionDemoService } from "./face-recognition.demo.service";
-import { assertValidFaceEmbedding } from "./face-recognition.embedding";
 
-function validateDetectFacesResponse(data: unknown): DetectFacesResponse {
-  if (!data || typeof data !== "object") {
-    throw new Error("Face service returned an invalid response");
-  }
-
-  const response = data as DetectFacesResponse;
-  if (!Array.isArray(response.faces)) {
-    throw new Error("Face service response is missing the faces array");
-  }
-
-  for (const [index, face] of response.faces.entries()) {
-    assertValidFaceEmbedding(
-      face?.embedding,
-      `Face service embedding at index ${index}`
-    );
-  }
-
-  return response;
-}
+const FACE_CAPABILITY = "faces";
+const SINGLE_IMAGE_ID = "face-0";
 
 function demoDetection(): DetectFacesResponse {
   return {
@@ -39,7 +31,7 @@ function demoDetection(): DetectFacesResponse {
       {
         bbox: [0.2, 0.1, 0.8, 0.9],
         det_score: 0.99,
-        embedding: [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08],
+        embedding: Array.from({ length: FACE_EMBEDDING_DIMENSION }, () => 0.01),
       },
     ],
     image_width: 640,
@@ -48,172 +40,114 @@ function demoDetection(): DetectFacesResponse {
   };
 }
 
-export class FaceRecognitionClient {
-  private baseUrl: string;
-  private timeout: number;
+function base64ImageToBlob(imageBase64: string): Blob {
+  const buffer = Buffer.from(imageBase64, "base64");
+  const bytes = buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength
+  ) as ArrayBuffer;
+  return new Blob([bytes], { type: "image/jpeg" });
+}
 
-  constructor(baseUrl: string, timeout: number = 30000) {
-    this.baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    this.timeout = timeout;
+function faceFindingToLegacyResult(
+  finding: VisionFinding,
+  width: number,
+  height: number
+): FaceDetectionResult {
+  if (finding.label !== "face" || !finding.embedding) {
+    throw new Error("Vision service returned an invalid face finding");
   }
 
-  /**
-   * Check if the Python face service is healthy and ready
-   */
+  return {
+    bbox: normalizedFaceBoxToPixels(
+      [finding.box.x1, finding.box.y1, finding.box.x2, finding.box.y2],
+      width,
+      height
+    ),
+    det_score: finding.score,
+    embedding: finding.embedding,
+  };
+}
+
+export class FaceRecognitionClient {
+  private readonly inference: VisualInferencePort;
+
+  constructor(
+    baseUrl: string,
+    timeout: number = 30000,
+    internalSecret: string = "",
+    inference?: VisualInferencePort
+  ) {
+    this.inference =
+      inference ??
+      new HttpVisualInferenceAdapter({
+        baseUrl,
+        timeoutMs: timeout,
+        internalSecret,
+      });
+  }
+
   async healthCheck(): Promise<HealthCheckResponse> {
     if (env.DEMO_MODE) return faceRecognitionDemoService.healthCheck();
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+      const manifest = await this.inference.capabilities();
+      const faces = manifest.capabilities.find(
+        (capability) => capability.name === FACE_CAPABILITY
+      );
+      if (!faces) return { status: "unhealthy", version: manifest.version };
 
-      logger.debug({ url: `${this.baseUrl}/health` }, "Face health check");
-
-      const response = await fetch(`${this.baseUrl}/health`, {
-        method: "GET",
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        logger.warn(
-          { status: response.status },
-          "Face service health check failed"
-        );
-        return {
-          status: "unhealthy",
-        };
-      }
-
-      const data = await response.json();
-      return data as HealthCheckResponse;
-    } catch (error) {
-      logger.error({ error }, "Face service health check error");
       return {
-        status: "unhealthy",
+        status: faces.ready ? "healthy" : "degraded",
+        version: manifest.version,
+        model: faces.modelRevision ?? undefined,
+        onnx_providers: faces.providers,
+        embedding_dimension: FACE_EMBEDDING_DIMENSION,
       };
-    }
-  }
-
-  /**
-   * Detect faces in a base64-encoded image
-   * @param request Detection request with base64 image
-   * @returns Detected faces with embeddings
-   */
-  async detectFaces(request: DetectFacesRequest): Promise<DetectFacesResponse> {
-    if (env.DEMO_MODE) return demoDetection();
-
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-      const response = await fetch(`${this.baseUrl}/detect`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Face detection failed: ${response.status} ${errorText}`
-        );
-      }
-
-      const data = await response.json();
-      return validateDetectFacesResponse(data);
     } catch (error) {
-      if (error instanceof Error) {
-        if (error.name === "AbortError") {
-          throw new Error(`Face detection timeout after ${this.timeout}ms`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-      throw new Error("Face detection failed with unknown error", {
-        cause: error,
-      });
+      logger.error({ error }, "Vision capability check failed");
+      return { status: "unhealthy" };
     }
   }
 
-  /**
-   * Detect faces in an image file using multipart upload
-   * @param imagePath Path to image file
-   * @returns Detected faces with embeddings
-   */
-  async detectFacesFromFile(imagePath: string): Promise<DetectFacesResponse> {
+  async detectFaces(
+    request: DetectFacesRequest,
+    signal?: AbortSignal
+  ): Promise<DetectFacesResponse> {
+    if (env.DEMO_MODE) return demoDetection();
+    return this.detectImage(base64ImageToBlob(request.image_base64), signal);
+  }
+
+  async detectFacesFromFile(
+    imagePath: string,
+    signal?: AbortSignal
+  ): Promise<DetectFacesResponse> {
     if (env.DEMO_MODE) return demoDetection();
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-      // Read file and create form data
       const file = Bun.file(imagePath);
       const buffer = await file.arrayBuffer();
-      const filename = imagePath.split("/").pop() || "image.jpg";
-
-      // Determine MIME type from extension
-      const ext = filename.split(".").pop()?.toLowerCase();
+      const extension = imagePath.split(".").pop()?.toLowerCase();
       const mimeType =
-        ext === "png"
+        extension === "png"
           ? "image/png"
-          : ext === "webp"
+          : extension === "webp"
             ? "image/webp"
             : "image/jpeg";
-
-      const formData = new FormData();
-      formData.append("file", new Blob([buffer], { type: mimeType }), filename);
-
-      const response = await fetch(`${this.baseUrl}/detect`, {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Face detection failed: ${response.status} ${errorText}`
-        );
-      }
-
-      const data = await response.json();
-      return validateDetectFacesResponse(data);
+      return await this.detectImage(
+        new Blob([buffer], { type: mimeType }),
+        signal
+      );
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(`Face detection timeout after ${this.timeout}ms`, {
-          cause: error,
-        });
-      }
-      logger.error({ error, imagePath }, "Failed to detect faces from file");
+      logger.error({ error }, "Failed to analyze image for faces");
       throw error;
     }
   }
 
-  /**
-   * Check if the face service is available and ready to process requests
-   */
   async isAvailable(): Promise<boolean> {
-    const health = await this.healthCheck();
-    return health.status === "healthy";
+    return (await this.healthCheck()).status === "healthy";
   }
 
-  /**
-   * Wait for the face service to become available (with timeout)
-   * @param maxWaitMs Maximum wait time in milliseconds
-   * @param checkIntervalMs Interval between health checks
-   * @returns True if service became available, false if timeout
-   */
   async waitForAvailability(
     maxWaitMs: number = 60000,
     checkIntervalMs: number = 2000
@@ -221,35 +155,64 @@ export class FaceRecognitionClient {
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxWaitMs) {
-      if (await this.isAvailable()) {
-        return true;
-      }
+      if (await this.isAvailable()) return true;
       await new Promise((resolve) => setTimeout(resolve, checkIntervalMs));
     }
 
     return false;
   }
+
+  private async detectImage(
+    image: Blob,
+    signal?: AbortSignal
+  ): Promise<DetectFacesResponse> {
+    const startedAt = performance.now();
+    const result = await this.inference.analyzeBatch(
+      {
+        capabilities: [FACE_CAPABILITY],
+        items: [{ id: SINGLE_IMAGE_ID, timestampSeconds: 0, image }],
+      },
+      signal ?? new AbortController().signal
+    );
+    const item = result.items[0];
+    const outcome = item?.outcomes[0];
+
+    if (!item || !outcome || outcome.capability !== FACE_CAPABILITY) {
+      throw new Error("Vision service omitted the face analysis result");
+    }
+    if (outcome.status === "error") {
+      throw new Error(
+        `Face analysis failed (${outcome.error.code}): ${outcome.error.message}`
+      );
+    }
+    if (item.width === undefined || item.height === undefined) {
+      throw new Error("Vision service omitted face image dimensions");
+    }
+
+    return {
+      faces: outcome.findings.map((finding) =>
+        faceFindingToLegacyResult(finding, item.width!, item.height!)
+      ),
+      image_width: item.width,
+      image_height: item.height,
+      processing_time_ms: Math.max(0, performance.now() - startedAt),
+    };
+  }
 }
 
-/**
- * Singleton instance of the face recognition client
- * Configured from environment variables
- */
 let clientInstance: FaceRecognitionClient | null = null;
 
 export function getFaceRecognitionClient(): FaceRecognitionClient {
   if (!clientInstance) {
-    // Will be configured from env in next phase
-    const baseUrl = env.FACE_SERVICE_URL;
-    const timeout = 30000; // 30 seconds
-    clientInstance = new FaceRecognitionClient(baseUrl, timeout);
+    clientInstance = new FaceRecognitionClient(
+      env.VISION_SERVICE_URL,
+      30000,
+      env.VISION_SERVICE_SECRET
+    );
   }
   return clientInstance;
 }
 
-/**
- * For testing - reset the singleton instance
- */
 export function resetFaceRecognitionClient(): void {
   clientInstance = null;
 }

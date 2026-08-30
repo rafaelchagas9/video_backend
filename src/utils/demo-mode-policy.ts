@@ -15,6 +15,14 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(`^${API_PREFIX}/auth/me$`),
   },
   {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/videos/\\d+/analyses/nudity$`),
+  },
+  {
+    methods: new Set(["GET", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/content-analysis/jobs/\\d+$`),
+  },
+  {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/search/?$`),
   },
@@ -115,6 +123,14 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["PATCH", "DELETE"]),
     path: new RegExp(`^${API_PREFIX}/(?:bookmarks|ratings)/\\d+$`),
+  },
+  {
+    methods: new Set(["GET", "POST"]),
+    path: new RegExp(`^${API_PREFIX}/bookmark-categories/?$`),
+  },
+  {
+    methods: new Set(["PATCH", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/bookmark-categories/\\d+$`),
   },
   {
     methods: new Set(["GET", "POST"]),

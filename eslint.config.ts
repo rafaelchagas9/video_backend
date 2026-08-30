@@ -8,7 +8,7 @@ export default defineConfig([
     ignores: [
       "dist/**",
       "node_modules/**",
-      "face-service/.venv/**",
+      "vision-service/.venv/**",
       "demo_mode/**",
       "scripts/**",
     ],

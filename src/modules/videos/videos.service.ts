@@ -134,7 +134,10 @@ export class VideosService {
         response.artwork = summaries.get(id) ?? null;
       }
       if (include.includes("stats") && userId !== undefined) {
-        const summaries = await videoStatsService.getSummariesForVideos(userId, [id]);
+        const summaries = await videoStatsService.getSummariesForVideos(
+          userId,
+          [id]
+        );
         Object.assign(response, summaries.get(id));
       }
       return response;
@@ -207,7 +210,10 @@ export class VideosService {
       description: video.description,
       themes: video.themes,
       is_available: video.isAvailable,
-      studio_assignment_status: deriveStudioAssignmentStatus(video.hasStudio, video.studioAbsenceConfirmedAt),
+      studio_assignment_status: deriveStudioAssignmentStatus(
+        video.hasStudio,
+        video.studioAbsenceConfirmedAt
+      ),
       last_verified_at: video.lastVerifiedAt?.toISOString() ?? null,
       indexed_at: video.indexedAt.toISOString(),
       created_at: video.createdAt.toISOString(),
@@ -279,7 +285,7 @@ export class VideosService {
       promises.push(
         videoStatsService.getSummariesForVideos(userId, [id]).then((res) => {
           Object.assign(response, res.get(id));
-        }),
+        })
       );
     }
 
@@ -595,7 +601,12 @@ export class VideosService {
             videoFaceDetectionsTable,
             eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id)
           )
-          .where(inArray(videoFaceDetectionsTable.videoId, ids))
+          .where(
+            and(
+              inArray(videoFaceDetectionsTable.videoId, ids),
+              eq(videoFaceDetectionsTable.isPublished, true)
+            )
+          )
           .groupBy(videoFaceDetectionsTable.videoId),
         db
           .select({

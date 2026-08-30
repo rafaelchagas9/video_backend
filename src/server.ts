@@ -155,6 +155,14 @@ export async function buildServer() {
       await conversionQueue.stop();
       await editsQueue.stop();
     }
+    if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
+      const { getDurableFaceExtractionQueue } =
+        await import("./modules/face-recognition/face-extraction-durable.service");
+      await getDurableFaceExtractionQueue().stop();
+      const { getContentAnalysisRuntime } =
+        await import("./modules/content-analysis/content-analysis.runtime");
+      await getContentAnalysisRuntime().stop();
+    }
     eventsService.closeAll("server shutdown");
     multiplayerRemoteWebSocketService.closeAll("server shutdown");
     if (env.DEMO_MODE) {
@@ -241,8 +249,18 @@ export async function buildServer() {
           },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Range"],
-    exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Range",
+      "Idempotency-Key",
+    ],
+    exposedHeaders: [
+      "Content-Range",
+      "Accept-Ranges",
+      "Content-Length",
+      "Location",
+    ],
   });
 
   // Security hardening
@@ -519,6 +537,8 @@ export async function buildServer() {
         await import("./modules/favorites/favorites.routes");
       const { bookmarksRoutes } =
         await import("./modules/bookmarks/bookmarks.routes");
+      const { bookmarkCategoriesRoutes } =
+        await import("./modules/bookmarks/bookmark-categories.routes");
       const { backupRoutes } = await import("./modules/backup/backup.routes");
       const {
         deprecatedConversionLegacyStatusRoutes,
@@ -551,6 +571,8 @@ export async function buildServer() {
         await import("./modules/enrichment/enrichment.routes");
       const { cleanupRoutes } =
         await import("./modules/cleanup/cleanup.routes");
+      const { contentAnalysisRoutes } =
+        await import("./modules/content-analysis/content-analysis.routes");
 
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -572,6 +594,9 @@ export async function buildServer() {
       });
       await instance.register(favoritesRoutes, { prefix: "/favorites" });
       await instance.register(bookmarksRoutes, { prefix: "/bookmarks" });
+      await instance.register(bookmarkCategoriesRoutes, {
+        prefix: "/bookmark-categories",
+      });
       await instance.register(backupRoutes, { prefix: "/backup" });
       await instance.register(videoConversionRoutes, { prefix: "/videos" });
       await instance.register(conversionRoutes, { prefix: "/conversions" });
@@ -604,6 +629,7 @@ export async function buildServer() {
         prefix: "/multiplayer-remote",
       });
       await instance.register(enrichmentRoutes, { prefix: "/enrichment" });
+      await instance.register(contentAnalysisRoutes);
     },
     { prefix: API_PREFIX }
   );
@@ -617,6 +643,11 @@ export async function buildServer() {
 
   // Start scheduler for automatic directory scanning
   if (env.NODE_ENV !== "test" && !env.DEMO_MODE) {
+    const {
+      getDurableFaceExtractionQueue,
+      isDurableFaceExtractionSchemaReady,
+    } =
+      await import("./modules/face-recognition/face-extraction-durable.service");
     const { artworkService } =
       await import("./modules/artwork/artwork.service");
     artworkService.resumePendingJobs().catch((err) => {
@@ -643,6 +674,14 @@ export async function buildServer() {
 
     await conversionService.startQueue();
     await editsQueue.start();
+    if (await isDurableFaceExtractionSchemaReady()) {
+      await getDurableFaceExtractionQueue().start();
+    }
+    const { getContentAnalysisRuntime, isContentAnalysisSchemaReady } =
+      await import("./modules/content-analysis/content-analysis.runtime");
+    if (await isContentAnalysisSchemaReady()) {
+      await getContentAnalysisRuntime().start();
+    }
   }
 
   // 404 handler

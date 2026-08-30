@@ -102,8 +102,11 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value.toLowerCase() === "true"),
 
-  // Face Recognition
+  // Vision inference (legacy face variable remains a temporary fallback)
   FACE_SERVICE_URL: z.string().default("http://localhost:8100"),
+  VISION_SERVICE_URL: z
+    .string()
+    .default(process.env.FACE_SERVICE_URL ?? "http://localhost:8100"),
   FACE_SIMILARITY_THRESHOLD: z
     .string()
     .default("0.65")

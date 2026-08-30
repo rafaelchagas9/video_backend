@@ -4,14 +4,13 @@
  */
 
 import { db } from "@/config/drizzle";
-import { eq, sql, and, desc, inArray } from "drizzle-orm";
+import { eq, sql, and, desc } from "drizzle-orm";
 import {
   creatorFaceEmbeddingsTable,
   videoFaceDetectionsTable,
   faceExtractionJobsTable,
   type NewCreatorFaceEmbedding,
-  type CreatorFaceEmbedding,
-  type VideoFaceDetection,
+  type NewVideoFaceDetection,
   videoCreatorsTable,
   creatorsTable,
 } from "@/database/schema";
@@ -20,7 +19,7 @@ import { env } from "@/config/env";
 import { NotFoundError } from "@/utils/errors";
 import { getFaceRecognitionClient } from "./face-recognition.client";
 import { getFrameExtractionService } from "@/modules/frame-extraction";
-import { getFaceExtractionQueue } from "./face-extraction-queue.service";
+import { getDurableFaceExtractionQueue } from "./face-extraction-durable.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
 import { storyboardsService } from "@/modules/storyboards/storyboards.service";
 import { resizeAndSaveCreatorThumbnail } from "@/utils/image-processing";
@@ -28,14 +27,25 @@ import { recordPerfStage } from "@/utils/performance-profiler";
 import { existsSync, mkdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import type {
+  CreatorFaceEmbeddingRecord,
   SimilarityMatch,
   RawFaceDetection,
+  VideoFaceDetectionRecord,
 } from "./face-recognition.types";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
 import {
   assertValidFaceEmbedding,
   FACE_EMBEDDING_DIMENSION,
 } from "./face-recognition.embedding";
+
+type FacePublicationTransaction = Parameters<
+  Parameters<typeof db.transaction>[0]
+>[0];
+
+export interface FacePublicationContext {
+  runId: number;
+  guard: (tx: FacePublicationTransaction) => Promise<void>;
+}
 
 export class FaceRecognitionService {
   private creatorFacesDir: string;
@@ -63,7 +73,7 @@ export class FaceRecognitionService {
     sourceVideoId?: number;
     sourceTimestampSeconds?: number;
     isPrimary?: boolean;
-  }): Promise<CreatorFaceEmbedding> {
+  }): Promise<CreatorFaceEmbeddingRecord> {
     if (env.DEMO_MODE)
       return faceRecognitionDemoService.addCreatorEmbedding(params);
     const {
@@ -141,8 +151,6 @@ export class FaceRecognitionService {
       sourceTimestampSeconds,
       detScore: face.det_score,
       isPrimary,
-      estimatedAge: face.age,
-      estimatedGender: face.gender,
       thumbnailPath,
     };
 
@@ -164,7 +172,7 @@ export class FaceRecognitionService {
    */
   async getCreatorEmbeddings(
     creatorId: number
-  ): Promise<CreatorFaceEmbedding[]> {
+  ): Promise<CreatorFaceEmbeddingRecord[]> {
     if (env.DEMO_MODE) {
       return faceRecognitionDemoService.getCreatorEmbeddings(creatorId);
     }
@@ -188,32 +196,72 @@ export class FaceRecognitionService {
         creatorId,
         embeddingId
       );
-    // Unset other primary embeddings
-    await db
-      .update(creatorFaceEmbeddingsTable)
-      .set({ isPrimary: false })
-      .where(eq(creatorFaceEmbeddingsTable.creatorId, creatorId));
+    const target = await db
+      .select({ id: creatorFaceEmbeddingsTable.id })
+      .from(creatorFaceEmbeddingsTable)
+      .where(
+        and(
+          eq(creatorFaceEmbeddingsTable.id, embeddingId),
+          eq(creatorFaceEmbeddingsTable.creatorId, creatorId)
+        )
+      )
+      .limit(1)
+      .then((rows) => rows[0]);
 
-    // Set this one as primary
-    await db
-      .update(creatorFaceEmbeddingsTable)
-      .set({ isPrimary: true })
-      .where(eq(creatorFaceEmbeddingsTable.id, embeddingId));
+    if (!target) {
+      throw new NotFoundError(
+        `Face embedding ${embeddingId} not found for creator ${creatorId}`
+      );
+    }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(creatorFaceEmbeddingsTable)
+        .set({ isPrimary: false })
+        .where(eq(creatorFaceEmbeddingsTable.creatorId, creatorId));
+
+      await tx
+        .update(creatorFaceEmbeddingsTable)
+        .set({ isPrimary: true })
+        .where(
+          and(
+            eq(creatorFaceEmbeddingsTable.id, embeddingId),
+            eq(creatorFaceEmbeddingsTable.creatorId, creatorId)
+          )
+        );
+    });
   }
 
   /**
    * Delete a creator face embedding
    */
-  async deleteCreatorEmbedding(embeddingId: number): Promise<void> {
+  async deleteCreatorEmbedding(
+    creatorId: number,
+    embeddingId: number
+  ): Promise<void> {
     if (env.DEMO_MODE)
-      return faceRecognitionDemoService.deleteCreatorEmbedding(embeddingId);
+      return faceRecognitionDemoService.deleteCreatorEmbedding(
+        creatorId,
+        embeddingId
+      );
     // Get the embedding first to delete the thumbnail file
     const embedding = await db
       .select({ thumbnailPath: creatorFaceEmbeddingsTable.thumbnailPath })
       .from(creatorFaceEmbeddingsTable)
-      .where(eq(creatorFaceEmbeddingsTable.id, embeddingId))
+      .where(
+        and(
+          eq(creatorFaceEmbeddingsTable.id, embeddingId),
+          eq(creatorFaceEmbeddingsTable.creatorId, creatorId)
+        )
+      )
       .limit(1)
       .then((rows) => rows[0]);
+
+    if (!embedding) {
+      throw new NotFoundError(
+        `Face embedding ${embeddingId} not found for creator ${creatorId}`
+      );
+    }
 
     // Delete thumbnail file if exists
     if (embedding?.thumbnailPath && existsSync(embedding.thumbnailPath)) {
@@ -233,19 +281,31 @@ export class FaceRecognitionService {
 
     await db
       .delete(creatorFaceEmbeddingsTable)
-      .where(eq(creatorFaceEmbeddingsTable.id, embeddingId));
+      .where(
+        and(
+          eq(creatorFaceEmbeddingsTable.id, embeddingId),
+          eq(creatorFaceEmbeddingsTable.creatorId, creatorId)
+        )
+      );
   }
 
   /**
    * Get face detections for a video
    */
-  async getVideoFaceDetections(videoId: number): Promise<VideoFaceDetection[]> {
+  async getVideoFaceDetections(
+    videoId: number
+  ): Promise<VideoFaceDetectionRecord[]> {
     if (env.DEMO_MODE)
       return faceRecognitionDemoService.getVideoFaceDetections(videoId);
     return await db
       .select()
       .from(videoFaceDetectionsTable)
-      .where(eq(videoFaceDetectionsTable.videoId, videoId))
+      .where(
+        and(
+          eq(videoFaceDetectionsTable.videoId, videoId),
+          eq(videoFaceDetectionsTable.isPublished, true)
+        )
+      )
       .orderBy(videoFaceDetectionsTable.timestampSeconds);
   }
 
@@ -253,27 +313,33 @@ export class FaceRecognitionService {
    * Confirm a face match
    */
   async confirmFaceMatch(
+    videoId: number,
     detectionId: number,
     creatorId: number
   ): Promise<void> {
     if (env.DEMO_MODE)
       return faceRecognitionDemoService.confirmFaceMatch(
+        videoId,
         detectionId,
         creatorId
       );
-    // Get the videoId for this detection first
+    // Resolve the detection only inside the video named by the route.
     const detection = await db
       .select({ videoId: videoFaceDetectionsTable.videoId })
       .from(videoFaceDetectionsTable)
-      .where(eq(videoFaceDetectionsTable.id, detectionId))
+      .where(
+        and(
+          eq(videoFaceDetectionsTable.id, detectionId),
+          eq(videoFaceDetectionsTable.videoId, videoId),
+          eq(videoFaceDetectionsTable.isPublished, true)
+        )
+      )
       .limit(1)
       .then((rows) => rows[0]);
 
     if (!detection) {
       throw new NotFoundError(`Detection ${detectionId} not found`);
     }
-
-    const { videoId } = detection;
 
     logger.info(
       { videoId, creatorId, detectionId },
@@ -311,23 +377,30 @@ export class FaceRecognitionService {
       .where(
         and(
           eq(videoFaceDetectionsTable.videoId, videoId),
-          eq(videoFaceDetectionsTable.matchedCreatorId, creatorId)
+          eq(videoFaceDetectionsTable.matchedCreatorId, creatorId),
+          eq(videoFaceDetectionsTable.isPublished, true)
         )
       );
 
     // Also delete the specific detection ID if it wasn't caught by the above (e.g. if matchedCreatorId wasn't set yet)
     await db
       .delete(videoFaceDetectionsTable)
-      .where(eq(videoFaceDetectionsTable.id, detectionId));
+      .where(
+        and(
+          eq(videoFaceDetectionsTable.id, detectionId),
+          eq(videoFaceDetectionsTable.videoId, videoId),
+          eq(videoFaceDetectionsTable.isPublished, true)
+        )
+      );
   }
 
   /**
    * Reject a face match
    */
-  async rejectFaceMatch(detectionId: number): Promise<void> {
+  async rejectFaceMatch(videoId: number, detectionId: number): Promise<void> {
     if (env.DEMO_MODE)
-      return faceRecognitionDemoService.rejectFaceMatch(detectionId);
-    await db
+      return faceRecognitionDemoService.rejectFaceMatch(videoId, detectionId);
+    const [updated] = await db
       .update(videoFaceDetectionsTable)
       .set({
         matchedCreatorId: null,
@@ -335,7 +408,20 @@ export class FaceRecognitionService {
         matchStatus: "rejected",
         updatedAt: new Date(),
       })
-      .where(eq(videoFaceDetectionsTable.id, detectionId));
+      .where(
+        and(
+          eq(videoFaceDetectionsTable.id, detectionId),
+          eq(videoFaceDetectionsTable.videoId, videoId),
+          eq(videoFaceDetectionsTable.isPublished, true)
+        )
+      )
+      .returning({ id: videoFaceDetectionsTable.id });
+
+    if (!updated) {
+      throw new NotFoundError(
+        `Detection ${detectionId} not found for video ${videoId}`
+      );
+    }
   }
 
   /**
@@ -408,7 +494,8 @@ export class FaceRecognitionService {
     videoId: number,
     rawDetections: RawFaceDetection[],
     similarityThreshold: number = env.FACE_SIMILARITY_THRESHOLD,
-    autoTagThreshold: number = env.FACE_AUTO_TAG_THRESHOLD
+    autoTagThreshold: number = env.FACE_AUTO_TAG_THRESHOLD,
+    publicationContext?: FacePublicationContext
   ): Promise<void> {
     if (env.DEMO_MODE)
       return faceRecognitionDemoService.autoMatchVideoFaces(
@@ -421,16 +508,15 @@ export class FaceRecognitionService {
       "Auto-matching video faces"
     );
 
-    if (rawDetections.length === 0) {
-      return;
-    }
-
     const creatorMatches = new Map<
       number,
       {
         creatorId: number;
         maxConfidence: number;
-        detections: RawFaceDetection[];
+        detections: Array<{
+          detection: RawFaceDetection;
+          match: SimilarityMatch;
+        }>;
       }
     >();
 
@@ -455,12 +541,10 @@ export class FaceRecognitionService {
           }
 
           const group = creatorMatches.get(creatorId)!;
-          group.detections.push(detection);
+          group.detections.push({ detection, match: bestMatch });
           if (bestMatch.similarity > group.maxConfidence) {
             group.maxConfidence = bestMatch.similarity;
           }
-
-          (detection as any)._matchInfo = bestMatch;
         }
       } catch (error) {
         logger.error({ error }, "Failed to compute match");
@@ -468,18 +552,18 @@ export class FaceRecognitionService {
       }
     }
 
-    const detectionsToInsert: any[] = [];
-    const videoCreatorsToInsert: any[] = [];
-    const creatorsToCleanupDetections = new Set<number>();
+    const detectionsToInsert: NewVideoFaceDetection[] = [];
+    const videoCreatorsToInsert: Array<{
+      videoId: number;
+      creatorId: number;
+    }> = [];
 
     for (const group of creatorMatches.values()) {
       const { creatorId, maxConfidence, detections: groupDetections } = group;
 
       // Sort detections by match confidence (highest first)
       groupDetections.sort((a, b) => {
-        const confA = (a as any)._matchInfo.similarity;
-        const confB = (b as any)._matchInfo.similarity;
-        return confB - confA;
+        return b.match.similarity - a.match.similarity;
       });
 
       if (maxConfidence >= autoTagThreshold) {
@@ -489,10 +573,9 @@ export class FaceRecognitionService {
         );
 
         videoCreatorsToInsert.push({ videoId, creatorId });
-        creatorsToCleanupDetections.add(creatorId);
 
-        const bestDetection = groupDetections[0];
-        const matchInfo = (bestDetection as any)._matchInfo;
+        const { detection: bestDetection, match: matchInfo } =
+          groupDetections[0];
 
         detectionsToInsert.push({
           videoId,
@@ -504,8 +587,6 @@ export class FaceRecognitionService {
           bboxX2: bestDetection.bbox[2],
           bboxY2: bestDetection.bbox[3],
           detScore: bestDetection.detScore,
-          estimatedAge: bestDetection.estimatedAge,
-          estimatedGender: bestDetection.estimatedGender,
           matchedCreatorId: matchInfo.creator_id,
           matchConfidence: matchInfo.similarity,
           matchStatus: "confirmed" as const,
@@ -514,8 +595,8 @@ export class FaceRecognitionService {
         const limit = env.FACE_MAX_PENDING_PER_VIDEO;
         const detectionsToSave = groupDetections.slice(0, limit);
 
-        for (const detection of detectionsToSave) {
-          const matchInfo = (detection as any)._matchInfo;
+        for (const matchedDetection of detectionsToSave) {
+          const { detection, match: matchInfo } = matchedDetection;
           const matchStatus =
             matchInfo.similarity >= autoTagThreshold ? "confirmed" : "pending";
 
@@ -529,8 +610,6 @@ export class FaceRecognitionService {
             bboxX2: detection.bbox[2],
             bboxY2: detection.bbox[3],
             detScore: detection.detScore,
-            estimatedAge: detection.estimatedAge,
-            estimatedGender: detection.estimatedGender,
             matchedCreatorId: matchInfo.creator_id,
             matchConfidence: matchInfo.similarity,
             matchStatus: matchStatus as any,
@@ -539,42 +618,68 @@ export class FaceRecognitionService {
       }
     }
 
-    if (
-      videoCreatorsToInsert.length > 0 ||
-      creatorsToCleanupDetections.size > 0 ||
-      detectionsToInsert.length > 0
-    ) {
-      await db.transaction(async (tx) => {
-        // 1. Tag creators
-        if (videoCreatorsToInsert.length > 0) {
-          await tx
-            .insert(videoCreatorsTable)
-            .values(videoCreatorsToInsert)
-            .onConflictDoNothing();
-        }
+    await db.transaction(async (tx) => {
+      await publicationContext?.guard(tx);
 
-        // 2. Clean up old detections for matched creators
-        if (creatorsToCleanupDetections.size > 0) {
-          const creatorIdsArray = Array.from(creatorsToCleanupDetections);
-          await tx
-            .delete(videoFaceDetectionsTable)
-            .where(
-              and(
-                eq(videoFaceDetectionsTable.videoId, videoId),
-                inArray(
-                  videoFaceDetectionsTable.matchedCreatorId,
-                  creatorIdsArray
-                )
-              )
-            );
-        }
+      if (videoCreatorsToInsert.length > 0) {
+        await tx
+          .insert(videoCreatorsTable)
+          .values(videoCreatorsToInsert)
+          .onConflictDoNothing();
+      }
 
-        // 3. Batch insert face detections
-        if (detectionsToInsert.length > 0) {
-          await tx.insert(videoFaceDetectionsTable).values(detectionsToInsert);
-        }
-      });
-    }
+      if (detectionsToInsert.length > 0) {
+        await tx.insert(videoFaceDetectionsTable).values(
+          detectionsToInsert.map((detection) => ({
+            ...detection,
+            faceExtractionJobId: publicationContext?.runId ?? null,
+            isPublished: !publicationContext,
+          }))
+        );
+      }
+
+      if (!publicationContext) return;
+
+      await tx
+        .update(videoFaceDetectionsTable)
+        .set({ isPublished: false })
+        .where(eq(videoFaceDetectionsTable.videoId, videoId));
+
+      await tx
+        .update(videoFaceDetectionsTable)
+        .set({ isPublished: true })
+        .where(
+          and(
+            eq(videoFaceDetectionsTable.videoId, videoId),
+            eq(
+              videoFaceDetectionsTable.faceExtractionJobId,
+              publicationContext.runId
+            )
+          )
+        );
+
+      await tx
+        .update(faceExtractionJobsTable)
+        .set({ isPublished: false })
+        .where(eq(faceExtractionJobsTable.videoId, videoId));
+
+      const publishedRuns = await tx
+        .update(faceExtractionJobsTable)
+        .set({ isPublished: true })
+        .where(
+          and(
+            eq(faceExtractionJobsTable.id, publicationContext.runId),
+            eq(faceExtractionJobsTable.videoId, videoId)
+          )
+        )
+        .returning({ id: faceExtractionJobsTable.id });
+
+      if (publishedRuns.length !== 1) {
+        throw new NotFoundError(
+          `Face extraction run ${publicationContext.runId} not found for video ${videoId}`
+        );
+      }
+    });
   }
 
   /**
@@ -622,14 +727,20 @@ export class FaceRecognitionService {
       );
       logger.info({ videoId }, "Storyboard assembled from extracted frames");
 
-      const faceQueue = getFaceExtractionQueue();
-      await faceQueue.queueExtraction(videoId, result.frames);
+      const faceQueue = getDurableFaceExtractionQueue();
+      await faceQueue.queueExtraction(videoId);
       logger.info({ videoId }, "Face extraction queued");
-    } catch (error) {
-      await frameService.cleanupFrames(result.tempDirectory, {
-        removeDirectory: true,
-      });
-      throw error;
+    } finally {
+      try {
+        await frameService.cleanupFrames(result.tempDirectory, {
+          removeDirectory: true,
+        });
+      } catch (cleanupError) {
+        logger.warn(
+          { error: cleanupError, videoId },
+          "Failed to clean shared video-processing frames"
+        );
+      }
     }
   }
 
@@ -639,73 +750,21 @@ export class FaceRecognitionService {
    */
   async processFacesOnly(
     videoId: number,
-    videoPath: string,
-    videoDuration: number
+    _videoPath: string,
+    _videoDuration: number
   ): Promise<void> {
     if (env.DEMO_MODE)
       return faceRecognitionDemoService.processFacesOnly(videoId);
-    const totalStart = Date.now();
     logger.info({ videoId }, "Starting face-only processing");
-
-    const frameService = getFrameExtractionService();
-    const extractionStart = Date.now();
-    const result = await frameService.extractFrames({
-      videoId,
-      videoPath,
-      videoDuration,
-      intervalSeconds: env.FACE_EXTRACTION_INTERVAL_SECONDS,
-      keyframesOnly: true,
-      targetWidth: env.FACE_EXTRACTION_MAX_WIDTH,
-      outputFormat: env.FACE_EXTRACTION_FORMAT,
-      quality: env.FACE_EXTRACTION_QUALITY,
-      prefix: "face",
-    });
-
+    const faceQueue = getDurableFaceExtractionQueue();
+    const queueStart = Date.now();
+    await faceQueue.queueExtraction(videoId);
     await recordPerfStage(
       { scenario: "face", videoId, mode: "process_faces_only" },
-      "extract_frames",
-      Date.now() - extractionStart,
-      {
-        frameCount: result.totalFrames,
-        intervalSeconds: env.FACE_EXTRACTION_INTERVAL_SECONDS,
-        targetWidth: env.FACE_EXTRACTION_MAX_WIDTH,
-      }
+      "queue_extraction",
+      Date.now() - queueStart
     );
-
-    logger.info(
-      {
-        videoId,
-        framesExtracted: result.totalFrames,
-        intervalSeconds: env.FACE_EXTRACTION_INTERVAL_SECONDS,
-        targetWidth: env.FACE_EXTRACTION_MAX_WIDTH,
-      },
-      "Face-only frames extracted"
-    );
-
-    try {
-      const faceQueue = getFaceExtractionQueue();
-      const queueStart = Date.now();
-      await faceQueue.queueExtraction(videoId, result.frames);
-      await recordPerfStage(
-        { scenario: "face", videoId, mode: "process_faces_only" },
-        "queue_extraction",
-        Date.now() - queueStart,
-        { frameCount: result.totalFrames }
-      );
-      logger.info({ videoId }, "Face-only extraction queued");
-
-      await recordPerfStage(
-        { scenario: "face", videoId, mode: "process_faces_only" },
-        "total",
-        Date.now() - totalStart,
-        { frameCount: result.totalFrames }
-      );
-    } catch (error) {
-      await frameService.cleanupFrames(result.tempDirectory, {
-        removeDirectory: true,
-      });
-      throw error;
-    }
+    logger.info({ videoId }, "Face-only extraction queued");
   }
 
   /**
@@ -714,12 +773,7 @@ export class FaceRecognitionService {
   async getFaceExtractionJob(videoId: number) {
     if (env.DEMO_MODE)
       return faceRecognitionDemoService.getFaceExtractionJob(videoId);
-    const job = await db
-      .select()
-      .from(faceExtractionJobsTable)
-      .where(eq(faceExtractionJobsTable.videoId, videoId))
-      .limit(1)
-      .then((rows) => rows[0] || null);
+    const job = await getDurableFaceExtractionQueue().getLatestJob(videoId);
 
     if (!job) {
       throw new NotFoundError(
@@ -735,7 +789,7 @@ export class FaceRecognitionService {
    */
   async clearQueue(): Promise<void> {
     if (env.DEMO_MODE) return faceRecognitionDemoService.clearQueue();
-    const queue = getFaceExtractionQueue();
+    const queue = getDurableFaceExtractionQueue();
     await queue.clearQueue();
   }
 
@@ -760,6 +814,7 @@ export class FaceRecognitionService {
         AVG(match_confidence) as avg_confidence
       FROM ${videoFaceDetectionsTable}
       WHERE matched_creator_id = ${creatorId}
+        AND is_published = true
         AND match_status IN ('confirmed', 'pending')
         AND match_confidence >= ${minConfidence}
       GROUP BY video_id

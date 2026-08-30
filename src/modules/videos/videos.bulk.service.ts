@@ -162,7 +162,12 @@ export class VideosBulkService {
             videoFaceDetectionsTable,
             eq(faceImagesTable.detectionId, videoFaceDetectionsTable.id)
           )
-          .where(inArray(videoFaceDetectionsTable.videoId, videoIds)),
+          .where(
+            and(
+              inArray(videoFaceDetectionsTable.videoId, videoIds),
+              eq(videoFaceDetectionsTable.isPublished, true)
+            )
+          ),
         db
           .select({ filePath: artworkAssetsTable.filePath })
           .from(artworkAssetsTable)
@@ -611,12 +616,20 @@ export class VideosBulkService {
 
         // Add studios
         if (actions.addStudioIds && actions.addStudioIds.length > 0) {
-          studiosAdded = await studioAssignmentService.linkMany(videoIds, actions.addStudioIds, tx);
+          studiosAdded = await studioAssignmentService.linkMany(
+            videoIds,
+            actions.addStudioIds,
+            tx
+          );
         }
 
         // Remove studios
         if (actions.removeStudioIds && actions.removeStudioIds.length > 0) {
-          studiosRemoved = await studioAssignmentService.unlinkMany(videoIds, actions.removeStudioIds, tx);
+          studiosRemoved = await studioAssignmentService.unlinkMany(
+            videoIds,
+            actions.removeStudioIds,
+            tx
+          );
         }
       } catch (error) {
         errors++;

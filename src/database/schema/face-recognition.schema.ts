@@ -7,9 +7,13 @@ import {
   boolean,
   timestamp,
   index,
+  jsonb,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { videosTable } from "./videos.schema";
 import { creatorsTable } from "./organization.schema";
+import { durableJobsTable } from "./durable-jobs.schema";
 
 // Creator face embeddings (reference faces for known creators)
 export const creatorFaceEmbeddingsTable = pgTable(
@@ -35,10 +39,6 @@ export const creatorFaceEmbeddingsTable = pgTable(
     detScore: real("det_score"), // Detection confidence (0-1)
     isPrimary: boolean("is_primary").default(false).notNull(), // Primary reference face for creator
 
-    // Face attributes from InsightFace
-    estimatedAge: integer("estimated_age"),
-    estimatedGender: text("estimated_gender"), // 'M' or 'F'
-
     // Thumbnail image path
     thumbnailPath: text("thumbnail_path"),
 
@@ -47,16 +47,16 @@ export const creatorFaceEmbeddingsTable = pgTable(
   },
   (table) => ({
     creatorIdx: index("idx_creator_face_embeddings_creator").on(
-      table.creatorId,
+      table.creatorId
     ),
     sourceVideoIdx: index("idx_creator_face_embeddings_source_video").on(
-      table.sourceVideoId,
+      table.sourceVideoId
     ),
     isPrimaryIdx: index("idx_creator_face_embeddings_is_primary").on(
-      table.isPrimary,
+      table.isPrimary
     ),
     // HNSW index for fast similarity search will be created via raw SQL migration
-  }),
+  })
 );
 
 // Video face detections (faces detected in videos with timestamps)
@@ -67,6 +67,10 @@ export const videoFaceDetectionsTable = pgTable(
     videoId: integer("video_id")
       .notNull()
       .references(() => videosTable.id, { onDelete: "cascade" }),
+    faceExtractionJobId: integer("face_extraction_job_id").references(
+      () => faceExtractionJobsTable.id,
+      { onDelete: "cascade" }
+    ),
 
     // 512-dimensional face embedding from InsightFace
     // Using text type as workaround - will be cast to vector(512) in queries
@@ -88,32 +92,33 @@ export const videoFaceDetectionsTable = pgTable(
     // Automatic matching
     matchedCreatorId: integer("matched_creator_id").references(
       () => creatorsTable.id,
-      { onDelete: "set null" },
+      { onDelete: "set null" }
     ),
     matchConfidence: real("match_confidence"), // Cosine similarity score (0-1)
     matchStatus: text("match_status").default("pending").notNull(), // 'pending', 'confirmed', 'rejected', 'no_match'
-
-    // Face attributes from InsightFace
-    estimatedAge: integer("estimated_age"),
-    estimatedGender: text("estimated_gender"), // 'M' or 'F'
+    // Legacy rows remain visible; new runs stage rows as false until publication.
+    isPublished: boolean("is_published").default(true).notNull(),
 
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => ({
     videoIdx: index("idx_video_face_detections_video").on(table.videoId),
+    extractionJobIdx: index("idx_video_face_detections_extraction_job").on(
+      table.faceExtractionJobId
+    ),
     timestampIdx: index("idx_video_face_detections_timestamp").on(
       table.videoId,
-      table.timestampSeconds,
+      table.timestampSeconds
     ),
     matchedCreatorIdx: index("idx_video_face_detections_matched_creator").on(
-      table.matchedCreatorId,
+      table.matchedCreatorId
     ),
     matchStatusIdx: index("idx_video_face_detections_match_status").on(
-      table.matchStatus,
+      table.matchStatus
     ),
     // HNSW index for fast similarity search will be created via raw SQL migration
-  }),
+  })
 );
 
 // Face extraction jobs (tracking for background queue)
@@ -123,8 +128,14 @@ export const faceExtractionJobsTable = pgTable(
     id: serial("id").primaryKey(),
     videoId: integer("video_id")
       .notNull()
-      .unique()
       .references(() => videosTable.id, { onDelete: "cascade" }),
+    // Nullable for extraction runs created before the durable queue existed.
+    durableJobId: integer("durable_job_id")
+      .unique()
+      .references(() => durableJobsTable.id, { onDelete: "cascade" }),
+    sourceFingerprint: text("source_fingerprint"),
+    config: jsonb("config").$type<Record<string, unknown>>(),
+    isPublished: boolean("is_published").default(false).notNull(),
 
     // Job status
     status: text("status").default("pending").notNull(), // 'pending', 'processing', 'completed', 'failed', 'skipped'
@@ -148,9 +159,12 @@ export const faceExtractionJobsTable = pgTable(
     videoIdx: index("idx_face_extraction_jobs_video").on(table.videoId),
     statusIdx: index("idx_face_extraction_jobs_status").on(table.status),
     createdAtIdx: index("idx_face_extraction_jobs_created_at").on(
-      table.createdAt,
+      table.createdAt
     ),
-  }),
+    activeVideoUnique: uniqueIndex("uq_face_extraction_jobs_active_video")
+      .on(table.videoId)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
+  })
 );
 
 // Face images (stored cropped face thumbnails)
@@ -173,7 +187,7 @@ export const faceImagesTable = pgTable(
   },
   (table) => ({
     detectionIdx: index("idx_face_images_detection").on(table.detectionId),
-  }),
+  })
 );
 
 // Inferred types

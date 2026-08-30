@@ -1,0 +1,2 @@
+ALTER TABLE "content_analysis_runs" DROP CONSTRAINT "content_analysis_runs_profile_check";--> statement-breakpoint
+ALTER TABLE "content_analysis_runs" ADD CONSTRAINT "content_analysis_runs_profile_check" CHECK ("content_analysis_runs"."profile" IN ('fast', 'balanced', 'thorough'));

@@ -153,8 +153,6 @@ const createFaceEmbedding = (creatorId = 1, id = 1) => ({
   sourceTimestampSeconds: null,
   detScore: 0.99,
   isPrimary: true,
-  estimatedAge: 30,
-  estimatedGender: "F",
   thumbnailPath: TEST_THUMBNAIL_PATH,
   createdAt: new Date(TEST_NOW),
   updatedAt: new Date(TEST_NOW),
@@ -163,6 +161,8 @@ const createFaceEmbedding = (creatorId = 1, id = 1) => ({
 const createFaceDetection = (videoId = 1) => ({
   id: 1,
   videoId,
+  faceExtractionJobId: null,
+  isPublished: true,
   embedding: JSON.stringify([0.1, 0.2, 0.3]),
   timestampSeconds: 12,
   frameIndex: 3,
@@ -174,8 +174,6 @@ const createFaceDetection = (videoId = 1) => ({
   matchedCreatorId: null,
   matchConfidence: 0.92,
   matchStatus: "confirmed",
-  estimatedAge: 30,
-  estimatedGender: "F",
   createdAt: new Date(TEST_NOW),
   updatedAt: new Date(TEST_NOW),
 });
@@ -186,9 +184,7 @@ export type TestApp = {
   authCookie: string;
   userId: number;
   inject: AppInstance["inject"];
-  authInject: (
-    options: InjectOptions,
-  ) => Promise<LightMyRequestResponse>;
+  authInject: (options: InjectOptions) => Promise<LightMyRequestResponse>;
   close: () => Promise<void>;
 };
 
@@ -202,28 +198,32 @@ function installExternalServiceMocks(): void {
     default: {
       setFfmpegPath: mock(() => undefined),
       setFfprobePath: mock(() => undefined),
-      ffprobe: mock((_path: string, callback: (error: Error | null, metadata: unknown) => void) =>
-        callback(null, {
-          streams: [
-            {
-              codec_type: "video",
-              codec_name: "h264",
-              width: 1920,
-              height: 1080,
-              r_frame_rate: "30/1",
+      ffprobe: mock(
+        (
+          _path: string,
+          callback: (error: Error | null, metadata: unknown) => void
+        ) =>
+          callback(null, {
+            streams: [
+              {
+                codec_type: "video",
+                codec_name: "h264",
+                width: 1920,
+                height: 1080,
+                r_frame_rate: "30/1",
+              },
+              {
+                codec_type: "audio",
+                codec_name: "aac",
+                channels: 2,
+                sample_rate: "48000",
+              },
+            ],
+            format: {
+              duration: "120",
+              bit_rate: "8000000",
             },
-            {
-              codec_type: "audio",
-              codec_name: "aac",
-              channels: 2,
-              sample_rate: "48000",
-            },
-          ],
-          format: {
-            duration: "120",
-            bit_rate: "8000000",
-          },
-        }),
+          })
       ),
     },
   }));
@@ -232,9 +232,8 @@ function installExternalServiceMocks(): void {
     watcherService: {
       scanDirectory: mock(async () => undefined),
       startScan: mock(async (directoryId: number) => {
-        const { directoryScansService } = await import(
-          "@/modules/directories/directory-scans.service"
-        );
+        const { directoryScansService } =
+          await import("@/modules/directories/directory-scans.service");
         const run = await directoryScansService.create(directoryId);
         const result = {
           files_found: 0,
@@ -256,18 +255,22 @@ function installExternalServiceMocks(): void {
   mock.module("@/modules/conversion/conversion.service", () => ({
     conversionService: {
       createJob: mock(async (input: { video_id: number; preset: string }) =>
-        createConversionJob({ video_id: input.video_id, preset: input.preset }),
+        createConversionJob({ video_id: input.video_id, preset: input.preset })
       ),
       bulkCreateJobs: mock(
-        async (input: { videoIds: number[]; preset: string; batchId: string }) =>
+        async (input: {
+          videoIds: number[];
+          preset: string;
+          batchId: string;
+        }) =>
           input.videoIds.map((videoId, index) =>
             createConversionJob({
               id: index + 1,
               video_id: videoId,
               preset: input.preset,
               batch_id: input.batchId,
-            }),
-          ),
+            })
+          )
       ),
       getQueue: mock(async () => [createConversionJob()]),
       listByVideoId: mock(async (videoId: number) => [
@@ -342,10 +345,10 @@ function installExternalServiceMocks(): void {
           output_size_bytes: 3,
           progress_percent: 100,
           completed_at: TEST_NOW,
-        }),
+        })
       ),
       cancel: mock(async (id: number) =>
-        createConversionJob({ id, status: "cancelled" }),
+        createConversionJob({ id, status: "cancelled" })
       ),
       delete: mock(async () => undefined),
       getActiveConversions: mock(async () => [
@@ -399,7 +402,10 @@ function installExternalServiceMocks(): void {
       delete: mock(async () => undefined),
       findByVideoId: mock(async (videoId: number) => createStoryboard(videoId)),
       findById: mock(async () => createStoryboard()),
-      getVttContent: mock(async () => "WEBVTT\n\n00:00.000 --> 00:10.000\nsprite.jpg#xywh=0,0,160,90\n"),
+      getVttContent: mock(
+        async () =>
+          "WEBVTT\n\n00:00.000 --> 00:10.000\nsprite.jpg#xywh=0,0,160,90\n"
+      ),
       queueGenerate: mock(async () => undefined),
       getSpriteAsset: mock(async () => ({
         contentType: "image/jpeg",
@@ -504,70 +510,78 @@ function installExternalServiceMocks(): void {
     },
   }));
 
-  mock.module("@/modules/multiplayer-remote/multiplayer-remote.service", () => ({
-    multiplayerRemoteService: {
-      registerDisplayDevice: mock(async () => ({
-        displayDevice: createDisplayDevice(),
-        deviceSecret: "x".repeat(32),
-      })),
-      createSession: mock(async () => createRemoteSession()),
-      getSession: mock(async () => createRemoteSession()),
-      closeSession: mock(async () => undefined),
-      pair: mock(async () => ({
-        sessionId: 1,
-        joinRequest: createRemoteJoinRequest(),
-      })),
-      discoverTrustedSessions: mock(async () => ({
-        trustedDevice: createTrustedDevice(),
-        sessions: [
-          {
-            id: 1,
-            ownerUserId: 1,
-            displayClientId: "display-client",
-            status: "waiting_for_remote",
-            displayConnectedAt: TEST_NOW,
-            displayLastSeenAt: TEST_NOW,
-            lastState: createRemoteSnapshot(),
-            protocolVersion: 1,
-            createdAt: TEST_NOW,
-            updatedAt: TEST_NOW,
-            displayDevice: createDisplayDevice(),
-          },
-        ],
-      })),
-      connectTrustedDevice: mock(async () => ({
-        session: createRemoteSession({ status: "active" }),
-        trustedDevice: createTrustedDevice(),
-      })),
-      getPendingJoinRequestForDisplay: mock(async () =>
-        createRemoteJoinRequest(),
-      ),
-      approveJoinRequest: mock(async () =>
-        createRemoteSession({ status: "active" }),
-      ),
-      rejectJoinRequest: mock(async () =>
-        createRemoteSession({ status: "waiting_for_remote" }),
-      ),
-    },
-  }));
+  mock.module(
+    "@/modules/multiplayer-remote/multiplayer-remote.service",
+    () => ({
+      multiplayerRemoteService: {
+        registerDisplayDevice: mock(async () => ({
+          displayDevice: createDisplayDevice(),
+          deviceSecret: "x".repeat(32),
+        })),
+        createSession: mock(async () => createRemoteSession()),
+        getSession: mock(async () => createRemoteSession()),
+        closeSession: mock(async () => undefined),
+        pair: mock(async () => ({
+          sessionId: 1,
+          joinRequest: createRemoteJoinRequest(),
+        })),
+        discoverTrustedSessions: mock(async () => ({
+          trustedDevice: createTrustedDevice(),
+          sessions: [
+            {
+              id: 1,
+              ownerUserId: 1,
+              displayClientId: "display-client",
+              status: "waiting_for_remote",
+              displayConnectedAt: TEST_NOW,
+              displayLastSeenAt: TEST_NOW,
+              lastState: createRemoteSnapshot(),
+              protocolVersion: 1,
+              createdAt: TEST_NOW,
+              updatedAt: TEST_NOW,
+              displayDevice: createDisplayDevice(),
+            },
+          ],
+        })),
+        connectTrustedDevice: mock(async () => ({
+          session: createRemoteSession({ status: "active" }),
+          trustedDevice: createTrustedDevice(),
+        })),
+        getPendingJoinRequestForDisplay: mock(async () =>
+          createRemoteJoinRequest()
+        ),
+        approveJoinRequest: mock(async () =>
+          createRemoteSession({ status: "active" })
+        ),
+        rejectJoinRequest: mock(async () =>
+          createRemoteSession({ status: "waiting_for_remote" })
+        ),
+      },
+    })
+  );
 
-  mock.module("@/modules/multiplayer-remote/multiplayer-remote.websocket", () => ({
-    multiplayerRemoteWebSocketService: {
-      register: mock(() => undefined),
-      closeAll: mock(() => undefined),
-      notifySessionClosed: mock(() => undefined),
-      notifyJoinRequested: mock(() => undefined),
-      notifyJoinApproved: mock(() => undefined),
-      notifyJoinRejected: mock(() => undefined),
-    },
-  }));
+  mock.module(
+    "@/modules/multiplayer-remote/multiplayer-remote.websocket",
+    () => ({
+      multiplayerRemoteWebSocketService: {
+        register: mock(() => undefined),
+        closeAll: mock(() => undefined),
+        notifySessionClosed: mock(() => undefined),
+        notifyJoinRequested: mock(() => undefined),
+        notifyJoinApproved: mock(() => undefined),
+        notifyJoinRejected: mock(() => undefined),
+      },
+    })
+  );
 
   mock.module("@/modules/events/events.service", () => ({
     eventsService: {
-      addAuthenticatedClient: mock(({ response }: { response: NodeJS.WritableStream }) => {
-        response.write?.("event: ready\ndata: {}\n\n");
-        response.end?.();
-      }),
+      addAuthenticatedClient: mock(
+        ({ response }: { response: NodeJS.WritableStream }) => {
+          response.write?.("event: ready\ndata: {}\n\n");
+          response.end?.();
+        }
+      ),
       closeAll: mock(() => undefined),
     },
   }));
@@ -575,7 +589,7 @@ function installExternalServiceMocks(): void {
   mock.module("@/modules/face-recognition/face-recognition.client", () => ({
     getFaceRecognitionClient: mock(() => ({
       healthCheck: mock(async () => ({
-        status: "ok",
+        status: "healthy",
         version: "test",
       })),
       detectFacesFromFile: mock(async () => ({
@@ -584,8 +598,6 @@ function installExternalServiceMocks(): void {
             bbox: [0.1, 0.1, 0.3, 0.4],
             det_score: 0.98,
             embedding: [0.1, 0.2, 0.3],
-            age: 30,
-            gender: "F",
           },
         ],
       })),
@@ -606,7 +618,7 @@ function installExternalServiceMocks(): void {
   mock.module("@/modules/face-recognition/face-recognition.service", () => ({
     getFaceRecognitionService: mock(() => ({
       addCreatorEmbedding: mock(async (input: { creatorId: number }) =>
-        createFaceEmbedding(input.creatorId),
+        createFaceEmbedding(input.creatorId)
       ),
       getCreatorEmbeddings: mock(async (creatorId: number) => [
         createFaceEmbedding(creatorId),
@@ -657,7 +669,7 @@ function installExternalServiceMocks(): void {
     flushTelemetry: mock(async () => undefined),
     getTelemetryDistinctId: mock(() => "test-user"),
     sanitizeTelemetryProperties: mock(
-      (properties: Record<string, unknown>) => properties,
+      (properties: Record<string, unknown>) => properties
     ),
     sanitizeTelemetryUrl: mock((url: string) => url),
     shouldCaptureLog: mock(() => false),
@@ -709,7 +721,7 @@ export async function createTestApp(): Promise<TestApp> {
 
     if (registerResponse.statusCode !== 201) {
       throw new Error(
-        `Could not create integration user: ${registerResponse.statusCode} ${registerResponse.body}`,
+        `Could not create integration user: ${registerResponse.statusCode} ${registerResponse.body}`
       );
     }
 
@@ -724,7 +736,7 @@ export async function createTestApp(): Promise<TestApp> {
 
     if (loginResponse.statusCode !== 200) {
       throw new Error(
-        `Could not authenticate integration user: ${loginResponse.statusCode} ${loginResponse.body}`,
+        `Could not authenticate integration user: ${loginResponse.statusCode} ${loginResponse.body}`
       );
     }
 
@@ -757,12 +769,11 @@ export async function createTestApp(): Promise<TestApp> {
 }
 
 export async function seedVideoFixture(
-  fileName = `fixture-${Date.now()}.mp4`,
+  fileName = `fixture-${Date.now()}.mp4`
 ): Promise<SeededVideo> {
   const { db } = await import("@/config/drizzle");
-  const { watchedDirectoriesTable, videosTable } = await import(
-    "@/database/schema"
-  );
+  const { watchedDirectoriesTable, videosTable } =
+    await import("@/database/schema");
 
   const [directory] = await db
     .insert(watchedDirectoriesTable)

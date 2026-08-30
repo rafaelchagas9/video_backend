@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { env } from "@/config/env";
 import { db } from "@/config/drizzle";
 import { videoFaceDetectionsTable } from "@/database/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getFrameExtractionService } from "@/modules/frame-extraction";
 import type {
   ArtworkEffect,
@@ -57,11 +57,11 @@ function ensureTitleFonts(): void {
   if (titleFontsLoaded) return;
   const display = GlobalFonts.registerFromPath(
     resolve(env.ARTWORK_TITLE_FONT_PATH),
-    env.ARTWORK_TITLE_FONT_FAMILY,
+    env.ARTWORK_TITLE_FONT_FAMILY
   );
   const fallback = GlobalFonts.registerFromPath(
     resolve(env.ARTWORK_TITLE_FALLBACK_FONT_PATH),
-    env.ARTWORK_TITLE_FALLBACK_FONT_FAMILY,
+    env.ARTWORK_TITLE_FALLBACK_FONT_FAMILY
   );
   if (!display || !fallback) {
     throw new Error("Artwork title fonts could not be loaded");
@@ -75,7 +75,10 @@ function titleCharacterCount(title: string): number {
 
 export function isArtworkTitleEligible(title: string): boolean {
   const normalized = title.trim().replace(/\s+/g, " ");
-  return normalized.length > 0 && titleCharacterCount(normalized) <= TITLE_MAX_CHARACTERS;
+  return (
+    normalized.length > 0 &&
+    titleCharacterCount(normalized) <= TITLE_MAX_CHARACTERS
+  );
 }
 
 function titleLineCandidates(words: string[], lineCount: number): string[][] {
@@ -101,7 +104,9 @@ function titleTracking(fontSize: number): number {
   return -fontSize * (0.012 + progress * 0.024);
 }
 
-export async function renderArtworkTitle(title: string): Promise<ArtworkTitleRender | null> {
+export async function renderArtworkTitle(
+  title: string
+): Promise<ArtworkTitleRender | null> {
   const normalized = title.trim().replace(/\s+/g, " ");
   if (!isArtworkTitleEligible(normalized)) return null;
   ensureTitleFonts();
@@ -126,16 +131,30 @@ export async function renderArtworkTitle(title: string): Promise<ArtworkTitleRen
     measuringContext.letterSpacing = `${titleTracking(fontSize) * TITLE_RENDER_SCALE}px`;
     const lineHeight = fontSize * 0.92 * TITLE_RENDER_SCALE;
 
-    for (let lineCount = 1; lineCount <= Math.min(TITLE_MAX_LINES, words.length); lineCount += 1) {
+    for (
+      let lineCount = 1;
+      lineCount <= Math.min(TITLE_MAX_LINES, words.length);
+      lineCount += 1
+    ) {
       const fitting = titleLineCandidates(words, lineCount)
         .map((lines) => {
-          const metrics = lines.map((line) => measuringContext.measureText(line));
+          const metrics = lines.map((line) =>
+            measuringContext.measureText(line)
+          );
           const widths = metrics.map((metric) => metric.width);
-          const ascent = Math.max(...metrics.map((metric) => metric.actualBoundingBoxAscent));
-          const descent = Math.max(...metrics.map((metric) => metric.actualBoundingBoxDescent));
+          const ascent = Math.max(
+            ...metrics.map((metric) => metric.actualBoundingBoxAscent)
+          );
+          const descent = Math.max(
+            ...metrics.map((metric) => metric.actualBoundingBoxDescent)
+          );
           const height = ascent + descent + lineHeight * (lines.length - 1);
-          const meanWidth = widths.reduce((sum, width) => sum + width, 0) / widths.length;
-          const raggedness = widths.reduce((sum, width) => sum + (width - meanWidth) ** 2, 0);
+          const meanWidth =
+            widths.reduce((sum, width) => sum + width, 0) / widths.length;
+          const raggedness = widths.reduce(
+            (sum, width) => sum + (width - meanWidth) ** 2,
+            0
+          );
           const lastLineWords = lines.at(-1)?.split(" ").length ?? 0;
           return {
             lines,
@@ -143,13 +162,16 @@ export async function renderArtworkTitle(title: string): Promise<ArtworkTitleRen
             ascent,
             descent,
             height,
-            score: raggedness + (lineCount > 1 && lastLineWords === 1 ? scaledFontSize ** 2 : 0),
+            score:
+              raggedness +
+              (lineCount > 1 && lastLineWords === 1 ? scaledFontSize ** 2 : 0),
           };
         })
         .filter(
           (candidate) =>
-            Math.max(...candidate.widths) <= TITLE_MAX_WIDTH * TITLE_RENDER_SCALE &&
-            candidate.height <= TITLE_MAX_HEIGHT * TITLE_RENDER_SCALE,
+            Math.max(...candidate.widths) <=
+              TITLE_MAX_WIDTH * TITLE_RENDER_SCALE &&
+            candidate.height <= TITLE_MAX_HEIGHT * TITLE_RENDER_SCALE
         )
         .sort((a, b) => a.score - b.score);
       const best = fitting[0];
@@ -172,11 +194,16 @@ export async function renderArtworkTitle(title: string): Promise<ArtworkTitleRen
   measuringContext.font = `${selected.fontSize}px "${env.ARTWORK_TITLE_FONT_FAMILY}", "${env.ARTWORK_TITLE_FALLBACK_FONT_FAMILY}"`;
   measuringContext.letterSpacing = `${titleTracking(selected.fontSize / TITLE_RENDER_SCALE) * TITLE_RENDER_SCALE}px`;
   const measuredWidth = Math.max(
-    ...selected.lines.map((line) => measuringContext.measureText(line).width),
+    ...selected.lines.map((line) => measuringContext.measureText(line).width)
   );
   const canvas = createCanvas(
     Math.ceil(measuredWidth + padding * 2),
-    Math.ceil(selected.ascent + selected.descent + selected.lineHeight * (selected.lines.length - 1) + padding * 2),
+    Math.ceil(
+      selected.ascent +
+        selected.descent +
+        selected.lineHeight * (selected.lines.length - 1) +
+        padding * 2
+    )
   );
   const context = canvas.getContext("2d");
   context.font = measuringContext.font;
@@ -186,14 +213,23 @@ export async function renderArtworkTitle(title: string): Promise<ArtworkTitleRen
   context.textRendering = "optimizeLegibility";
   context.fillStyle = "#ffffff";
   selected.lines.forEach((line, index) => {
-    context.fillText(line, padding, padding + selected.ascent + index * selected.lineHeight);
+    context.fillText(
+      line,
+      padding,
+      padding + selected.ascent + index * selected.lineHeight
+    );
   });
 
   const { data, info } = await sharp(canvas.toBuffer("image/png"))
     .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png({ compressionLevel: 9 })
     .toBuffer({ resolveWithObject: true });
-  return { buffer: data, width: info.width, height: info.height, lines: selected.lines };
+  return {
+    buffer: data,
+    width: info.width,
+    height: info.height,
+    lines: selected.lines,
+  };
 }
 
 interface FaceSignal extends NormalizedRect {
@@ -234,9 +270,11 @@ function rgbToOklch(r: number, g: number, b: number) {
   const lRoot = Math.cbrt(l);
   const mRoot = Math.cbrt(m);
   const sRoot = Math.cbrt(s);
-  const lightness = 0.2104542553 * lRoot + 0.793617785 * mRoot - 0.0040720468 * sRoot;
+  const lightness =
+    0.2104542553 * lRoot + 0.793617785 * mRoot - 0.0040720468 * sRoot;
   const a = 1.9779984951 * lRoot - 2.428592205 * mRoot + 0.4505937099 * sRoot;
-  const yellowBlue = 0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot;
+  const yellowBlue =
+    0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot;
   const chroma = Math.sqrt(a * a + yellowBlue * yellowBlue);
   const hue = (Math.atan2(yellowBlue, a) * 180) / Math.PI;
   return {
@@ -252,14 +290,23 @@ function rgbHex(r: number, g: number, b: number): string {
     .join("")}`;
 }
 
-async function rawImage(input: string | Buffer, width = 96, height = 54): Promise<RawImage> {
+async function rawImage(
+  input: string | Buffer,
+  width = 96,
+  height = 54
+): Promise<RawImage> {
   const { data, info } = await sharp(input)
     .rotate()
     .resize(width, height, { fit: "fill" })
     .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return { data, width: info.width, height: info.height, channels: info.channels };
+  return {
+    data,
+    width: info.width,
+    height: info.height,
+    channels: info.channels,
+  };
 }
 
 function pixelLuma(data: Buffer, offset: number): number {
@@ -271,12 +318,21 @@ function pixelLuma(data: Buffer, offset: number): number {
 }
 
 function rectOverlap(a: NormalizedRect, b: NormalizedRect): number {
-  const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
-  const height = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const width = Math.max(
+    0,
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
+  );
+  const height = Math.max(
+    0,
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
+  );
   return width * height;
 }
 
-function findSafeArea(raw: RawImage, faces: NormalizedRect[]): NormalizedRect | null {
+function findSafeArea(
+  raw: RawImage,
+  faces: NormalizedRect[]
+): NormalizedRect | null {
   const candidates: NormalizedRect[] = [
     { x: 0.04, y: 0.12, width: 0.42, height: 0.58 },
     { x: 0.54, y: 0.12, width: 0.42, height: 0.58 },
@@ -286,7 +342,10 @@ function findSafeArea(raw: RawImage, faces: NormalizedRect[]): NormalizedRect | 
 
   let best: { rect: NormalizedRect; score: number } | null = null;
   for (const rect of candidates) {
-    const faceOverlap = faces.reduce((sum, face) => sum + rectOverlap(rect, face), 0);
+    const faceOverlap = faces.reduce(
+      (sum, face) => sum + rectOverlap(rect, face),
+      0
+    );
     if (faceOverlap > 0.005) continue;
 
     const startX = Math.floor(rect.x * raw.width);
@@ -299,8 +358,12 @@ function findSafeArea(raw: RawImage, faces: NormalizedRect[]): NormalizedRect | 
         values.push(pixelLuma(raw.data, (y * raw.width + x) * raw.channels));
       }
     }
-    const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, values.length);
+    const mean =
+      values.reduce((sum, value) => sum + value, 0) /
+      Math.max(1, values.length);
+    const variance =
+      values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+      Math.max(1, values.length);
     const score = variance - rect.width * rect.height * 0.01;
     if (!best || score < best.score) best = { rect, score };
   }
@@ -323,8 +386,12 @@ function findSalience(raw: RawImage): NormalizedPoint {
           values.push(pixelLuma(raw.data, (y * raw.width + x) * raw.channels));
         }
       }
-      const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-      const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, values.length);
+      const mean =
+        values.reduce((sum, value) => sum + value, 0) /
+        Math.max(1, values.length);
+      const variance =
+        values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+        Math.max(1, values.length);
       if (variance > best.score) {
         best = {
           x: (column + 0.5) / columns,
@@ -337,7 +404,10 @@ function findSalience(raw: RawImage): NormalizedPoint {
   return { x: best.x, y: best.y };
 }
 
-async function analyzeFrame(path: string, faces: FaceSignal[]): Promise<FrameAnalysis> {
+async function analyzeFrame(
+  path: string,
+  faces: FaceSignal[]
+): Promise<FrameAnalysis> {
   const raw = await rawImage(path);
   const lumas: number[] = [];
   let edgeEnergy = 0;
@@ -353,24 +423,37 @@ async function analyzeFrame(path: string, faces: FaceSignal[]): Promise<FrameAna
       const r = raw.data[offset] ?? 0;
       const g = raw.data[offset + 1] ?? 0;
       const b = raw.data[offset + 2] ?? 0;
-      colorEnergy += (Math.abs(r - g) + Math.abs(g - b) + Math.abs(b - r)) / (255 * 3);
+      colorEnergy +=
+        (Math.abs(r - g) + Math.abs(g - b) + Math.abs(b - r)) / (255 * 3);
     }
   }
   const mean = lumas.reduce((sum, value) => sum + value, 0) / lumas.length;
-  const variance = lumas.reduce((sum, value) => sum + (value - mean) ** 2, 0) / lumas.length;
+  const variance =
+    lumas.reduce((sum, value) => sum + (value - mean) ** 2, 0) / lumas.length;
   const usable = mean > 0.025 && variance > 0.0005;
   const bestFace = [...faces].sort(
-    (a, b) => b.confidence * b.width * b.height - a.confidence * a.width * a.height,
+    (a, b) =>
+      b.confidence * b.width * b.height - a.confidence * a.width * a.height
   )[0];
   const faceBonus = bestFace
-    ? bestFace.confidence * (bestFace.width * bestFace.height >= 0.04 && bestFace.width * bestFace.height <= 0.35 ? 0.35 : 0.12)
+    ? bestFace.confidence *
+      (bestFace.width * bestFace.height >= 0.04 &&
+      bestFace.width * bestFace.height <= 0.35
+        ? 0.35
+        : 0.12)
     : 0;
   return {
     score: usable
-      ? variance * 5 + edgeEnergy / lumas.length + colorEnergy / lumas.length + faceBonus
+      ? variance * 5 +
+        edgeEnergy / lumas.length +
+        colorEnergy / lumas.length +
+        faceBonus
       : -1,
     focalPoint: bestFace
-      ? { x: clamp01(bestFace.x + bestFace.width / 2), y: clamp01(bestFace.y + bestFace.height / 2) }
+      ? {
+          x: clamp01(bestFace.x + bestFace.width / 2),
+          y: clamp01(bestFace.y + bestFace.height / 2),
+        }
       : findSalience(raw),
     faces: faces.map(({ x, y, width, height }) => ({ x, y, width, height })),
   };
@@ -424,13 +507,20 @@ function countBars(peaks: number[]): { lead: number; trail: number } {
   if (lead === peaks.length) return { lead: 0, trail: 0 };
 
   let trail = 0;
-  while (trail < peaks.length - lead && (peaks[peaks.length - 1 - trail] ?? 1) <= BAR_MAX_LUMA) trail += 1;
+  while (
+    trail < peaks.length - lead &&
+    (peaks[peaks.length - 1 - trail] ?? 1) <= BAR_MAX_LUMA
+  )
+    trail += 1;
 
   const larger = Math.max(lead, trail);
   const minimum = peaks.length * BAR_MIN_FRACTION;
   if (larger < minimum) return { lead: 0, trail: 0 };
   // One sampled pixel of slack, so an odd number of padding rows still passes.
-  if (larger - Math.min(lead, trail) > Math.max(1, larger * BAR_SYMMETRY_TOLERANCE)) {
+  if (
+    larger - Math.min(lead, trail) >
+    Math.max(1, larger * BAR_SYMMETRY_TOLERANCE)
+  ) {
     return { lead: 0, trail: 0 };
   }
 
@@ -447,15 +537,23 @@ function countBars(peaks: number[]): { lead: number; trail: number } {
 export async function detectContentBox(
   input: string | Buffer,
   sourceWidth: number,
-  sourceHeight: number,
+  sourceHeight: number
 ): Promise<PixelBox> {
-  const full: PixelBox = { left: 0, top: 0, width: sourceWidth, height: sourceHeight };
+  const full: PixelBox = {
+    left: 0,
+    top: 0,
+    width: sourceWidth,
+    height: sourceHeight,
+  };
   if (sourceWidth <= 0 || sourceHeight <= 0) return full;
 
   // Sampled at a fixed width with the aspect preserved, so band *positions*
   // stay proportional and a wide frame doesn't get squashed into a lie.
   const sampleWidth = 160;
-  const sampleHeight = Math.max(2, Math.round((sampleWidth * sourceHeight) / sourceWidth));
+  const sampleHeight = Math.max(
+    2,
+    Math.round((sampleWidth * sourceHeight) / sourceWidth)
+  );
   const raw = await rawImage(input, sampleWidth, sampleHeight);
 
   // Peak rather than mean luma: one bright pixel means the row is content, and
@@ -474,7 +572,8 @@ export async function detectContentBox(
 
   const vertical = countBars(rowPeaks);
   const horizontal = countBars(columnPeaks);
-  if (vertical.lead + vertical.trail + horizontal.lead + horizontal.trail === 0) return full;
+  if (vertical.lead + vertical.trail + horizontal.lead + horizontal.trail === 0)
+    return full;
 
   const scaleX = sourceWidth / raw.width;
   const scaleY = sourceHeight / raw.height;
@@ -483,7 +582,11 @@ export async function detectContentBox(
   const width = sourceWidth - left - Math.round(horizontal.trail * scaleX);
   const height = sourceHeight - top - Math.round(vertical.trail * scaleY);
 
-  if (width < sourceWidth * BAR_MIN_REMAINING || height < sourceHeight * BAR_MIN_REMAINING) return full;
+  if (
+    width < sourceWidth * BAR_MIN_REMAINING ||
+    height < sourceHeight * BAR_MIN_REMAINING
+  )
+    return full;
   return { left, top, width, height };
 }
 
@@ -494,21 +597,38 @@ export function calculateArtworkCrop(params: {
   targetHeight: number;
   focalPoint: NormalizedPoint;
   poster?: boolean;
-}): { pixels: { left: number; top: number; width: number; height: number }; normalized: NormalizedRect } {
-  const { sourceWidth, sourceHeight, targetWidth, targetHeight, focalPoint, poster = false } = params;
+}): {
+  pixels: { left: number; top: number; width: number; height: number };
+  normalized: NormalizedRect;
+} {
+  const {
+    sourceWidth,
+    sourceHeight,
+    targetWidth,
+    targetHeight,
+    focalPoint,
+    poster = false,
+  } = params;
   const targetAspect = targetWidth / targetHeight;
   const sourceAspect = sourceWidth / sourceHeight;
   let cropWidth = sourceWidth;
   let cropHeight = sourceHeight;
-  if (sourceAspect > targetAspect) cropWidth = Math.round(sourceHeight * targetAspect);
+  if (sourceAspect > targetAspect)
+    cropWidth = Math.round(sourceHeight * targetAspect);
   else cropHeight = Math.round(sourceWidth / targetAspect);
 
   const desiredFocalY = poster ? 1 / 3 : 0.5;
   const left = Math.round(
-    Math.min(sourceWidth - cropWidth, Math.max(0, focalPoint.x * sourceWidth - cropWidth / 2)),
+    Math.min(
+      sourceWidth - cropWidth,
+      Math.max(0, focalPoint.x * sourceWidth - cropWidth / 2)
+    )
   );
   const top = Math.round(
-    Math.min(sourceHeight - cropHeight, Math.max(0, focalPoint.y * sourceHeight - cropHeight * desiredFocalY)),
+    Math.min(
+      sourceHeight - cropHeight,
+      Math.max(0, focalPoint.y * sourceHeight - cropHeight * desiredFocalY)
+    )
   );
   return {
     pixels: { left, top, width: cropWidth, height: cropHeight },
@@ -521,31 +641,46 @@ export function calculateArtworkCrop(params: {
   };
 }
 
-function mapPointToCrop(point: NormalizedPoint, crop: NormalizedRect): NormalizedPoint {
+function mapPointToCrop(
+  point: NormalizedPoint,
+  crop: NormalizedRect
+): NormalizedPoint {
   return {
     x: clamp01((point.x - crop.x) / crop.width),
     y: clamp01((point.y - crop.y) / crop.height),
   };
 }
 
-function mapFacesToCrop(faces: NormalizedRect[], crop: NormalizedRect): NormalizedRect[] {
+function mapFacesToCrop(
+  faces: NormalizedRect[],
+  crop: NormalizedRect
+): NormalizedRect[] {
   return faces
     .map((face) => {
       const x1 = clamp01((face.x - crop.x) / crop.width);
       const y1 = clamp01((face.y - crop.y) / crop.height);
       const x2 = clamp01((face.x + face.width - crop.x) / crop.width);
       const y2 = clamp01((face.y + face.height - crop.y) / crop.height);
-      return { x: x1, y: y1, width: Math.max(0, x2 - x1), height: Math.max(0, y2 - y1) };
+      return {
+        x: x1,
+        y: y1,
+        width: Math.max(0, x2 - x1),
+        height: Math.max(0, y2 - y1),
+      };
     })
     .filter((face) => face.width * face.height > 0.001);
 }
 
 function scrimSvg(width: number, height: number): Buffer {
-  return Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="52%" stop-color="#000" stop-opacity="0"/><stop offset="78%" stop-color="#000" stop-opacity="0.18"/><stop offset="100%" stop-color="#000" stop-opacity="0.58"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/></svg>`);
+  return Buffer.from(
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="52%" stop-color="#000" stop-opacity="0"/><stop offset="78%" stop-color="#000" stop-opacity="0.18"/><stop offset="100%" stop-color="#000" stop-opacity="0.58"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/></svg>`
+  );
 }
 
 function vignetteSvg(width: number, height: number): Buffer {
-  return Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="v"><stop offset="68%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.22"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#v)"/></svg>`);
+  return Buffer.from(
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="v"><stop offset="68%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.22"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#v)"/></svg>`
+  );
 }
 
 function grainLayer(width: number, height: number) {
@@ -559,7 +694,11 @@ function grainLayer(width: number, height: number) {
     rgba[offset + 2] = value;
     rgba[offset + 3] = 9;
   }
-  return { input: rgba, raw: { width, height, channels: 4 as const }, blend: "overlay" as const };
+  return {
+    input: rgba,
+    raw: { width, height, channels: 4 as const },
+    blend: "overlay" as const,
+  };
 }
 
 async function analyzeOutput(buffer: Buffer, faces: NormalizedRect[]) {
@@ -579,9 +718,14 @@ async function analyzeOutput(buffer: Buffer, faces: NormalizedRect[]) {
   };
 }
 
-export async function extractArtworkPalette(buffer: Buffer): Promise<ArtworkPalette> {
+export async function extractArtworkPalette(
+  buffer: Buffer
+): Promise<ArtworkPalette> {
   const raw = await rawImage(buffer, 64, 64);
-  const buckets = new Map<string, { count: number; r: number; g: number; b: number }>();
+  const buckets = new Map<
+    string,
+    { count: number; r: number; g: number; b: number }
+  >();
   let red = 0;
   let green = 0;
   let blue = 0;
@@ -607,7 +751,13 @@ export async function extractArtworkPalette(buffer: Buffer): Promise<ArtworkPale
   const swatches = [...buckets.values()]
     .sort((a, b) => b.count - a.count)
     .slice(0, 5)
-    .map((bucket) => rgbHex(bucket.r / bucket.count, bucket.g / bucket.count, bucket.b / bucket.count));
+    .map((bucket) =>
+      rgbHex(
+        bucket.r / bucket.count,
+        bucket.g / bucket.count,
+        bucket.b / bucket.count
+      )
+    );
   const mean = { r: red / pixels, g: green / pixels, b: blue / pixels };
   const meanOklch = rgbToOklch(mean.r, mean.g, mean.b);
   return {
@@ -629,7 +779,12 @@ async function faceSignals(videoId: number): Promise<FaceSignal[]> {
       confidence: videoFaceDetectionsTable.detScore,
     })
     .from(videoFaceDetectionsTable)
-    .where(eq(videoFaceDetectionsTable.videoId, videoId));
+    .where(
+      and(
+        eq(videoFaceDetectionsTable.videoId, videoId),
+        eq(videoFaceDetectionsTable.isPublished, true)
+      )
+    );
   return rows.map((row) => ({
     timestamp: row.timestamp,
     x: row.x1,
@@ -654,16 +809,33 @@ async function selectSourceFrame(params: {
   const preferredFace = [...faces]
     .filter((face) => {
       const area = face.width * face.height;
-      return face.timestamp >= minTimestamp && face.timestamp <= maxTimestamp && area >= 0.04 && area <= 0.35;
+      return (
+        face.timestamp >= minTimestamp &&
+        face.timestamp <= maxTimestamp &&
+        area >= 0.04 &&
+        area <= 0.35
+      );
     })
     .sort((a, b) => b.confidence - a.confidence)[0];
-  const candidates = timestamp !== undefined
-    ? [Math.min(maxTimestamp, Math.max(minTimestamp, timestamp))]
-    : [preferredFace?.timestamp, ...[0.15, 0.35, 0.55, 0.75].map((position) => duration * position)]
-        .filter((value): value is number => value !== undefined)
-        .filter((value, index, values) => values.findIndex((other) => Math.abs(other - value) < 0.5) === index);
+  const candidates =
+    timestamp !== undefined
+      ? [Math.min(maxTimestamp, Math.max(minTimestamp, timestamp))]
+      : [
+          preferredFace?.timestamp,
+          ...[0.15, 0.35, 0.55, 0.75].map((position) => duration * position),
+        ]
+          .filter((value): value is number => value !== undefined)
+          .filter(
+            (value, index, values) =>
+              values.findIndex((other) => Math.abs(other - value) < 0.5) ===
+              index
+          );
 
-  let best: { path: string; timestamp: number; analysis: FrameAnalysis } | null = null;
+  let best: {
+    path: string;
+    timestamp: number;
+    analysis: FrameAnalysis;
+  } | null = null;
   for (const candidate of candidates) {
     const path = await frameExtractionService.extractFrame({
       videoPath,
@@ -672,9 +844,12 @@ async function selectSourceFrame(params: {
       outputFormat: "jpg",
       quality: 90,
     });
-    const nearbyFaces = faces.filter((face) => Math.abs(face.timestamp - candidate) <= 1);
+    const nearbyFaces = faces.filter(
+      (face) => Math.abs(face.timestamp - candidate) <= 1
+    );
     const analysis = await analyzeFrame(path, nearbyFaces);
-    if (!best || analysis.score > best.analysis.score) best = { path, timestamp: candidate, analysis };
+    if (!best || analysis.score > best.analysis.score)
+      best = { path, timestamp: candidate, analysis };
   }
   if (!best) throw new Error("No usable source frame could be extracted");
   return best;
@@ -724,20 +899,33 @@ async function renderVariant(params: {
     width: crop.pixels.width / params.sourceWidth,
     height: crop.pixels.height / params.sourceHeight,
   };
-  const scale = Math.min(1, spec.width / crop.pixels.width, spec.height / crop.pixels.height);
+  const scale = Math.min(
+    1,
+    spec.width / crop.pixels.width,
+    spec.height / crop.pixels.height
+  );
   const width = Math.max(1, Math.round(crop.pixels.width * scale));
   const height = Math.max(1, Math.round(crop.pixels.height * scale));
-  const effects = (params.effects ?? spec.effects).filter((effect) => effect !== "title");
+  const effects = (params.effects ?? spec.effects).filter(
+    (effect) => effect !== "title"
+  );
   let pipeline = sharp(params.sourcePath)
     .rotate()
     .extract(crop.pixels)
     .resize(width, height, { fit: "fill", withoutEnlargement: true });
   const overlays = [];
-  if (effects.includes("scrim")) overlays.push({ input: scrimSvg(width, height), blend: "over" as const });
+  if (effects.includes("scrim"))
+    overlays.push({ input: scrimSvg(width, height), blend: "over" as const });
   if (effects.includes("grain")) overlays.push(grainLayer(width, height));
-  if (effects.includes("vignette")) overlays.push({ input: vignetteSvg(width, height), blend: "over" as const });
+  if (effects.includes("vignette"))
+    overlays.push({
+      input: vignetteSvg(width, height),
+      blend: "over" as const,
+    });
   if (overlays.length > 0) pipeline = pipeline.composite(overlays);
-  const buffer = await pipeline.webp({ quality: env.ARTWORK_QUALITY, smartSubsample: true }).toBuffer();
+  const buffer = await pipeline
+    .webp({ quality: env.ARTWORK_QUALITY, smartSubsample: true })
+    .toBuffer();
   const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 16);
   const directory = join(env.ARTWORK_DIR, `video-${params.videoId}`);
   await mkdir(directory, { recursive: true });
@@ -772,7 +960,10 @@ async function renderTitleVariant(params: {
 }): Promise<{ asset: GeneratedArtworkAsset; buffer: Buffer } | null> {
   const rendered = await renderArtworkTitle(params.title);
   if (!rendered) return null;
-  const hash = createHash("sha256").update(rendered.buffer).digest("hex").slice(0, 16);
+  const hash = createHash("sha256")
+    .update(rendered.buffer)
+    .digest("hex")
+    .slice(0, 16);
   const directory = join(env.ARTWORK_DIR, `video-${params.videoId}`);
   await mkdir(directory, { recursive: true });
   const filePath = join(directory, `title-${hash}.png`);
@@ -812,21 +1003,31 @@ export async function generateArtworkFiles(params: {
 }): Promise<GeneratedArtworkSet> {
   const rendered: Array<{ asset: GeneratedArtworkAsset; buffer: Buffer }> = [];
   const wantsTitle = params.request.variants.includes("title");
-  const displayTitle = params.video.title?.trim() || params.video.file_name.replace(/\.[^.]+$/, "");
+  const displayTitle =
+    params.video.title?.trim() ||
+    params.video.file_name.replace(/\.[^.]+$/, "");
 
   const rasterVariants = params.request.variants.filter(
-    (variant): variant is RasterArtworkVariant => variant !== "title",
+    (variant): variant is RasterArtworkVariant => variant !== "title"
   );
   if (rasterVariants.length === 0) {
     if (!wantsTitle) return { assets: [], palette: null };
-    const title = await renderTitleVariant({ videoId: params.video.id, title: displayTitle });
+    const title = await renderTitleVariant({
+      videoId: params.video.id,
+      title: displayTitle,
+    });
     if (title) rendered.push(title);
     return { assets: rendered.map((item) => item.asset), palette: null };
   }
 
   const duration = params.video.duration_seconds;
-  if (!duration || duration <= 0) throw new Error("Video duration is unavailable");
-  const workDir = join(env.ARTWORK_DIR, ".work", `video-${params.video.id}-${randomUUID()}`);
+  if (!duration || duration <= 0)
+    throw new Error("Video duration is unavailable");
+  const workDir = join(
+    env.ARTWORK_DIR,
+    ".work",
+    `video-${params.video.id}-${randomUUID()}`
+  );
   await mkdir(workDir, { recursive: true });
   try {
     const selected = await selectSourceFrame({
@@ -839,11 +1040,16 @@ export async function generateArtworkFiles(params: {
     const metadata = await sharp(selected.path).metadata();
     const sourceWidth = metadata.width ?? params.video.width;
     const sourceHeight = metadata.height ?? params.video.height;
-    if (!sourceWidth || !sourceHeight) throw new Error("Source frame dimensions are unavailable");
+    if (!sourceWidth || !sourceHeight)
+      throw new Error("Source frame dimensions are unavailable");
 
     // Detected once per frame, not per variant — every variant has to be cut
     // from the same content box or they stop agreeing with each other.
-    const contentBox = await detectContentBox(selected.path, sourceWidth, sourceHeight);
+    const contentBox = await detectContentBox(
+      selected.path,
+      sourceWidth,
+      sourceHeight
+    );
 
     for (const variant of rasterVariants) {
       rendered.push(
@@ -858,11 +1064,14 @@ export async function generateArtworkFiles(params: {
           variant,
           effects: params.request.effects,
           contentBox,
-        }),
+        })
       );
     }
     if (wantsTitle) {
-      const title = await renderTitleVariant({ videoId: params.video.id, title: displayTitle });
+      const title = await renderTitleVariant({
+        videoId: params.video.id,
+        title: displayTitle,
+      });
       if (title) rendered.push(title);
     }
     const card = rendered.find((item) => item.asset.variant === "card");
@@ -871,7 +1080,9 @@ export async function generateArtworkFiles(params: {
       palette: card ? await extractArtworkPalette(card.buffer) : null,
     };
   } catch (error) {
-    await Promise.all(rendered.map((item) => rm(item.asset.filePath, { force: true })));
+    await Promise.all(
+      rendered.map((item) => rm(item.asset.filePath, { force: true }))
+    );
     throw error;
   } finally {
     await rm(workDir, { recursive: true, force: true });

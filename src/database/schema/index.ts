@@ -26,6 +26,14 @@ export * from "./media.schema";
 export * from "./conversion.schema";
 export * from "./edits.schema";
 
+// Generic durable background jobs
+export * from "./durable-jobs.schema";
+
+// Durable content-analysis runs and compact condensed events
+export * from "./content-analysis-runs.schema";
+export * from "./content-analysis-events.schema";
+export * from "./content-analysis-observation-chunks.schema";
+
 // Statistics Snapshots
 export * from "./stats.schema";
 

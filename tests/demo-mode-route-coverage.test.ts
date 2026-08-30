@@ -156,7 +156,72 @@ describe("demo mode runtime route coverage", () => {
     );
   });
 
-  it("requires an explicit manifest record for all 286 primary operations", () => {
+  it("returns 403 when a manual bookmark assigns another user's category", async () => {
+    const { demoSchema, getDemoDatabase } = await import("@/database/demo");
+    const timestamp = new Date().toISOString();
+    const category = getDemoDatabase()
+      .insert(demoSchema.demoBookmarkCategoriesTable)
+      .values({
+        key: "foreign-http-category",
+        name: "Foreign HTTP category",
+        kind: "custom",
+        userId: 2,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .returning({ id: demoSchema.demoBookmarkCategoriesTable.id })
+      .get();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/videos/1/bookmarks",
+      payload: {
+        timestamp_seconds: 10,
+        name: "Forbidden category",
+        category_ids: [category.id],
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: { statusCode: 403 },
+    });
+  });
+
+  it("completes the deterministic content-analysis contract without media inference", async () => {
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/videos/1/analyses/nudity",
+      headers: { "idempotency-key": "demo-content-analysis" },
+      payload: {
+        profile: "balanced",
+        categories: ["BUTTOCKS_EXPOSED"],
+      },
+    });
+    expect(started.statusCode).toBe(202);
+    expect(started.json()).toMatchObject({
+      success: true,
+      data: {
+        reused: false,
+        job: {
+          status: "completed",
+          revisions: { model: "demo-no-inference" },
+          result: { bookmark_count: 0 },
+        },
+      },
+    });
+    const location = started.headers.location;
+    expect(location).toMatch(/^\/api\/content-analysis\/jobs\/\d+$/);
+
+    const inspected = await app.inject({ method: "GET", url: location! });
+    const cancelled = await app.inject({ method: "DELETE", url: location! });
+    expect(inspected.statusCode).toBe(200);
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().data.status).toBe("completed");
+  });
+
+  it("requires an explicit manifest record for all 293 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -167,8 +232,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(286);
-    expect(manifestKeys).toHaveLength(286);
+    expect(runtimeOperationKeys).toHaveLength(293);
+    expect(manifestKeys).toHaveLength(293);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -196,7 +261,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 286,
+      allowed: 293,
       blocked: 0,
       conditional: 0,
     });
@@ -204,7 +269,7 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(175);
+    ).toHaveLength(181);
   });
 
   it("persists cleanup review progress without deleting demo media", async () => {
@@ -289,11 +354,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 121 generated HEAD counterparts", () => {
+  it("registers and classifies all 123 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(121);
+    expect(getScenarios).toHaveLength(123);
 
     for (const scenario of getScenarios) {
       expect(

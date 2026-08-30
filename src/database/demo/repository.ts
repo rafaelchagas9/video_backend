@@ -328,11 +328,12 @@ export class DemoRepository {
       "SELECT s.* FROM demo_studios s JOIN demo_video_studios vs ON vs.studio_id = s.id WHERE vs.video_id = ? ORDER BY s.name",
       id
     ).map((studio) => this.studioFromRow(studio));
-    const studioAssignmentStatus = studios.length > 0
-      ? "assigned"
-      : row.studio_absence_confirmed_at
-        ? "confirmed_none"
-        : "unknown";
+    const studioAssignmentStatus =
+      studios.length > 0
+        ? "assigned"
+        : row.studio_absence_confirmed_at
+          ? "confirmed_none"
+          : "unknown";
     const tags = this.rows(
       "SELECT t.* FROM demo_tags t JOIN demo_video_tags vt ON vt.tag_id = t.id WHERE vt.video_id = ? ORDER BY t.name",
       id
@@ -461,10 +462,15 @@ export class DemoRepository {
     filterRelation("tags", options.tagIds);
     filterRelation("creators", options.creatorIds);
     filterRelation("studios", options.studioIds);
-    if (options.hasStudio === true) list = list.filter((video) => video.studios.length > 0);
-    if (options.hasStudio === false) list = list.filter((video) => video.studios.length === 0);
+    if (options.hasStudio === true)
+      list = list.filter((video) => video.studios.length > 0);
+    if (options.hasStudio === false)
+      list = list.filter((video) => video.studios.length === 0);
     if (options.studioAssignmentStatus) {
-      list = list.filter((video) => video.studio_assignment_status === options.studioAssignmentStatus);
+      list = list.filter(
+        (video) =>
+          video.studio_assignment_status === options.studioAssignmentStatus
+      );
     }
     if (options.createdFrom) {
       const timestamp = new Date(options.createdFrom).getTime();
@@ -480,26 +486,36 @@ export class DemoRepository {
     }
     if (options.minPlayCount !== undefined) {
       list = list.filter(
-        (video) => Number(video.stats?.playCount ?? 0) >= Number(options.minPlayCount),
+        (video) =>
+          Number(video.stats?.playCount ?? 0) >= Number(options.minPlayCount)
       );
     }
     if (options.maxPlayCount !== undefined) {
       list = list.filter(
-        (video) => Number(video.stats?.playCount ?? 0) <= Number(options.maxPlayCount),
+        (video) =>
+          Number(video.stats?.playCount ?? 0) <= Number(options.maxPlayCount)
       );
     }
     if (options.lastPlayedBefore) {
       const timestamp = new Date(options.lastPlayedBefore).getTime();
       list = list.filter((video) => {
         const value = video.stats?.lastPlayedAt;
-        return value !== null && value !== undefined && new Date(value).getTime() < timestamp;
+        return (
+          value !== null &&
+          value !== undefined &&
+          new Date(value).getTime() < timestamp
+        );
       });
     }
     if (options.lastPlayedAfter) {
       const timestamp = new Date(options.lastPlayedAfter).getTime();
       list = list.filter((video) => {
         const value = video.stats?.lastPlayedAt;
-        return value !== null && value !== undefined && new Date(value).getTime() >= timestamp;
+        return (
+          value !== null &&
+          value !== undefined &&
+          new Date(value).getTime() >= timestamp
+        );
       });
     }
     const page = Number(options.page || 1);
@@ -579,20 +595,30 @@ export class DemoRepository {
 
   createBookmark(videoId: number, userId: number, input: any): any {
     this.getVideoById(videoId);
-    const timestamp = now();
-    const result = getDemoSqlite().run(
-      "INSERT INTO demo_bookmarks (video_id,user_id,timestamp_seconds,name,description,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
-      [
-        videoId,
+    const id = withDemoTransaction(() => {
+      const timestamp = now();
+      const result = getDemoSqlite().run(
+        "INSERT INTO demo_bookmarks (video_id,user_id,timestamp_seconds,end_timestamp_seconds,peak_timestamp_seconds,origin,analysis_run_id,user_modified_at,name,description,created_at,updated_at) VALUES (?,?,?,?,?,'manual',NULL,NULL,?,?,?,?)",
+        [
+          videoId,
+          userId,
+          input.timestamp_seconds,
+          input.end_timestamp_seconds ?? null,
+          input.peak_timestamp_seconds ?? null,
+          input.name,
+          input.description ?? null,
+          timestamp,
+          timestamp,
+        ]
+      );
+      this.replaceBookmarkCategories(
+        Number(result.lastInsertRowid),
         userId,
-        input.timestamp_seconds,
-        input.name,
-        input.description ?? null,
-        timestamp,
-        timestamp,
-      ]
-    );
-    return this.findBookmarkById(Number(result.lastInsertRowid));
+        input.category_ids ?? []
+      );
+      return Number(result.lastInsertRowid);
+    });
+    return this.findBookmarkById(id);
   }
   findBookmarkById(id: number): any | null {
     const item = this.row("SELECT * FROM demo_bookmarks WHERE id = ?", id);
@@ -604,8 +630,33 @@ export class DemoRepository {
       video_id: Number(item.video_id),
       user_id: Number(item.user_id),
       timestamp_seconds: Number(item.timestamp_seconds),
+      end_timestamp_seconds:
+        item.end_timestamp_seconds === null
+          ? null
+          : Number(item.end_timestamp_seconds),
+      peak_timestamp_seconds:
+        item.peak_timestamp_seconds === null
+          ? null
+          : Number(item.peak_timestamp_seconds),
+      origin: item.origin,
+      analysis_run_id:
+        item.analysis_run_id === null ? null : Number(item.analysis_run_id),
+      user_modified_at: item.user_modified_at,
+      is_user_edited: item.user_modified_at !== null,
       name: item.name,
       description: item.description,
+      categories: this.rows(
+        "SELECT category.id,category.key,category.name,category.kind,assignment.confidence,assignment.provider_label FROM demo_bookmark_category_assignments assignment INNER JOIN demo_bookmark_categories category ON category.id=assignment.category_id WHERE assignment.bookmark_id=? ORDER BY category.key",
+        Number(item.id)
+      ).map((category) => ({
+        id: Number(category.id),
+        key: category.key,
+        name: category.name,
+        kind: category.kind,
+        confidence:
+          category.confidence === null ? null : Number(category.confidence),
+        provider_label: category.provider_label,
+      })),
       created_at: item.created_at,
       updated_at: item.updated_at,
     };
@@ -625,17 +676,65 @@ export class DemoRepository {
   updateBookmark(id: number, input: any): any | null {
     const current = this.findBookmarkById(id);
     if (!current) return null;
-    getDemoSqlite().run(
-      "UPDATE demo_bookmarks SET timestamp_seconds=?,name=?,description=?,updated_at=? WHERE id=?",
-      [
-        input.timestamp_seconds ?? current.timestamp_seconds,
-        input.name ?? current.name,
-        input.description ?? current.description,
-        now(),
-        id,
-      ]
-    );
+    withDemoTransaction(() => {
+      const timestamp = now();
+      getDemoSqlite().run(
+        "UPDATE demo_bookmarks SET timestamp_seconds=?,end_timestamp_seconds=?,peak_timestamp_seconds=?,name=?,description=?,user_modified_at=?,updated_at=? WHERE id=?",
+        [
+          input.timestamp_seconds ?? current.timestamp_seconds,
+          input.end_timestamp_seconds !== undefined
+            ? input.end_timestamp_seconds
+            : current.end_timestamp_seconds,
+          input.peak_timestamp_seconds !== undefined
+            ? input.peak_timestamp_seconds
+            : current.peak_timestamp_seconds,
+          input.name ?? current.name,
+          input.description !== undefined
+            ? input.description
+            : current.description,
+          current.origin === "automatic"
+            ? (current.user_modified_at ?? timestamp)
+            : current.user_modified_at,
+          timestamp,
+          id,
+        ]
+      );
+      if (input.category_ids !== undefined) {
+        this.replaceBookmarkCategories(id, current.user_id, input.category_ids);
+      }
+    });
     return this.findBookmarkById(id);
+  }
+
+  private replaceBookmarkCategories(
+    bookmarkId: number,
+    userId: number,
+    categoryIds: number[]
+  ): void {
+    if (new Set(categoryIds).size !== categoryIds.length) {
+      throw new BadRequestError("category_ids must not contain duplicates");
+    }
+    if (categoryIds.length > 0) {
+      const placeholders = categoryIds.map(() => "?").join(",");
+      const accessible = this.rows(
+        `SELECT id FROM demo_bookmark_categories WHERE id IN (${placeholders}) AND (kind='system' OR (kind='custom' AND user_id=?))`,
+        ...categoryIds,
+        userId
+      );
+      if (accessible.length !== categoryIds.length) {
+        throw new ForbiddenError(
+          "One or more bookmark categories are unavailable to this user"
+        );
+      }
+    }
+    getDemoSqlite().run(
+      "DELETE FROM demo_bookmark_category_assignments WHERE bookmark_id=?",
+      [bookmarkId]
+    );
+    const insert = getDemoSqlite().prepare(
+      "INSERT INTO demo_bookmark_category_assignments (bookmark_id,category_id,confidence,provider_label) VALUES (?,?,NULL,NULL)"
+    );
+    for (const categoryId of categoryIds) insert.run(bookmarkId, categoryId);
   }
   deleteBookmark(id: number): boolean {
     return (
@@ -1044,10 +1143,7 @@ export class DemoRepository {
     )
       throw new NotFoundError(`Video collection not found with id: ${id}`);
   }
-  listCollectionEntries(
-    collectionId: number,
-    userId = DEMO_USER_ID
-  ): any[] {
+  listCollectionEntries(collectionId: number, userId = DEMO_USER_ID): any[] {
     this.getCollectionById(collectionId, userId);
     return this.rows(
       "SELECT * FROM demo_collection_entries WHERE collection_id=? ORDER BY sequence_number,id",

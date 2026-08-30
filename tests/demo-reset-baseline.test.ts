@@ -190,13 +190,23 @@ describe("immutable demo SQLite baseline reset", () => {
     demo.demoRepository.putResource("edit-job-simulation", 888, {
       outcome: "success",
     });
+    sqlite.run(
+      `INSERT INTO demo_bookmark_categories
+       (key, name, kind, user_id, created_at, updated_at)
+       VALUES (?, ?, 'custom', ?, ?, ?)`,
+      [
+        "runtime-custom",
+        "Runtime custom",
+        1,
+        "2026-08-01T00:00:00.000Z",
+        "2026-08-01T00:00:00.000Z",
+      ]
+    );
 
     // Additive migrations may make the live schema newer than an immutable
     // baseline captured by the previous release. Missing nullable columns must
     // take their defaults instead of making startup fail on column counts.
-    sqlite.exec(
-      "ALTER TABLE demo_collections ADD COLUMN future_nullable TEXT"
-    );
+    sqlite.exec("ALTER TABLE demo_collections ADD COLUMN future_nullable TEXT");
 
     demo.resetDemoRuntimeState();
 
@@ -208,6 +218,22 @@ describe("immutable demo SQLite baseline reset", () => {
         >("SELECT future_nullable FROM demo_collections WHERE id = 1")
         .get()?.future_nullable
     ).toBeNull();
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_bookmark_categories WHERE kind='system'")
+        .get()!.count
+    ).toBe(11);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_bookmark_categories WHERE kind='custom'")
+        .get()!.count
+    ).toBe(0);
 
     expect(
       sqlite
@@ -222,9 +248,7 @@ describe("immutable demo SQLite baseline reset", () => {
         .query<
           { studio_absence_confirmed_at: string | null },
           [number]
-        >(
-          "SELECT studio_absence_confirmed_at FROM demo_videos WHERE id = ?"
-        )
+        >("SELECT studio_absence_confirmed_at FROM demo_videos WHERE id = ?")
         .get(original.reviewVideoId)?.studio_absence_confirmed_at
     ).toBeNull();
     expect(

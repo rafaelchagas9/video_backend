@@ -76,6 +76,13 @@ allowed GET /api/videos/{id}/ratings
 allowed POST /api/videos/{id}/ratings
 allowed GET /api/videos/{id}/bookmarks
 allowed POST /api/videos/{id}/bookmarks
+allowed POST /api/videos/{id}/analyses/nudity http-contract
+allowed GET /api/content-analysis/jobs/{id} http-contract
+allowed DELETE /api/content-analysis/jobs/{id} http-contract
+allowed GET /api/bookmark-categories/
+allowed POST /api/bookmark-categories/ http-contract
+allowed PATCH /api/bookmark-categories/{id} http-contract
+allowed DELETE /api/bookmark-categories/{id} http-contract
 allowed GET /api/videos/{id}/studios
 allowed PATCH /api/videos/{id}/studio-assignment http-contract
 allowed POST /api/videos/{id}/studios/{studio_id} http-contract

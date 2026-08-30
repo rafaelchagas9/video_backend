@@ -3,16 +3,53 @@
  * Interfaces for face detection, embeddings, and Python service communication
  */
 
+import type {
+  NormalizedFaceBox,
+  PixelFaceBox,
+} from "./face-recognition.coordinates";
+
+export interface CreatorFaceEmbeddingRecord {
+  id: number;
+  creatorId: number;
+  embedding: string;
+  sourceType: string;
+  sourceVideoId: number | null;
+  sourceTimestampSeconds: number | null;
+  detScore: number | null;
+  isPrimary: boolean;
+  thumbnailPath: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface VideoFaceDetectionRecord {
+  id: number;
+  videoId: number;
+  faceExtractionJobId: number | null;
+  isPublished: boolean;
+  embedding: string;
+  timestampSeconds: number;
+  frameIndex: number | null;
+  bboxX1: number;
+  bboxY1: number;
+  bboxX2: number;
+  bboxY2: number;
+  detScore: number;
+  matchedCreatorId: number | null;
+  matchConfidence: number | null;
+  matchStatus: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 /**
  * Face detection result from Python service (InsightFace)
  */
 export interface FaceDetectionResult {
-  bbox: number[]; // [x1, y1, x2, y2] bounding box coordinates
+  bbox: PixelFaceBox; // [x1, y1, x2, y2] pixels in the analyzed image
   det_score: number; // Detection confidence (0-1)
   embedding: number[]; // 512-dimensional face embedding
   landmark_2d_106?: number[][]; // 106 facial landmarks (optional)
-  age?: number; // Estimated age
-  gender?: "M" | "F"; // Estimated gender
 }
 
 /**
@@ -98,10 +135,8 @@ export interface RawFaceDetection {
   embedding: number[];
   timestampSeconds: number;
   frameIndex: number;
-  bbox: number[];
+  bbox: NormalizedFaceBox;
   detScore: number;
-  estimatedAge?: number;
-  estimatedGender?: "M" | "F";
 }
 
 /**

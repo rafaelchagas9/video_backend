@@ -5,6 +5,11 @@ import {
 } from "@/modules/video-collections/video-collections.schemas";
 import { artworkSummarySchema } from "@/modules/artwork/artwork.schemas";
 
+export {
+  bookmarkCreatedResponseSchema,
+  bookmarksResponseSchema,
+} from "@/modules/bookmarks/bookmarks.schemas";
+
 // Re-export from types for consistency
 export { updateVideoSchema } from "./videos.types";
 
@@ -75,7 +80,7 @@ export const listVideosQuerySchema = z
     ids: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).min(1).max(100).optional(),
+        z.array(z.number().int().positive()).min(1).max(100).optional()
       )
       .optional(),
     directory_id: z.coerce.number().int().positive().optional(),
@@ -137,19 +142,19 @@ export const listVideosQuerySchema = z
     creatorIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     tagIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     studioIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     matchMode: z.enum(["any", "all"]).default("any"),
@@ -163,14 +168,25 @@ export const listVideosQuerySchema = z
     hasTags: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
-    studioAssignmentStatus: z.enum(["assigned", "confirmed_none", "unknown"]).optional(),
+    studioAssignmentStatus: z
+      .enum(["assigned", "confirmed_none", "unknown"])
+      .optional(),
     hasRating: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     include: z
       .preprocess(
         parseIncludeList,
         z
-          .array(z.enum(["collection", "creators", "tags", "studios", "artwork", "stats"]))
-          .optional(),
+          .array(
+            z.enum([
+              "collection",
+              "creators",
+              "tags",
+              "studios",
+              "artwork",
+              "stats",
+            ])
+          )
+          .optional()
       )
       .optional(),
   })
@@ -253,7 +269,7 @@ export const listVideosQuerySchema = z
     },
     {
       message: "Minimum value cannot be greater than maximum value",
-    },
+    }
   );
 
 export const randomVideoQuerySchema = z
@@ -264,24 +280,26 @@ export const randomVideoQuerySchema = z
     hasTags: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
-    studioAssignmentStatus: z.enum(["assigned", "confirmed_none", "unknown"]).optional(),
+    studioAssignmentStatus: z
+      .enum(["assigned", "confirmed_none", "unknown"])
+      .optional(),
     hasRating: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     creatorIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     tagIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     studioIds: z
       .preprocess(
         parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional(),
+        z.array(z.number().int().positive()).optional()
       )
       .optional(),
     matchMode: z.enum(["any", "all"]).default("any"),
@@ -300,7 +318,7 @@ export const randomVideoQuerySchema = z
       ),
     {
       message: "Minimum value cannot be greater than maximum value",
-    },
+    }
   )
   .refine(
     (data) =>
@@ -312,7 +330,7 @@ export const randomVideoQuerySchema = z
       ),
     {
       message: "lastPlayedAfter must be before lastPlayedBefore",
-    },
+    }
   );
 
 export const creatorIdParamSchema = z.object({
@@ -357,9 +375,9 @@ export const getVideoQuerySchema = z.object({
             "studios",
             "artwork",
             "stats",
-          ]),
+          ])
         )
-        .optional(),
+        .optional()
     )
     .optional(),
 });
@@ -397,14 +415,6 @@ const ratingSchema = z.object({
   rating: z.number(),
   comment: z.string().nullable(),
   rated_at: z.string(),
-});
-
-const bookmarkSchema = z.object({
-  id: z.number(),
-  timestamp_seconds: z.number(),
-  name: z.string(),
-  description: z.string().nullable(),
-  created_at: z.string(),
 });
 
 export const studioSchema = z.object({
@@ -508,17 +518,6 @@ export const ratingCreatedResponseSchema = z.object({
   message: z.string(),
 });
 
-export const bookmarksResponseSchema = z.object({
-  success: z.literal(true),
-  data: z.array(bookmarkSchema),
-});
-
-export const bookmarkCreatedResponseSchema = z.object({
-  success: z.literal(true),
-  data: bookmarkSchema,
-  message: z.string(),
-});
-
 export const studiosResponseSchema = z.object({
   success: z.literal(true),
   data: z.array(studioSchema),
@@ -592,7 +591,7 @@ export const cleanupUnavailableSchema = z
       value.all === true,
     {
       message: "Provide one of: ids, directoryId, or all=true",
-    },
+    }
   );
 
 export const cleanupUnavailableResponseSchema = z.object({

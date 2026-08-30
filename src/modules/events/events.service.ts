@@ -66,7 +66,7 @@ class EventsService {
 
     logger.info(
       { userId, totalClients: this.clients.size },
-      "SSE client connected",
+      "SSE client connected"
     );
   }
 
@@ -77,12 +77,25 @@ class EventsService {
 
     logger.debug(
       { type: event.type, sentTo: this.clients.size },
-      "SSE broadcast sent",
+      "SSE broadcast sent"
     );
   }
 
   broadcastToAuthenticated(event: RealtimeEvent): void {
     this.broadcast(event);
+  }
+
+  broadcastToUser(userId: number, event: RealtimeEvent): void {
+    let sentTo = 0;
+    for (const client of this.clients.values()) {
+      if (client.userId !== userId) continue;
+      this.sendEventToClient(client, event);
+      sentTo += 1;
+    }
+    logger.debug(
+      { type: event.type, userId, sentTo },
+      "User-scoped SSE broadcast sent"
+    );
   }
 
   getStats(): { totalConnections: number; authenticatedConnections: number } {
@@ -144,7 +157,7 @@ class EventsService {
     } catch (error) {
       logger.warn(
         { error, clientId: client.id },
-        "Failed to write SSE event frame",
+        "Failed to write SSE event frame"
       );
       this.removeClient(client.id, "write failure");
     }
@@ -170,7 +183,7 @@ class EventsService {
         reason,
         totalClients: this.clients.size,
       },
-      "SSE client disconnected",
+      "SSE client disconnected"
     );
   }
 }

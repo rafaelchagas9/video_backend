@@ -108,7 +108,7 @@ async function preflightChecks(): Promise<boolean> {
   if (!available) {
     console.error(
       "❌ Face recognition service unavailable at:",
-      env.FACE_SERVICE_URL,
+      env.VISION_SERVICE_URL,
     );
     console.error("   Please ensure the service is running and try again.");
     return false;

@@ -1,9 +1,4 @@
-import type {
-  CreatorFaceEmbedding,
-  FaceExtractionJob,
-  FaceImage,
-  VideoFaceDetection,
-} from "@/database/schema";
+import type { FaceExtractionJob, FaceImage } from "@/database/schema";
 import {
   assertDemoAssetPath,
   demoRepository,
@@ -13,8 +8,10 @@ import {
 } from "@/database/demo";
 import { NotFoundError } from "@/utils/errors";
 import type {
+  CreatorFaceEmbeddingRecord,
   RawFaceDetection,
   SimilarityMatch,
+  VideoFaceDetectionRecord,
 } from "./face-recognition.types";
 
 const KINDS = {
@@ -78,7 +75,7 @@ export class FaceRecognitionDemoService {
       for (const [index, source] of creator.face_embeddings.entries()) {
         const payload = source as Record<string, any>;
         const id = creator.id * 1000 + index + 1;
-        const embedding: CreatorFaceEmbedding = {
+        const embedding: CreatorFaceEmbeddingRecord = {
           id,
           creatorId: creator.id,
           embedding: String(payload.embedding ?? "[]"),
@@ -89,8 +86,6 @@ export class FaceRecognitionDemoService {
           isPrimary: Boolean(
             payload.is_primary ?? payload.isPrimary ?? index === 0
           ),
-          estimatedAge: payload.estimatedAge ?? null,
-          estimatedGender: payload.estimatedGender ?? null,
           thumbnailPath:
             source.thumbnailPath ?? creator.face_thumbnail_path ?? null,
           createdAt: DEMO_DATE,
@@ -101,11 +96,13 @@ export class FaceRecognitionDemoService {
     }
     const seeded = demoRepository.listResources(
       KINDS.embedding
-    ) as CreatorFaceEmbedding[];
+    ) as CreatorFaceEmbeddingRecord[];
     for (const [index, embedding] of seeded.slice(0, 3).entries()) {
-      const detection: VideoFaceDetection = {
+      const detection: VideoFaceDetectionRecord = {
         id: index + 1,
         videoId: index + 1,
+        faceExtractionJobId: null,
+        isPublished: true,
         embedding: embedding.embedding,
         timestampSeconds: 12 + index * 7,
         frameIndex: index,
@@ -117,8 +114,6 @@ export class FaceRecognitionDemoService {
         matchedCreatorId: embedding.creatorId,
         matchConfidence: 0.91 - index * 0.03,
         matchStatus: "pending",
-        estimatedAge: embedding.estimatedAge,
-        estimatedGender: embedding.estimatedGender,
         createdAt: DEMO_DATE,
         updatedAt: DEMO_DATE,
       };
@@ -144,7 +139,7 @@ export class FaceRecognitionDemoService {
     sourceVideoId?: number;
     sourceTimestampSeconds?: number;
     isPrimary?: boolean;
-  }): Promise<CreatorFaceEmbedding> {
+  }): Promise<CreatorFaceEmbeddingRecord> {
     this.ensureSeeded();
     const creator = demoRepository.getCreatorById(params.creatorId);
     const existing = await this.getCreatorEmbeddings(params.creatorId);
@@ -162,7 +157,7 @@ export class FaceRecognitionDemoService {
       ? params.imagePath
       : creator.face_thumbnail_path;
     if (safeInput) assertDemoAssetPath(safeInput, "face embedding thumbnail");
-    const item: CreatorFaceEmbedding = {
+    const item: CreatorFaceEmbeddingRecord = {
       id,
       creatorId: params.creatorId,
       embedding: JSON.stringify(
@@ -175,8 +170,6 @@ export class FaceRecognitionDemoService {
       sourceTimestampSeconds: params.sourceTimestampSeconds ?? null,
       detScore: 0.99,
       isPrimary: params.isPrimary ?? existing.length === 0,
-      estimatedAge: null,
-      estimatedGender: null,
       thumbnailPath: safeInput ?? null,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -187,10 +180,12 @@ export class FaceRecognitionDemoService {
 
   async getCreatorEmbeddings(
     creatorId: number
-  ): Promise<CreatorFaceEmbedding[]> {
+  ): Promise<CreatorFaceEmbeddingRecord[]> {
     this.ensureSeeded();
     return (
-      demoRepository.listResources(KINDS.embedding) as CreatorFaceEmbedding[]
+      demoRepository.listResources(
+        KINDS.embedding
+      ) as CreatorFaceEmbeddingRecord[]
     )
       .filter((item) => item.creatorId === creatorId)
       .map(cloneDate)
@@ -215,8 +210,20 @@ export class FaceRecognitionDemoService {
     }
   }
 
-  async deleteCreatorEmbedding(embeddingId: number): Promise<void> {
+  async deleteCreatorEmbedding(
+    creatorId: number,
+    embeddingId: number
+  ): Promise<void> {
     this.ensureSeeded();
+    const item = demoRepository.getResource(
+      KINDS.embedding,
+      embeddingId
+    ) as CreatorFaceEmbeddingRecord | null;
+    if (!item || item.creatorId !== creatorId) {
+      throw new NotFoundError(
+        `Face embedding ${embeddingId} not found for creator ${creatorId}`
+      );
+    }
     demoRepository.deleteResource(KINDS.embedding, embeddingId);
   }
 
@@ -228,16 +235,20 @@ export class FaceRecognitionDemoService {
     const item = demoRepository.getResource(
       KINDS.embedding,
       embeddingId
-    ) as CreatorFaceEmbedding | null;
+    ) as CreatorFaceEmbeddingRecord | null;
     if (!item || item.creatorId !== creatorId || !item.thumbnailPath)
       return null;
     return resolveDemoAssetPath(item.thumbnailPath);
   }
 
-  async getVideoFaceDetections(videoId: number): Promise<VideoFaceDetection[]> {
+  async getVideoFaceDetections(
+    videoId: number
+  ): Promise<VideoFaceDetectionRecord[]> {
     this.ensureSeeded();
     return (
-      demoRepository.listResources(KINDS.detection) as VideoFaceDetection[]
+      demoRepository.listResources(
+        KINDS.detection
+      ) as VideoFaceDetectionRecord[]
     )
       .filter((item) => item.videoId === videoId)
       .map(cloneDate)
@@ -245,6 +256,7 @@ export class FaceRecognitionDemoService {
   }
 
   async confirmFaceMatch(
+    videoId: number,
     detectionId: number,
     creatorId: number
   ): Promise<void> {
@@ -252,9 +264,11 @@ export class FaceRecognitionDemoService {
     const detection = demoRepository.getResource(
       KINDS.detection,
       detectionId
-    ) as VideoFaceDetection | null;
-    if (!detection)
-      throw new NotFoundError(`Detection ${detectionId} not found`);
+    ) as VideoFaceDetectionRecord | null;
+    if (!detection || detection.videoId !== videoId)
+      throw new NotFoundError(
+        `Detection ${detectionId} not found for video ${videoId}`
+      );
     detection.matchedCreatorId = creatorId;
     detection.matchStatus = "confirmed";
     detection.updatedAt = new Date();
@@ -265,14 +279,16 @@ export class FaceRecognitionDemoService {
     );
   }
 
-  async rejectFaceMatch(detectionId: number): Promise<void> {
+  async rejectFaceMatch(videoId: number, detectionId: number): Promise<void> {
     this.ensureSeeded();
     const detection = demoRepository.getResource(
       KINDS.detection,
       detectionId
-    ) as VideoFaceDetection | null;
-    if (!detection)
-      throw new NotFoundError(`Detection ${detectionId} not found`);
+    ) as VideoFaceDetectionRecord | null;
+    if (!detection || detection.videoId !== videoId)
+      throw new NotFoundError(
+        `Detection ${detectionId} not found for video ${videoId}`
+      );
     detection.matchedCreatorId = null;
     detection.matchConfidence = null;
     detection.matchStatus = "rejected";
@@ -289,7 +305,7 @@ export class FaceRecognitionDemoService {
     const matches: SimilarityMatch[] = [];
     for (const item of demoRepository.listResources(
       KINDS.embedding
-    ) as CreatorFaceEmbedding[]) {
+    ) as CreatorFaceEmbeddingRecord[]) {
       const similarity = cosine(embedding, vector(item.embedding));
       if (similarity < threshold) continue;
       const creator = demoRepository.getCreatorById(item.creatorId);
@@ -315,9 +331,11 @@ export class FaceRecognitionDemoService {
       )[0];
       if (!match) continue;
       const id = nextId(KINDS.detection);
-      const item: VideoFaceDetection = {
+      const item: VideoFaceDetectionRecord = {
         id,
         videoId,
+        faceExtractionJobId: null,
+        isPublished: true,
         embedding: JSON.stringify(raw.embedding),
         timestampSeconds: raw.timestampSeconds,
         frameIndex: raw.frameIndex,
@@ -329,8 +347,6 @@ export class FaceRecognitionDemoService {
         matchedCreatorId: match.creator_id,
         matchConfidence: match.similarity,
         matchStatus: "pending",
-        estimatedAge: raw.estimatedAge ?? null,
-        estimatedGender: raw.estimatedGender ?? null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -348,6 +364,10 @@ export class FaceRecognitionDemoService {
     const job: FaceExtractionJob = {
       id,
       videoId,
+      durableJobId: null,
+      sourceFingerprint: null,
+      config: null,
+      isPublished: true,
       status: "completed",
       totalFrames: 1,
       processedFrames: 1,
@@ -399,7 +419,7 @@ export class FaceRecognitionDemoService {
     const grouped = new Map<number, number[]>();
     for (const item of demoRepository.listResources(
       KINDS.detection
-    ) as VideoFaceDetection[]) {
+    ) as VideoFaceDetectionRecord[]) {
       if (
         item.matchedCreatorId !== creatorId ||
         !["pending", "confirmed"].includes(item.matchStatus) ||
@@ -429,7 +449,7 @@ export class FaceRecognitionDemoService {
     const detection = demoRepository.getResource(
       KINDS.detection,
       detectionId
-    ) as VideoFaceDetection | null;
+    ) as VideoFaceDetectionRecord | null;
     if (!detection) throw new NotFoundError("Face detection not found");
     const video = demoRepository.getVideoById(detection.videoId);
     const path = video.thumbnail?.file_path;

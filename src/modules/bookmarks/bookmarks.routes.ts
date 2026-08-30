@@ -29,6 +29,7 @@ export async function bookmarksRoutes(fastify: FastifyInstance): Promise<void> {
         response: {
           200: bookmarkResponseSchema,
           401: errorResponseSchema,
+          403: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
@@ -37,7 +38,7 @@ export async function bookmarksRoutes(fastify: FastifyInstance): Promise<void> {
       const bookmark = await bookmarksService.update(
         request.params.id,
         request.user!.id,
-        request.body,
+        request.body
       );
 
       return reply.send({
@@ -45,7 +46,7 @@ export async function bookmarksRoutes(fastify: FastifyInstance): Promise<void> {
         data: bookmark,
         message: "Bookmark updated successfully",
       });
-    },
+    }
   );
 
   // Delete bookmark
@@ -60,6 +61,7 @@ export async function bookmarksRoutes(fastify: FastifyInstance): Promise<void> {
         response: {
           200: messageResponseSchema,
           401: errorResponseSchema,
+          403: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
@@ -71,6 +73,6 @@ export async function bookmarksRoutes(fastify: FastifyInstance): Promise<void> {
         success: true,
         message: "Bookmark deleted successfully",
       });
-    },
+    }
   );
 }

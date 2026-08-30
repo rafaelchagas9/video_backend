@@ -30,6 +30,7 @@ const DELETE_ORDER = [
   "demo_enrichment_suggestions",
   "demo_creator_favorites",
   "demo_favorites",
+  "demo_bookmark_category_assignments",
   "demo_bookmarks",
   "demo_ratings",
   "demo_video_stats",
@@ -178,13 +179,14 @@ export function importDemoSeedDocument(
   withDemoTransaction(() => {
     if (options.reset ?? true) {
       for (const table of DELETE_ORDER) sqlite.exec(`DELETE FROM ${table}`);
+      sqlite.exec("DELETE FROM demo_bookmark_categories WHERE kind='custom'");
     }
 
     const insertTag = sqlite.prepare(
       "INSERT INTO demo_tags (id,name,parent_id,category_id,description,color,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)"
     );
     sqlite.run(
-      "INSERT INTO demo_tag_categories (id,name,\"group\",description,created_at,updated_at) VALUES (?,?,?,?,?,?),(?,?,?,?,?,?)",
+      'INSERT INTO demo_tag_categories (id,name,"group",description,created_at,updated_at) VALUES (?,?,?,?,?,?),(?,?,?,?,?,?)',
       [
         1,
         "Genre",
@@ -217,7 +219,13 @@ export function importDemoSeedDocument(
     if (input.tags[0]) {
       sqlite.run(
         "INSERT INTO demo_tag_aliases (id,tag_id,name,note,created_at) VALUES (?,?,?,?,?)",
-        [1, 1, `${input.tags[0].name} alternative`, "Demo alias", DEMO_TIMESTAMP]
+        [
+          1,
+          1,
+          `${input.tags[0].name} alternative`,
+          "Demo alias",
+          DEMO_TIMESTAMP,
+        ]
       );
     }
 
@@ -446,7 +454,9 @@ export function importDemoSeedDocument(
         video.themes ?? null,
         1,
         null,
-        video.studioAssignmentStatus === "confirmed_none" ? DEMO_TIMESTAMP : null,
+        video.studioAssignmentStatus === "confirmed_none"
+          ? DEMO_TIMESTAMP
+          : null,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP,
         DEMO_TIMESTAMP
@@ -519,7 +529,9 @@ export function importDemoSeedDocument(
       const stats = video.stats || {};
       const activityAt =
         (stats.playCount ?? 0) > 0
-          ? new Date(Date.parse(DEMO_TIMESTAMP) + id * 60 * 60 * 1000).toISOString()
+          ? new Date(
+              Date.parse(DEMO_TIMESTAMP) + id * 60 * 60 * 1000
+            ).toISOString()
           : null;
       insertStats.run(
         DEMO_USER_ID,
@@ -705,6 +717,23 @@ export function hasDemoSeed(): boolean {
 export function ensureDemoEntityPageData(): void {
   initializeDemoDatabase();
   getDemoSqlite().exec(`
+    INSERT INTO demo_bookmark_categories
+      (key, name, kind, user_id, created_at, updated_at)
+    VALUES
+      ('BUTTOCKS_EXPOSED', 'BUTTOCKS_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('FEMALE_BREAST_EXPOSED', 'FEMALE_BREAST_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('FEMALE_GENITALIA_EXPOSED', 'FEMALE_GENITALIA_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('MALE_BREAST_EXPOSED', 'MALE_BREAST_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('ANUS_EXPOSED', 'ANUS_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('FEET_EXPOSED', 'FEET_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('ARMPITS_EXPOSED', 'ARMPITS_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('BELLY_EXPOSED', 'BELLY_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('MALE_GENITALIA_EXPOSED', 'MALE_GENITALIA_EXPOSED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('ANUS_COVERED', 'ANUS_COVERED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}'),
+      ('FEMALE_GENITALIA_COVERED', 'FEMALE_GENITALIA_COVERED', 'system', NULL, '${DEMO_TIMESTAMP}', '${DEMO_TIMESTAMP}')
+    ON CONFLICT (key) WHERE kind = 'system'
+    DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at;
+
     INSERT OR IGNORE INTO demo_tag_categories
       (id, name, "group", description, created_at, updated_at)
     VALUES

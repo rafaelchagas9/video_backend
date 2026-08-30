@@ -1,6 +1,6 @@
 # Creator Enrichment Service
 
-Python microservice (sibling to `face-service`) that discovers candidate metadata for
+Python microservice (sibling to `vision-service`) that discovers candidate metadata for
 creators — images, platform profiles, social links, aliases, bios — from external
 sources, and returns them as suggestions for **manual review** in the main app.
 

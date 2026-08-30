@@ -1,4 +1,5 @@
 import {
+  check,
   index,
   integer,
   foreignKey,
@@ -8,6 +9,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 const timestamps = {
@@ -347,17 +349,100 @@ export const demoRatingsTable = sqliteTable("demo_ratings", {
   comment: text("comment"),
   ratedAt: text("rated_at").notNull(),
 });
-export const demoBookmarksTable = sqliteTable("demo_bookmarks", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  videoId: integer("video_id")
-    .notNull()
-    .references(() => demoVideosTable.id, { onDelete: "cascade" }),
-  userId: integer("user_id").notNull(),
-  timestampSeconds: real("timestamp_seconds").notNull(),
-  name: text("name").notNull(),
-  description: text("description"),
-  ...timestamps,
-});
+export const demoBookmarksTable = sqliteTable(
+  "demo_bookmarks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    videoId: integer("video_id")
+      .notNull()
+      .references(() => demoVideosTable.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull(),
+    timestampSeconds: real("timestamp_seconds").notNull(),
+    endTimestampSeconds: real("end_timestamp_seconds"),
+    peakTimestampSeconds: real("peak_timestamp_seconds"),
+    origin: text("origin").notNull().default("manual"),
+    analysisRunId: integer("analysis_run_id"),
+    userModifiedAt: text("user_modified_at"),
+    name: text("name").notNull(),
+    description: text("description"),
+    ...timestamps,
+  },
+  (table) => [
+    index("demo_bookmarks_origin_idx").on(table.origin),
+    index("demo_bookmarks_analysis_run_idx").on(table.analysisRunId),
+    check(
+      "demo_bookmarks_origin_check",
+      sql`${table.origin} IN ('manual', 'automatic')`
+    ),
+    check(
+      "demo_bookmarks_timestamp_check",
+      sql`${table.timestampSeconds} >= 0`
+    ),
+    check(
+      "demo_bookmarks_interval_check",
+      sql`(${table.endTimestampSeconds} IS NULL AND ${table.peakTimestampSeconds} IS NULL) OR (${table.endTimestampSeconds} IS NOT NULL AND ${table.peakTimestampSeconds} IS NOT NULL AND ${table.timestampSeconds} <= ${table.peakTimestampSeconds} AND ${table.peakTimestampSeconds} <= ${table.endTimestampSeconds})`
+    ),
+    check(
+      "demo_bookmarks_provenance_check",
+      sql`(${table.origin} = 'manual' AND ${table.analysisRunId} IS NULL) OR (${table.origin} = 'automatic' AND ${table.analysisRunId} IS NOT NULL)`
+    ),
+  ]
+);
+
+export const demoBookmarkCategoriesTable = sqliteTable(
+  "demo_bookmark_categories",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("custom"),
+    userId: integer("user_id"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("demo_bookmark_categories_system_key_unique")
+      .on(table.key)
+      .where(sql`${table.kind} = 'system'`),
+    uniqueIndex("demo_bookmark_categories_custom_user_key_unique")
+      .on(table.userId, table.key)
+      .where(sql`${table.kind} = 'custom'`),
+    index("demo_bookmark_categories_user_idx").on(table.userId),
+    check(
+      "demo_bookmark_categories_ownership_check",
+      sql`(${table.kind} = 'system' AND ${table.userId} IS NULL) OR (${table.kind} = 'custom' AND ${table.userId} IS NOT NULL)`
+    ),
+    check(
+      "demo_bookmark_categories_reserved_system_key_check",
+      sql`${table.kind} = 'system' OR ${table.key} NOT IN ('BUTTOCKS_EXPOSED', 'FEMALE_BREAST_EXPOSED', 'FEMALE_GENITALIA_EXPOSED', 'MALE_BREAST_EXPOSED', 'ANUS_EXPOSED', 'FEET_EXPOSED', 'ARMPITS_EXPOSED', 'BELLY_EXPOSED', 'MALE_GENITALIA_EXPOSED', 'ANUS_COVERED', 'FEMALE_GENITALIA_COVERED')`
+    ),
+  ]
+);
+
+export const demoBookmarkCategoryAssignmentsTable = sqliteTable(
+  "demo_bookmark_category_assignments",
+  {
+    bookmarkId: integer("bookmark_id")
+      .notNull()
+      .references(() => demoBookmarksTable.id, { onDelete: "cascade" }),
+    categoryId: integer("category_id")
+      .notNull()
+      .references(() => demoBookmarkCategoriesTable.id, {
+        onDelete: "cascade",
+      }),
+    confidence: real("confidence"),
+    providerLabel: text("provider_label"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.bookmarkId, table.categoryId] }),
+    index("demo_bookmark_category_assignments_category_idx").on(
+      table.categoryId
+    ),
+    check(
+      "demo_bookmark_category_assignments_confidence_check",
+      sql`${table.confidence} IS NULL OR (${table.confidence} >= 0 AND ${table.confidence} <= 1)`
+    ),
+  ]
+);
 export const demoFavoritesTable = sqliteTable(
   "demo_favorites",
   {

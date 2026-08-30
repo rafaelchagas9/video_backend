@@ -55,7 +55,7 @@ See `.env.example` for all options. Key variables:
 | `SESSION_SECRET`               | Min 32 chars — used for cookie signing                      |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | Paths to FFmpeg binaries                                    |
 | `REDIS_URL`                    | Redis connection for job queue (optional)                   |
-| `FACE_SERVICE_URL`             | Python face service endpoint (optional)                     |
+| `VISION_SERVICE_URL`           | Python vision inference endpoint (optional)                 |
 | `DEMO_MODE`                    | Use only isolated demo assets and SQLite-backed state       |
 | `DEMO_DATABASE_PATH`           | Isolated demo SQLite file (default `demo_mode/demo.sqlite`) |
 | `DEMO_ASSETS_DIR`              | Root allowed for demo media assets (default `demo_mode`)    |
@@ -227,7 +227,8 @@ src/
 └── demo_mode/                   # Demo data generation
 ```
 
-Face recognition requires a separate Python microservice at `face-service/` (InsightFace, FastAPI port 8100). See `face-service/README.md`.
+Visual inference runs in the separate Python microservice at `vision-service/`
+(currently InsightFace, FastAPI port 8100). See `vision-service/README.md`.
 
 ## Testing
 

@@ -2,22 +2,53 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { readFileSync, existsSync } from "fs";
-import { logger } from "@/utils/logger";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { getFaceRecognitionService } from "./face-recognition.service";
 import { getFaceRecognitionClient } from "./face-recognition.client";
 import { getFaceImagesService } from "./face-images.service";
 import {
+  faceExtractionJobResponseSchema,
+  faceHealthResponseSchema,
+  faceSearchResponseSchema,
   searchByFaceSchema,
   getVideosByFaceSchema,
+  publicCreatorFaceEmbeddingResponseSchema,
+  publicCreatorFaceEmbeddingsResponseSchema,
   videoFacesResponseSchema,
+  videosByFaceResponseSchema,
 } from "./face-recognition.schemas";
 import { and, eq } from "drizzle-orm";
 import { creatorFaceEmbeddingsTable } from "@/database/schema";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
-import { captureTelemetryException } from "@/utils/telemetry";
+import type { CreatorFaceEmbeddingRecord } from "./face-recognition.types";
+
+function serializeCreatorFaceEmbedding(
+  value: CreatorFaceEmbeddingRecord,
+  creatorId: number
+) {
+  return {
+    id: value.id,
+    creatorId: value.creatorId,
+    sourceType: value.sourceType,
+    sourceVideoId: value.sourceVideoId ?? null,
+    sourceTimestampSeconds: value.sourceTimestampSeconds ?? null,
+    detScore: value.detScore ?? null,
+    isPrimary: Boolean(value.isPrimary),
+    image_url: value.thumbnailPath
+      ? `/api/creators/${creatorId}/face-embeddings/${value.id}/thumbnail`
+      : null,
+    createdAt:
+      value.createdAt instanceof Date
+        ? value.createdAt.toISOString()
+        : value.createdAt,
+    updatedAt:
+      value.updatedAt instanceof Date
+        ? value.updatedAt.toISOString()
+        : value.updatedAt,
+  };
+}
 
 export async function faceRecognitionRoutes(server: FastifyInstance) {
   const app = server.withTypeProvider<ZodTypeProvider>();
@@ -36,15 +67,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         tags: ["face-recognition"],
         summary: "Health check for face recognition service",
         response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z
-              .object({
-                status: z.string(),
-                version: z.string().optional(),
-              })
-              .catchall(z.any()),
-          }),
+          200: faceHealthResponseSchema,
         },
       },
     },
@@ -72,8 +95,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }),
         response: {
           200: z.object({
-            success: z.boolean(),
-            data: z.any(),
+            success: z.literal(true),
+            data: publicCreatorFaceEmbeddingResponseSchema.shape.data,
           }),
           400: z.object({
             success: z.boolean(),
@@ -113,23 +136,9 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         // Clean up temp file
         await Bun.file(tmpPath).delete();
 
-        // Exclude internal fields: thumbnailPath (security) and embedding (not needed by frontend)
-        const {
-          thumbnailPath,
-          embedding: _embedding,
-          ...enrichedEmbedding
-        } = embedding;
-
-        const response = {
-          ...enrichedEmbedding,
-          image_url: thumbnailPath
-            ? `/api/creators/${creatorId}/face-embeddings/${embedding.id}/thumbnail`
-            : null,
-        };
-
         return reply.send({
           success: true,
-          data: response,
+          data: serializeCreatorFaceEmbedding(embedding, creatorId),
         });
       } catch (error) {
         // Clean up temp file on error
@@ -162,8 +171,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }),
         response: {
           200: z.object({
-            success: z.boolean(),
-            data: z.any(),
+            success: z.literal(true),
+            data: publicCreatorFaceEmbeddingResponseSchema.shape.data,
           }),
         },
       },
@@ -190,7 +199,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
 
         return reply.send({
           success: true,
-          data: embedding,
+          data: serializeCreatorFaceEmbedding(embedding, creatorId),
         });
       } catch (error) {
         // Clean up temp file on error
@@ -223,8 +232,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }),
         response: {
           200: z.object({
-            success: z.boolean(),
-            data: z.any(),
+            success: z.literal(true),
+            data: publicCreatorFaceEmbeddingResponseSchema.shape.data,
           }),
           400: z.object({
             success: z.boolean(),
@@ -278,21 +287,9 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         throw error;
       }
 
-      // Exclude internal fields: thumbnailPath (security) and embedding (not needed by frontend)
-      const {
-        thumbnailPath,
-        embedding: _embedding,
-        ...enrichedEmbedding
-      } = embedding;
-
       return reply.send({
         success: true,
-        data: {
-          ...enrichedEmbedding,
-          image_url: thumbnailPath
-            ? `/api/creators/${creatorId}/face-embeddings/${embedding.id}/thumbnail`
-            : null,
-        },
+        data: serializeCreatorFaceEmbedding(embedding, creatorId),
       });
     }
   );
@@ -312,8 +309,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         }),
         response: {
           200: z.object({
-            success: z.boolean(),
-            data: z.array(z.any()),
+            success: z.literal(true),
+            data: publicCreatorFaceEmbeddingsResponseSchema.shape.data,
           }),
         },
       },
@@ -322,21 +319,9 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       const creatorId = request.params.id;
       const embeddings = await faceService.getCreatorEmbeddings(creatorId);
 
-      const enriched = embeddings.map((embedding) => {
-        // Exclude internal fields: thumbnailPath (security) and embedding (not needed by frontend)
-        const {
-          thumbnailPath,
-          embedding: _embedding,
-          ...enrichedEmbedding
-        } = embedding;
-
-        return {
-          ...enrichedEmbedding,
-          image_url: thumbnailPath
-            ? `/api/creators/${creatorId}/face-embeddings/${embedding.id}/thumbnail`
-            : null,
-        };
-      });
+      const enriched = embeddings.map((embedding) =>
+        serializeCreatorFaceEmbedding(embedding, creatorId)
+      );
 
       return reply.send({
         success: true,
@@ -406,7 +391,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
     async (request, reply) => {
       const embeddingId = request.params.eid;
 
-      await faceService.deleteCreatorEmbedding(embeddingId);
+      await faceService.deleteCreatorEmbedding(request.params.id, embeddingId);
 
       return reply.send({
         success: true,
@@ -421,6 +406,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
   server.get(
     "/creators/:id/face-embeddings/:eid/thumbnail",
     {
+      preHandler: authenticateUser,
       schema: {
         tags: ["face-recognition"],
         summary: "Get creator face embedding thumbnail",
@@ -561,9 +547,6 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
               | "confirmed"
               | "rejected"
               | "no_match",
-            estimatedAge: detection.estimatedAge || null,
-            estimatedGender:
-              (detection.estimatedGender as "M" | "F" | null) || null,
             faceImageUrl,
             createdAt: detection.createdAt.toISOString(),
             updatedAt: detection.updatedAt.toISOString(),
@@ -584,6 +567,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
   server.get(
     "/faces/:id/image",
     {
+      preHandler: authenticateUser,
       schema: {
         tags: ["face-recognition"],
         summary: "Get face image",
@@ -662,20 +646,12 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         });
       }
 
-      // Trigger face-only workflow (fire-and-forget)
-      faceService
-        .processFacesOnly(videoId, video.file_path, video.duration_seconds)
-        .catch((error) => {
-          captureTelemetryException(error, {
-            source: "face_extraction_start",
-            stage: "frame_extraction",
-            videoId,
-          });
-          logger.error(
-            { videoId, error },
-            "Face extraction failed in background"
-          );
-        });
+      // Confirm durable persistence before acknowledging the asynchronous work.
+      await faceService.processFacesOnly(
+        videoId,
+        video.file_path,
+        video.duration_seconds
+      );
 
       return reply.code(202).send({
         success: true,
@@ -713,7 +689,11 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       const detectionId = request.params.did;
       const { creator_id } = request.body;
 
-      await faceService.confirmFaceMatch(detectionId, creator_id);
+      await faceService.confirmFaceMatch(
+        request.params.id,
+        detectionId,
+        creator_id
+      );
 
       return reply.send({
         success: true,
@@ -748,7 +728,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
     async (request, reply) => {
       const detectionId = request.params.did;
 
-      await faceService.rejectFaceMatch(detectionId);
+      await faceService.rejectFaceMatch(request.params.id, detectionId);
 
       return reply.send({
         success: true,
@@ -773,8 +753,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         querystring: getVideosByFaceSchema,
         response: {
           200: z.object({
-            success: z.boolean(),
-            data: z.array(z.any()),
+            success: z.literal(true),
+            data: videosByFaceResponseSchema.shape.data,
           }),
         },
       },
@@ -808,8 +788,8 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
         querystring: searchByFaceSchema,
         response: {
           200: z.object({
-            success: z.boolean(),
-            data: z.array(z.any()),
+            success: z.literal(true),
+            data: faceSearchResponseSchema.shape.data,
           }),
           400: z.object({
             success: z.boolean(),
@@ -895,10 +875,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
           id: z.coerce.number().int(),
         }),
         response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
+          200: faceExtractionJobResponseSchema,
           404: z.object({
             success: z.boolean(),
             error: z.object({
@@ -911,13 +888,10 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
     },
     async (request, reply) => {
       const videoId = request.params.id;
+      let job: Awaited<ReturnType<typeof faceService.getFaceExtractionJob>>;
 
       try {
-        const job = await faceService.getFaceExtractionJob(videoId);
-        return reply.send({
-          success: true,
-          data: job,
-        });
+        job = await faceService.getFaceExtractionJob(videoId);
       } catch {
         return reply.code(404).send({
           success: false,
@@ -927,6 +901,16 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
           },
         });
       }
+
+      return reply.send({
+        success: true,
+        data: {
+          ...job,
+          status: faceExtractionJobResponseSchema.shape.data.shape.status.parse(
+            job.status
+          ),
+        },
+      });
     }
   );
 

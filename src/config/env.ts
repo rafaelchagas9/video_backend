@@ -1,4 +1,14 @@
 import { z } from "zod";
+import { resolveVisionServiceEnvironment } from "./vision-service-env";
+
+const resolvedVisionServiceEnvironment = resolveVisionServiceEnvironment({
+  VISION_SERVICE_URL: process.env.VISION_SERVICE_URL,
+  FACE_SERVICE_URL: process.env.FACE_SERVICE_URL,
+  VISION_SERVICE_SECRET: process.env.VISION_SERVICE_SECRET,
+  FACE_SERVICE_SECRET: process.env.FACE_SERVICE_SECRET,
+});
+const blankStringAsUndefined = (value: unknown): unknown =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
 
 const envSchema = z.object({
   // Server
@@ -167,8 +177,48 @@ const envSchema = z.object({
   // Creator Enrichment (Python microservice)
   ENRICHMENT_SERVICE_URL: z.string().default("http://localhost:8200"),
 
-  // Face Recognition
+  // Vision inference / face-recognition compatibility
   FACE_SERVICE_URL: z.string().default("http://localhost:8100"),
+  FACE_SERVICE_SECRET: z.string().default(""),
+  // Generic vision deployment. Legacy face variables remain temporary fallbacks.
+  VISION_SERVICE_URL: z.preprocess(
+    blankStringAsUndefined,
+    z.string().default(resolvedVisionServiceEnvironment.url)
+  ),
+  VISION_SERVICE_SECRET: z.preprocess(
+    blankStringAsUndefined,
+    z.string().default(resolvedVisionServiceEnvironment.secret)
+  ),
+  CONTENT_ANALYSIS_VISION_TIMEOUT_MS: z
+    .string()
+    .default("120000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  CONTENT_ANALYSIS_PROBE_TIMEOUT_MS: z
+    .string()
+    .default("30000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  CONTENT_ANALYSIS_EXTRACTION_TIMEOUT_MS: z
+    .string()
+    .default("600000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  CONTENT_ANALYSIS_LEASE_MS: z
+    .string()
+    .default("60000")
+    .transform(Number)
+    .pipe(z.number().int().min(10000)),
+  CONTENT_ANALYSIS_RETRY_DELAY_MS: z
+    .string()
+    .default("60000")
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  CONTENT_ANALYSIS_MAX_RETRIES: z
+    .string()
+    .default("3")
+    .transform(Number)
+    .pipe(z.number().int().min(0).max(20)),
   FACE_SIMILARITY_THRESHOLD: z
     .string()
     .default("0.65")
