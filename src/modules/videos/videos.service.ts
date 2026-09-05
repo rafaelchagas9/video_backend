@@ -288,21 +288,11 @@ export class VideosService {
     options: RandomVideoOptions = {}
   ): Promise<Video | Video[]> {
     if (env.DEMO_MODE) {
-      const videosObj = demoRepository.getVideos({
-        ...options,
-        limit: 100,
-      });
-      const list = videosObj.data;
-      if (list.length === 0) {
+      const videos = demoRepository.getRandomVideos(options);
+      if (videos.length === 0) {
         throw new NotFoundError("No matching videos found");
       }
-      const shuffled = [...list].sort(() => 0.5 - Math.random());
-      const limit = options.limit !== undefined ? options.limit : 1;
-      const sliced = shuffled.slice(0, limit);
-      if (options.limit !== undefined) {
-        return sliced;
-      }
-      return sliced[0];
+      return options.limit !== undefined ? videos : videos[0];
     }
 
     const { conditions } = buildVideoFilters(userId, options);

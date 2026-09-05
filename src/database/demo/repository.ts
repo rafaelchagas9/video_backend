@@ -1,4 +1,5 @@
 import { API_PREFIX } from "@/config/constants";
+import type { RandomVideoOptions } from "@/modules/videos/videos.types";
 import {
   BadRequestError,
   ConflictError,
@@ -440,6 +441,17 @@ export class DemoRepository {
       data: rows.map((row) => this.videoFromRow(row)),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  getRandomVideos(options: RandomVideoOptions = {}) {
+    this.ensureReady();
+    const { where, parameters } = buildDemoVideoQuery(options, DEMO_USER_ID);
+    const rows = this.rows(
+      `SELECT v.* FROM demo_videos v ${where} ORDER BY RANDOM() LIMIT ?`,
+      ...parameters,
+      options.limit ?? 1,
+    );
+    return rows.map((row) => this.videoFromRow(row));
   }
 
   getVideoById(id: number): any {
