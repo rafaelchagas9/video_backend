@@ -94,7 +94,6 @@ export async function buildServer() {
 
   const fastify = Fastify({
     loggerInstance: logger,
-    disableRequestLogging: false,
     requestIdHeader: "x-request-id",
   });
 

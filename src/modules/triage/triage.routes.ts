@@ -124,8 +124,8 @@ export async function triageRoutes(fastify: FastifyInstance): Promise<void> {
         },
       },
     },
-    async (_request, reply) => {
-      const stats = await triageService.getStatistics();
+    async (request, reply) => {
+      const stats = await triageService.getStatistics(request.user!.id);
 
       return reply.send({
         success: true,
@@ -250,9 +250,9 @@ export async function usersTriageLegacyRoutes(
         },
       },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       markRouteDeprecated(reply, { replacement: "/api/triage/stats" });
-      const stats = await triageService.getStatistics();
+      const stats = await triageService.getStatistics(request.user!.id);
 
       return reply.send({
         success: true,

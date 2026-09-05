@@ -1,5 +1,5 @@
 import { eq, and, sql } from "drizzle-orm";
-import { db } from "@/config/drizzle";
+import { db, type DrizzleTransaction } from "@/config/drizzle";
 import {
   creatorGalleryMediaTable,
   creatorSocialLinksTable,
@@ -8,7 +8,9 @@ import {
 } from "@/database/schema";
 import { NotFoundError } from "@/utils/errors";
 import { env } from "@/config/env";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { mkdir, open, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "path";
 import {
   getFaceRecognitionClient,
@@ -19,7 +21,7 @@ import {
   processProfilePicture,
 } from "@/utils/image-processing";
 import { logger } from "@/utils/logger";
-import { imageDownloadRateLimiter } from "@/utils/async-rate-limiter";
+import { downloadRemoteImage } from "@/utils/remote-image-download";
 import type {
   SocialLink,
   CreateSocialLinkInput,
@@ -72,14 +74,14 @@ export class CreatorsSocialService {
   async updateSocialLink(
     id: number,
     input: UpdateSocialLinkInput,
-    creatorId?: number
+    creatorId: number
   ): Promise<SocialLink> {
     if (env.DEMO_MODE) {
       if (creatorId === undefined)
         throw new NotFoundError(`Social link not found with id: ${id}`);
       return creatorsDemoService.updateSocialLink(creatorId, id, input);
     }
-    await this.findSocialLinkById(id); // Ensure exists
+    await this.findSocialLinkById(id, creatorId); // Ensure exists
 
     const updates: any = {};
 
@@ -92,28 +94,38 @@ export class CreatorsSocialService {
     }
 
     if (Object.keys(updates).length === 0) {
-      return this.findSocialLinkById(id);
+      return this.findSocialLinkById(id, creatorId);
     }
 
     await db
       .update(creatorSocialLinksTable)
       .set(updates)
-      .where(eq(creatorSocialLinksTable.id, id));
+      .where(
+        and(
+          eq(creatorSocialLinksTable.id, id),
+          eq(creatorSocialLinksTable.creatorId, creatorId)
+        )
+      );
 
-    return this.findSocialLinkById(id);
+    return this.findSocialLinkById(id, creatorId);
   }
 
-  async deleteSocialLink(id: number, creatorId?: number): Promise<void> {
+  async deleteSocialLink(id: number, creatorId: number): Promise<void> {
     if (env.DEMO_MODE) {
       if (creatorId === undefined)
         throw new NotFoundError(`Social link not found with id: ${id}`);
       creatorsDemoService.deleteSocialLink(creatorId, id);
       return;
     }
-    await this.findSocialLinkById(id); // Ensure exists
+    await this.findSocialLinkById(id, creatorId); // Ensure exists
     await db
       .delete(creatorSocialLinksTable)
-      .where(eq(creatorSocialLinksTable.id, id));
+      .where(
+        and(
+          eq(creatorSocialLinksTable.id, id),
+          eq(creatorSocialLinksTable.creatorId, creatorId)
+        )
+      );
   }
 
   async getSocialLinks(creatorId: number): Promise<SocialLink[]> {
@@ -264,7 +276,7 @@ export class CreatorsSocialService {
         fileBuffer,
         variant
       );
-    const creator = await this.findCreatorById(id);
+    await this.findCreatorById(id);
     const filePath = await this.storeProcessedImage({
       input: fileBuffer,
       namePrefix: variant === "main" ? `creator_main_${id}` : `creator_${id}`,
@@ -273,42 +285,46 @@ export class CreatorsSocialService {
           ? env.PROFILE_PICTURE_MAX_SIZE * 2
           : env.PROFILE_PICTURE_MAX_SIZE,
     });
-
-    if (variant === "main") {
-      await this.clearImageRole(id, "main");
-
-      await this.createGalleryImage(id, filePath, {
-        label: "Main picture",
-        isMainPicture: true,
+    const faceThumbnailPath =
+      variant === "portrait"
+        ? await this.generateFaceThumbnail(filePath, id)
+        : null;
+    let previousFace: string | null = null;
+    try {
+      previousFace = await db.transaction(async (transaction) => {
+        const [creator] = await transaction
+          .select({ faceThumbnailPath: creatorsTable.faceThumbnailPath })
+          .from(creatorsTable)
+          .where(eq(creatorsTable.id, id))
+          .for("update");
+        if (!creator)
+          throw new NotFoundError(`Creator not found with id: ${id}`);
+        await this.clearImageRole(id, variant, transaction);
+        await transaction.insert(creatorGalleryMediaTable).values({
+          creatorId: id,
+          filePath,
+          label: variant === "main" ? "Main picture" : "Profile picture",
+          isMainPicture: variant === "main",
+          isProfilePicture: variant === "portrait",
+        });
+        await transaction
+          .update(creatorsTable)
+          .set({
+            ...(variant === "portrait" && { faceThumbnailPath }),
+            updatedAt: new Date(),
+          })
+          .where(eq(creatorsTable.id, id));
+        return variant === "portrait" ? creator.faceThumbnailPath : null;
       });
-
-      await this.touchCreator(id);
-
-      return this.findCreatorById(id);
+    } catch (error) {
+      await this.deleteFileIfExists(filePath);
+      await this.deleteFileIfExists(faceThumbnailPath);
+      throw error;
     }
-
-    this.deleteFileIfExists(creator.face_thumbnail_path);
-    await this.clearImageRole(id, "portrait");
-
-    const faceThumbnailPath = await this.generateFaceThumbnail(filePath, id);
-
-    if (faceThumbnailPath) {
+    // Only remove a superseded derivative after the replacement is committed.
+    await this.deleteFileIfExists(previousFace);
+    if (faceThumbnailPath)
       await this.generateProfilePictureEmbedding(filePath, id);
-    }
-
-    await this.createGalleryImage(id, filePath, {
-      label: "Profile picture",
-      isProfilePicture: true,
-    });
-
-    await db
-      .update(creatorsTable)
-      .set({
-        faceThumbnailPath,
-        updatedAt: new Date(),
-      })
-      .where(eq(creatorsTable.id, id));
-
     return this.findCreatorById(id);
   }
 
@@ -318,26 +334,24 @@ export class CreatorsSocialService {
   ): Promise<Creator> {
     if (env.DEMO_MODE)
       return demoMediaAssetsService.deleteCreatorPicture(id, variant);
-    const creator = await this.findCreatorById(id);
-
-    if (variant === "main") {
-      await this.clearImageRole(id, "main");
-      await this.touchCreator(id);
-
-      return this.findCreatorById(id);
-    }
-
-    this.deleteFileIfExists(creator.face_thumbnail_path);
-    await this.clearImageRole(id, "portrait");
-
-    await db
-      .update(creatorsTable)
-      .set({
-        faceThumbnailPath: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(creatorsTable.id, id));
-
+    const previousFace = await db.transaction(async (transaction) => {
+      const [creator] = await transaction
+        .select({ faceThumbnailPath: creatorsTable.faceThumbnailPath })
+        .from(creatorsTable)
+        .where(eq(creatorsTable.id, id))
+        .for("update");
+      if (!creator) throw new NotFoundError(`Creator not found with id: ${id}`);
+      await this.clearImageRole(id, variant, transaction);
+      await transaction
+        .update(creatorsTable)
+        .set({
+          ...(variant === "portrait" && { faceThumbnailPath: null }),
+          updatedAt: new Date(),
+        })
+        .where(eq(creatorsTable.id, id));
+      return variant === "portrait" ? creator.faceThumbnailPath : null;
+    });
+    await this.deleteFileIfExists(previousFace);
     return this.findCreatorById(id);
   }
 
@@ -352,7 +366,7 @@ export class CreatorsSocialService {
         url,
         variant
       );
-    const buffer = await this.downloadImage(url);
+    const buffer = await downloadRemoteImage(url);
     return this.uploadProfilePicture(
       creatorId,
       buffer,
@@ -401,21 +415,26 @@ export class CreatorsSocialService {
       maxSize: env.PROFILE_PICTURE_MAX_SIZE * 2,
     });
 
-    const result = await db
-      .insert(creatorGalleryMediaTable)
-      .values({
-        creatorId,
-        label: this.normalizeOptionalText(label),
-        description: this.normalizeOptionalText(description),
-        filePath,
-      })
-      .returning();
+    try {
+      const result = await db
+        .insert(creatorGalleryMediaTable)
+        .values({
+          creatorId,
+          label: this.normalizeOptionalText(label),
+          description: this.normalizeOptionalText(description),
+          filePath,
+        })
+        .returning();
 
-    if (!result[0]) {
-      throw new Error("Failed to create creator gallery media");
+      if (!result[0]) {
+        throw new Error("Failed to create creator gallery media");
+      }
+
+      return this.mapGalleryMediaToSnakeCase(result[0]);
+    } catch (error) {
+      await this.deleteFileIfExists(filePath);
+      throw error;
     }
-
-    return this.mapGalleryMediaToSnakeCase(result[0]);
   }
 
   async addGalleryMediaFromUrl(
@@ -431,7 +450,7 @@ export class CreatorsSocialService {
         label,
         description
       );
-    const buffer = await this.downloadImage(url);
+    const buffer = await downloadRemoteImage(url);
     return this.addGalleryMedia(creatorId, buffer, label, description);
   }
 
@@ -440,13 +459,35 @@ export class CreatorsSocialService {
       demoMediaAssetsService.deleteGallery(creatorId, mediaId);
       return;
     }
-    const media = await this.findGalleryMediaById(creatorId, mediaId);
-
-    this.deleteFileIfExists(media.file_path);
-
-    await db
-      .delete(creatorGalleryMediaTable)
-      .where(eq(creatorGalleryMediaTable.id, mediaId));
+    const media = await db.transaction(async (transaction) => {
+      await transaction
+        .select({ id: creatorsTable.id })
+        .from(creatorsTable)
+        .where(eq(creatorsTable.id, creatorId))
+        .for("update");
+      const [deleted] = await transaction
+        .delete(creatorGalleryMediaTable)
+        .where(
+          and(
+            eq(creatorGalleryMediaTable.id, mediaId),
+            eq(creatorGalleryMediaTable.creatorId, creatorId)
+          )
+        )
+        .returning();
+      if (!deleted)
+        throw new NotFoundError(
+          `Creator gallery media not found with id: ${mediaId}`
+        );
+      await transaction
+        .update(creatorsTable)
+        .set({
+          ...(deleted.isProfilePicture && { faceThumbnailPath: null }),
+          updatedAt: new Date(),
+        })
+        .where(eq(creatorsTable.id, creatorId));
+      return deleted;
+    });
+    await this.deleteFileIfExists(media.filePath);
   }
 
   /**
@@ -470,44 +511,82 @@ export class CreatorsSocialService {
   ): Promise<CreatorGalleryMedia> {
     if (env.DEMO_MODE)
       return creatorsDemoService.updateGalleryRoles(creatorId, mediaId, roles);
-    await this.findGalleryMediaById(creatorId, mediaId);
-
-    if (roles.is_profile_picture === true) {
-      await this.clearImageRole(creatorId, "portrait");
-    }
-
-    if (roles.is_main_picture === true) {
-      await this.clearImageRole(creatorId, "main");
-    }
-
-    await db
-      .update(creatorGalleryMediaTable)
-      .set({
-        ...(roles.is_profile_picture !== undefined && {
-          isProfilePicture: roles.is_profile_picture,
-        }),
-        ...(roles.is_main_picture !== undefined && {
-          isMainPicture: roles.is_main_picture,
-        }),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(creatorGalleryMediaTable.id, mediaId),
-          eq(creatorGalleryMediaTable.creatorId, creatorId)
-        )
-      );
-
-    await this.touchCreator(creatorId);
+    await db.transaction(async (transaction) => {
+      // Serialize all picture-role changes for this creator, including uploads.
+      await transaction
+        .select({ id: creatorsTable.id })
+        .from(creatorsTable)
+        .where(eq(creatorsTable.id, creatorId))
+        .for("update");
+      const [media] = await transaction
+        .select({
+          id: creatorGalleryMediaTable.id,
+          isProfilePicture: creatorGalleryMediaTable.isProfilePicture,
+        })
+        .from(creatorGalleryMediaTable)
+        .where(
+          and(
+            eq(creatorGalleryMediaTable.id, mediaId),
+            eq(creatorGalleryMediaTable.creatorId, creatorId)
+          )
+        );
+      if (!media)
+        throw new NotFoundError(
+          `Creator gallery media not found with id: ${mediaId}`
+        );
+      if (roles.is_profile_picture === true)
+        await this.clearImageRole(creatorId, "portrait", transaction);
+      if (roles.is_main_picture === true)
+        await this.clearImageRole(creatorId, "main", transaction);
+      await transaction
+        .update(creatorGalleryMediaTable)
+        .set({
+          ...(roles.is_profile_picture !== undefined && {
+            isProfilePicture: roles.is_profile_picture,
+          }),
+          ...(roles.is_main_picture !== undefined && {
+            isMainPicture: roles.is_main_picture,
+          }),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(creatorGalleryMediaTable.id, mediaId),
+            eq(creatorGalleryMediaTable.creatorId, creatorId)
+          )
+        );
+      await transaction
+        .update(creatorsTable)
+        .set({
+          // The derivative belongs to the previous portrait. Clear only the
+          // pointer; preserve the file when gallery roles are reassigned.
+          ...(roles.is_profile_picture !== undefined &&
+            roles.is_profile_picture !== media.isProfilePicture && {
+              faceThumbnailPath: null,
+            }),
+          updatedAt: new Date(),
+        })
+        .where(eq(creatorsTable.id, creatorId));
+    });
 
     return this.findGalleryMediaById(creatorId, mediaId);
   }
 
-  private async findSocialLinkById(id: number): Promise<SocialLink> {
+  private async findSocialLinkById(
+    id: number,
+    creatorId?: number
+  ): Promise<SocialLink> {
     const link = await db
       .select()
       .from(creatorSocialLinksTable)
-      .where(eq(creatorSocialLinksTable.id, id))
+      .where(
+        and(
+          eq(creatorSocialLinksTable.id, id),
+          creatorId === undefined
+            ? undefined
+            : eq(creatorSocialLinksTable.creatorId, creatorId)
+        )
+      )
       .limit(1);
 
     if (!link || link.length === 0) {
@@ -654,28 +733,12 @@ export class CreatorsSocialService {
     return normalized ? normalized : null;
   }
 
-  private async createGalleryImage(
+  private async clearImageRole(
     creatorId: number,
-    filePath: string,
-    options: {
-      label?: string;
-      description?: string;
-      isProfilePicture?: boolean;
-      isMainPicture?: boolean;
-    } = {}
+    role: CreatorPictureVariant,
+    database: typeof db | DrizzleTransaction = db
   ) {
-    await db.insert(creatorGalleryMediaTable).values({
-      creatorId,
-      label: this.normalizeOptionalText(options.label),
-      description: this.normalizeOptionalText(options.description),
-      filePath,
-      isProfilePicture: options.isProfilePicture ?? false,
-      isMainPicture: options.isMainPicture ?? false,
-    });
-  }
-
-  private async clearImageRole(creatorId: number, role: CreatorPictureVariant) {
-    await db
+    await database
       .update(creatorGalleryMediaTable)
       .set({
         ...(role === "portrait"
@@ -686,43 +749,15 @@ export class CreatorsSocialService {
       .where(eq(creatorGalleryMediaTable.creatorId, creatorId));
   }
 
-  private async touchCreator(creatorId: number) {
-    await db
-      .update(creatorsTable)
-      .set({ updatedAt: new Date() })
-      .where(eq(creatorsTable.id, creatorId));
-  }
-
-  private deleteFileIfExists(filePath: string | null | undefined) {
-    if (!filePath || !existsSync(filePath)) {
-      return;
-    }
-
-    unlinkSync(filePath);
-  }
-
-  private async downloadImage(url: string) {
-    const buffer = await imageDownloadRateLimiter.schedule(async () => {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(
-          `Failed to download image: ${response.status} ${response.statusText}`
-        );
+  private async deleteFileIfExists(filePath: string | null | undefined) {
+    if (!filePath) return;
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        logger.warn({ error }, "Failed to clean up creator image");
       }
-
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.startsWith("image/")) {
-        throw new Error("URL does not point to a valid image");
-      }
-
-      return Buffer.from(await response.arrayBuffer());
-    });
-
-    if (buffer.length < 100) {
-      throw new Error("Downloaded image is too small");
     }
-
-    return buffer;
   }
 
   private async storeProcessedImage(params: {
@@ -730,13 +765,11 @@ export class CreatorsSocialService {
     namePrefix: string;
     maxSize: number;
   }) {
-    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
-      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
-    }
+    await mkdir(env.PROFILE_PICTURES_DIR, { recursive: true });
 
     const filePath = join(
       env.PROFILE_PICTURES_DIR,
-      `${params.namePrefix}_${Date.now()}.${env.PROFILE_PICTURE_FORMAT}`
+      `${params.namePrefix}_${randomUUID()}.${env.PROFILE_PICTURE_FORMAT}`
     );
 
     const processedBuffer = await processProfilePicture({
@@ -746,7 +779,15 @@ export class CreatorsSocialService {
       quality: env.PROFILE_PICTURE_QUALITY,
     });
 
-    writeFileSync(filePath, processedBuffer);
+    const candidate = await open(filePath, "wx");
+    try {
+      await candidate.writeFile(processedBuffer);
+    } catch (error) {
+      await this.deleteFileIfExists(filePath);
+      throw error;
+    } finally {
+      await candidate.close();
+    }
     return filePath;
   }
 
@@ -771,7 +812,7 @@ export class CreatorsSocialService {
         mkdirSync(faceDir, { recursive: true });
       }
 
-      const faceFilename = `creator_${creatorId}_${Date.now()}_face.${env.FACE_THUMBNAIL_FORMAT}`;
+      const faceFilename = `creator_${creatorId}_${randomUUID()}_face.${env.FACE_THUMBNAIL_FORMAT}`;
       const facePath = join(faceDir, faceFilename);
 
       const { outputPath } = await cropFaceThumbnail({

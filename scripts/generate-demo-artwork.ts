@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createHash } from "crypto";
 import { mkdir, rm, stat, writeFile } from "fs/promises";
 import { join, relative, resolve } from "path";
@@ -34,14 +35,6 @@ const VARIANTS: Record<
   square: { width: 400, height: 400, effects: ["scrim"] },
   hero: { width: 2560, height: 1097, effects: ["grain", "vignette"] },
 };
-
-interface DemoVideoSource {
-  title: string;
-  thumbnail?: {
-    filePath: string;
-    timestampSeconds: number;
-  };
-}
 
 interface ManifestAsset {
   variant: ArtworkVariant;
@@ -254,7 +247,15 @@ async function main(): Promise<void> {
     replaceDemoArtworkCatalog,
     restoreDemoArtworkDatabaseSnapshot,
   } = await import("@/database/demo");
-  const catalog = exportDemoSeedDocument() as { videos: DemoVideoSource[] };
+  const catalog = z.object({
+    videos: z.array(z.object({
+      title: z.string(),
+      thumbnail: z.object({
+        filePath: z.string(),
+        timestampSeconds: z.number(),
+      }).optional(),
+    })),
+  }).parse(exportDemoSeedDocument());
   const runId = `${process.pid}-${Date.now()}`;
   const stagingRoot = join(DEMO_ROOT, `.artwork-staging-${runId}`);
   const backupRoot = join(DEMO_ROOT, `.artwork-backup-${runId}`);

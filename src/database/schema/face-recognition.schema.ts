@@ -2,7 +2,7 @@ import {
   pgTable,
   serial,
   text,
-  integer,
+  integer, bigint,
   real,
   boolean,
   timestamp,
@@ -179,7 +179,7 @@ export const faceImagesTable = pgTable(
 
     // File storage
     filePath: text("file_path").notNull(),
-    fileSizeBytes: integer("file_size_bytes"),
+    fileSizeBytes: bigint("file_size_bytes", { mode: "number" }),
     width: integer("width").notNull(),
     height: integer("height").notNull(),
 

@@ -25,7 +25,7 @@ import { getFaceRecognitionClient } from "../src/modules/face-recognition";
 import { cropFaceThumbnail } from "../src/utils/image-processing";
 import { logger } from "../src/utils/logger";
 import { env } from "../src/config/env";
-import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 
 // CLI Arguments
@@ -213,7 +213,7 @@ async function processCreator(creator: {
 
     // Generate face embedding if requested
     if (args.generateEmbeddings && !args.dryRun) {
-      await generateFaceEmbedding(creator.id, facePath, bestFace);
+      await generateFaceEmbedding(creator.id, facePath);
     }
 
     const duration = Date.now() - startTime;
@@ -236,7 +236,6 @@ async function processCreator(creator: {
 async function generateFaceEmbedding(
   creatorId: number,
   facePath: string,
-  faceData: any,
 ): Promise<void> {
   try {
     const faceClient = getFaceRecognitionClient();
@@ -279,8 +278,6 @@ async function generateFaceEmbedding(
       sourceType: "profile_picture",
       detScore: face.det_score,
       isPrimary,
-      estimatedAge: face.age,
-      estimatedGender: face.gender,
     });
 
     stats.embeddingsCreated++;

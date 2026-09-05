@@ -287,7 +287,7 @@ export class StudiosBulkService {
                   (sl) => sl.platform_name === el.platform_name
                 )
               ) {
-                await studiosSocialService.deleteSocialLink(el.id);
+                await studiosSocialService.deleteSocialLink(el.id, studioId);
               }
             }
           }

@@ -1,10 +1,11 @@
 import {
-  SQL,
   and,
   or,
   eq,
-  gte,
-  lte,
+  gt,
+  lt,
+  isNull,
+  isNotNull,
   sql,
   inArray,
   desc,
@@ -16,9 +17,6 @@ import {
   videosTable,
   thumbnailsTable,
   favoritesTable,
-  ratingsTable,
-  videoCreatorsTable,
-  videoTagsTable,
   videoStudiosTable,
 } from "@/database/schema";
 import { API_PREFIX } from "@/config/constants";
@@ -60,19 +58,9 @@ interface PaginatedVideos {
  * Service for video search, list, and navigation operations
  */
 export class VideosSearchService {
-  private async expandTagIds(tagIds?: number[]): Promise<number[] | undefined> {
-    if (!tagIds || tagIds.length === 0) return tagIds;
-    const expanded = new Set(tagIds);
-    for (const id of tagIds) {
-      const descendants = await tagsService.getDescendants(id);
-      descendants.forEach((d) => expanded.add(d.id));
-    }
-    return Array.from(expanded);
-  }
-
   private async checkIsFavoritesBatch(
     userId: number,
-    videoIds: number[],
+    videoIds: number[]
   ): Promise<Set<number>> {
     if (videoIds.length === 0) return new Set();
     const rows = await db
@@ -81,8 +69,8 @@ export class VideosSearchService {
       .where(
         and(
           eq(favoritesTable.userId, userId),
-          inArray(favoritesTable.videoId, videoIds),
-        ),
+          inArray(favoritesTable.videoId, videoIds)
+        )
       );
     return new Set(rows.map((r) => r.videoId));
   }
@@ -92,7 +80,7 @@ export class VideosSearchService {
    */
   async list(
     userId: number,
-    options: ListVideosOptions = {},
+    options: ListVideosOptions = {}
   ): Promise<PaginatedVideos> {
     if (env.DEMO_MODE) {
       const { demoRepository } = await import("@/database/demo/repository");
@@ -100,7 +88,7 @@ export class VideosSearchService {
       result.data = await this.attachIncludes(
         result.data,
         options.include ?? [],
-        userId,
+        userId
       );
       return result;
     }
@@ -109,38 +97,17 @@ export class VideosSearchService {
       limit = 20,
       sort = "created_at",
       order = "desc",
-      creatorIds,
-      studioIds,
-      isFavorite,
-      hasThumbnail,
-      minRating,
-      maxRating,
       include = [],
     } = options;
-
-    const tagIds = await this.expandTagIds(options.tagIds);
-    const resolvedOptions = { ...options, tagIds };
 
     const offset = (page - 1) * limit;
 
     // Build filter conditions
-    const {
-      conditions,
-      needsCreatorJoin,
-      needsTagJoin,
-      needsStudioJoin,
-      needsRatingJoin,
-      matchMode,
-    } = buildVideoFilters(userId, resolvedOptions);
+    const { conditions } = buildVideoFilters(userId, options);
 
     // Get sort column
     const sortColumn = getValidSortColumn(sort);
     const sortOrder = order === "asc" ? asc : desc;
-
-    // For 'all' match mode, we need GROUP BY + HAVING
-    const needsGroupBy =
-      matchMode === "all" &&
-      (needsCreatorJoin || needsTagJoin || needsStudioJoin);
 
     // Build the base query
     let query = db
@@ -174,375 +141,64 @@ export class VideosSearchService {
       .leftJoin(thumbnailsTable, eq(videosTable.id, thumbnailsTable.videoId))
       .$dynamic();
 
-    // Add JOINs based on filters
-    if (isFavorite === true) {
-      query = query.innerJoin(
-        favoritesTable,
-        and(
-          eq(videosTable.id, favoritesTable.videoId),
-          eq(favoritesTable.userId, userId),
-        ),
-      );
-    } else if (isFavorite === false) {
-      query = query.leftJoin(
-        favoritesTable,
-        and(
-          eq(videosTable.id, favoritesTable.videoId),
-          eq(favoritesTable.userId, userId),
-        ),
-      );
-      conditions.push(sql`${favoritesTable.videoId} IS NULL`);
-    }
-
-    if (needsCreatorJoin && creatorIds && creatorIds.length > 0) {
-      if (matchMode === "any") {
-        query = query.innerJoin(
-          videoCreatorsTable,
-          and(
-            eq(videosTable.id, videoCreatorsTable.videoId),
-            inArray(videoCreatorsTable.creatorId, creatorIds),
-          ),
-        );
-      } else {
-        query = query.leftJoin(
-          videoCreatorsTable,
-          eq(videosTable.id, videoCreatorsTable.videoId),
-        );
-        conditions.push(
-          or(
-            inArray(videoCreatorsTable.creatorId, creatorIds),
-            sql`${videoCreatorsTable.creatorId} IS NULL`,
-          )!,
-        );
-      }
-    }
-
-    if (needsTagJoin && tagIds && tagIds.length > 0) {
-      if (matchMode === "any") {
-        query = query.innerJoin(
-          videoTagsTable,
-          and(
-            eq(videosTable.id, videoTagsTable.videoId),
-            inArray(videoTagsTable.tagId, tagIds),
-          ),
-        );
-      } else {
-        query = query.leftJoin(
-          videoTagsTable,
-          eq(videosTable.id, videoTagsTable.videoId),
-        );
-        conditions.push(
-          or(
-            inArray(videoTagsTable.tagId, tagIds),
-            sql`${videoTagsTable.tagId} IS NULL`,
-          )!,
-        );
-      }
-    }
-
-    if (needsStudioJoin && studioIds && studioIds.length > 0) {
-      if (matchMode === "any") {
-        query = query.innerJoin(
-          videoStudiosTable,
-          and(
-            eq(videosTable.id, videoStudiosTable.videoId),
-            inArray(videoStudiosTable.studioId, studioIds),
-          ),
-        );
-      } else {
-        query = query.leftJoin(
-          videoStudiosTable,
-          eq(videosTable.id, videoStudiosTable.videoId),
-        );
-        conditions.push(
-          or(
-            inArray(videoStudiosTable.studioId, studioIds),
-            sql`${videoStudiosTable.studioId} IS NULL`,
-          )!,
-        );
-      }
-    }
-
-    // Rating filter requires subquery
-    if (needsRatingJoin) {
-      const avgRatingSubquery = db
-        .select({
-          videoId: ratingsTable.videoId,
-          avgRating: sql<number>`AVG(${ratingsTable.rating})`.as("avg_rating"),
-        })
-        .from(ratingsTable)
-        .groupBy(ratingsTable.videoId)
-        .as("r");
-
-      query = query.leftJoin(
-        avgRatingSubquery,
-        eq(videosTable.id, avgRatingSubquery.videoId),
-      );
-
-      if (minRating !== undefined) {
-        conditions.push(gte(avgRatingSubquery.avgRating, minRating));
-      }
-      if (maxRating !== undefined) {
-        conditions.push(lte(avgRatingSubquery.avgRating, maxRating));
-      }
-    }
-
-    // Thumbnail presence filter
-    if (hasThumbnail === true) {
-      conditions.push(sql`${thumbnailsTable.id} IS NOT NULL`);
-    } else if (hasThumbnail === false) {
-      conditions.push(sql`${thumbnailsTable.id} IS NULL`);
-    }
-
-    // Apply WHERE conditions
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions));
-    }
-
-    // Handle GROUP BY for 'all' match mode
-    if (needsGroupBy) {
-      const havingConditions: SQL[] = [];
-
-      if (creatorIds && creatorIds.length > 0) {
-        havingConditions.push(
-          sql`COUNT(DISTINCT ${videoCreatorsTable.creatorId}) >= ${creatorIds.length}`,
-        );
-      }
-      if (tagIds && tagIds.length > 0) {
-        havingConditions.push(
-          sql`COUNT(DISTINCT ${videoTagsTable.tagId}) >= ${tagIds.length}`,
-        );
-      }
-      if (studioIds && studioIds.length > 0) {
-        havingConditions.push(
-          sql`COUNT(DISTINCT ${videoStudiosTable.studioId}) >= ${studioIds.length}`,
-        );
-      }
-
-      // For complex GROUP BY queries, use raw SQL
-      const countResult = await db.execute<{ count: number }>(sql`
-        SELECT COUNT(*) as count FROM (
-          SELECT ${videosTable.id}
-          FROM ${videosTable}
-          LEFT JOIN ${thumbnailsTable} ON ${videosTable.id} = ${thumbnailsTable.videoId}
-          ${needsCreatorJoin ? sql`LEFT JOIN ${videoCreatorsTable} ON ${videosTable.id} = ${videoCreatorsTable.videoId}` : sql``}
-          ${needsTagJoin ? sql`LEFT JOIN ${videoTagsTable} ON ${videosTable.id} = ${videoTagsTable.videoId}` : sql``}
-          ${needsStudioJoin ? sql`LEFT JOIN ${videoStudiosTable} ON ${videosTable.id} = ${videoStudiosTable.videoId}` : sql``}
-          WHERE ${and(...conditions) || sql`TRUE`}
-          GROUP BY ${videosTable.id}
-          HAVING ${and(...havingConditions)}
-        ) as subquery
-      `);
-
-      const total = Number(countResult[0]?.count || 0);
-      const totalPages = Math.ceil(total / limit);
-
-      // Get paginated results with GROUP BY
-      const results = await db.execute<{
-        id: number;
-        file_path: string;
-        file_name: string;
-        directory_id: number;
-        file_size_bytes: number;
-        file_hash: string | null;
-        duration_seconds: number | null;
-        width: number | null;
-        height: number | null;
-        codec: string | null;
-        bitrate: number | null;
-        fps: number | null;
-        audio_codec: string | null;
-        title: string | null;
-        description: string | null;
-        themes: string | null;
-        is_available: boolean;
-        studio_assignment_status: StudioAssignmentStatus;
-        last_verified_at: string | null;
-        indexed_at: string;
-        created_at: string;
-        updated_at: string;
-        thumbnail_id: number | null;
-        thumbnail_file_path: string | null;
-      }>(sql`
-        SELECT DISTINCT ${videosTable.id}, ${videosTable.filePath} as file_path, ${videosTable.fileName} as file_name,
-               ${videosTable.directoryId} as directory_id, ${videosTable.fileSizeBytes} as file_size_bytes, ${videosTable.fileHash} as file_hash,
-               ${videosTable.durationSeconds} as duration_seconds, ${videosTable.width}, ${videosTable.height},
-               ${videosTable.codec}, ${videosTable.bitrate}, ${videosTable.fps},
-               ${videosTable.audioCodec} as audio_codec, ${videosTable.title}, ${videosTable.description},
-               ${videosTable.themes}, ${videosTable.isAvailable} as is_available, ${studioAssignmentStatusSql} as studio_assignment_status, ${videosTable.lastVerifiedAt} as last_verified_at,
-               ${videosTable.indexedAt} as indexed_at, ${videosTable.createdAt} as created_at, ${videosTable.updatedAt} as updated_at,
-               ${thumbnailsTable.id} as thumbnail_id, ${thumbnailsTable.filePath} as thumbnail_file_path
-        FROM ${videosTable}
-        LEFT JOIN ${thumbnailsTable} ON ${videosTable.id} = ${thumbnailsTable.videoId}
-        ${needsCreatorJoin ? sql`LEFT JOIN ${videoCreatorsTable} ON ${videosTable.id} = ${videoCreatorsTable.videoId}` : sql``}
-        ${needsTagJoin ? sql`LEFT JOIN ${videoTagsTable} ON ${videosTable.id} = ${videoTagsTable.videoId}` : sql``}
-        ${needsStudioJoin ? sql`LEFT JOIN ${videoStudiosTable} ON ${videosTable.id} = ${videoStudiosTable.videoId}` : sql``}
-        WHERE ${and(...conditions) || sql`TRUE`}
-        GROUP BY ${videosTable.id}, ${thumbnailsTable.id}, ${thumbnailsTable.filePath}
-        HAVING ${and(...havingConditions)}
-        ORDER BY ${videosTable[sortColumn]} ${sql.raw(order === "asc" ? "ASC" : "DESC")}
-        LIMIT ${limit} OFFSET ${offset}
-      `);
-
-      // Check favorites for all videos in a single query
-      const favoriteIdsSet = await this.checkIsFavoritesBatch(
-        userId,
-        results.map((v) => v.id),
-      );
-
-      const videosWithFavorites = results.map((v) => ({
-        ...v,
-        is_favorite: favoriteIdsSet.has(v.id),
-        thumbnail_url: v.thumbnail_id
-          ? `${API_PREFIX}/thumbnails/${v.thumbnail_id}/image`
-          : null,
-      }));
-
-      const enrichedVideos = await this.attachIncludes(
-        videosWithFavorites as Video[],
-        include,
-        userId,
-      );
-
-      return {
-        data: enrichedVideos,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages,
-        },
-      };
-    }
-
-    // Simpler case without GROUP BY
-    const countQuery = db
-      .select({ count: sql<number>`count(*)`.as("count") })
+    if (conditions.length) query = query.where(and(...conditions));
+    const [count] = await db
+      .select({ total: sql<number>`COUNT(*)` })
       .from(videosTable)
-      .leftJoin(thumbnailsTable, eq(videosTable.id, thumbnailsTable.videoId))
-      .$dynamic();
-
-    // Apply same joins for count
-    let countQueryWithJoins = countQuery;
-    if (isFavorite === true) {
-      countQueryWithJoins = countQueryWithJoins.innerJoin(
-        favoritesTable,
-        and(
-          eq(videosTable.id, favoritesTable.videoId),
-          eq(favoritesTable.userId, userId),
-        ),
-      );
-    }
-
-    if (needsCreatorJoin && creatorIds && creatorIds.length > 0) {
-      if (matchMode === "any") {
-        countQueryWithJoins = countQueryWithJoins.innerJoin(
-          videoCreatorsTable,
-          and(
-            eq(videosTable.id, videoCreatorsTable.videoId),
-            inArray(videoCreatorsTable.creatorId, creatorIds),
-          ),
-        );
-      } else {
-        countQueryWithJoins = countQueryWithJoins.leftJoin(
-          videoCreatorsTable,
-          eq(videosTable.id, videoCreatorsTable.videoId),
-        );
-      }
-    }
-
-    if (needsTagJoin && tagIds && tagIds.length > 0) {
-      if (matchMode === "any") {
-        countQueryWithJoins = countQueryWithJoins.innerJoin(
-          videoTagsTable,
-          and(
-            eq(videosTable.id, videoTagsTable.videoId),
-            inArray(videoTagsTable.tagId, tagIds),
-          ),
-        );
-      } else {
-        countQueryWithJoins = countQueryWithJoins.leftJoin(
-          videoTagsTable,
-          eq(videosTable.id, videoTagsTable.videoId),
-        );
-      }
-    }
-
-    if (needsStudioJoin && studioIds && studioIds.length > 0) {
-      if (matchMode === "any") {
-        countQueryWithJoins = countQueryWithJoins.innerJoin(
-          videoStudiosTable,
-          and(
-            eq(videosTable.id, videoStudiosTable.videoId),
-            inArray(videoStudiosTable.studioId, studioIds),
-          ),
-        );
-      } else {
-        countQueryWithJoins = countQueryWithJoins.leftJoin(
-          videoStudiosTable,
-          eq(videosTable.id, videoStudiosTable.videoId),
-        );
-      }
-    }
-
-    if (conditions.length > 0) {
-      countQueryWithJoins = countQueryWithJoins.where(and(...conditions));
-    }
-
-    const countResult = await countQueryWithJoins;
-    const total = Number(countResult[0]?.count || 0);
+      .where(and(...conditions));
+    const total = Number(count?.total ?? 0);
     const totalPages = Math.ceil(total / limit);
 
     // Get paginated results
     const videos = await query
-      .orderBy(sortOrder(videosTable[sortColumn]))
+      .orderBy(sortOrder(videosTable[sortColumn]), sortOrder(videosTable.id))
       .limit(limit)
       .offset(offset);
 
     // Check favorites for all videos in a single query
     const favoriteIds = await this.checkIsFavoritesBatch(
       userId,
-      videos.map((v) => v.id),
+      videos.map((v) => v.id)
     );
 
     const videosWithFavorites = videos.map((v) => {
-        const isFav = favoriteIds.has(v.id);
+      const isFav = favoriteIds.has(v.id);
 
-        return {
-          id: v.id,
-          file_path: v.filePath,
-          file_name: v.fileName,
-          directory_id: v.directoryId,
-          file_size_bytes: v.fileSizeBytes,
-          file_hash: v.fileHash,
-          duration_seconds: v.durationSeconds,
-          width: v.width,
-          height: v.height,
-          codec: v.codec,
-          bitrate: v.bitrate,
-          fps: v.fps,
-          audio_codec: v.audioCodec,
-          title: v.title,
-          description: v.description,
-          themes: v.themes,
-          is_available: v.isAvailable,
-          studio_assignment_status: v.studioAssignmentStatus,
-          last_verified_at: v.lastVerifiedAt?.toISOString() ?? null,
-          indexed_at: v.indexedAt.toISOString(),
-          created_at: v.createdAt.toISOString(),
-          updated_at: v.updatedAt.toISOString(),
-          is_favorite: isFav,
-          thumbnail_id: v.thumbnailId,
-          thumbnail_url: v.thumbnailId
-            ? `${API_PREFIX}/thumbnails/${v.thumbnailId}/image`
-            : null,
-        };
-      });
+      return {
+        id: v.id,
+        file_path: v.filePath,
+        file_name: v.fileName,
+        directory_id: v.directoryId,
+        file_size_bytes: v.fileSizeBytes,
+        file_hash: v.fileHash,
+        duration_seconds: v.durationSeconds,
+        width: v.width,
+        height: v.height,
+        codec: v.codec,
+        bitrate: v.bitrate,
+        fps: v.fps,
+        audio_codec: v.audioCodec,
+        title: v.title,
+        description: v.description,
+        themes: v.themes,
+        is_available: v.isAvailable,
+        studio_assignment_status: v.studioAssignmentStatus,
+        last_verified_at: v.lastVerifiedAt?.toISOString() ?? null,
+        indexed_at: v.indexedAt.toISOString(),
+        created_at: v.createdAt.toISOString(),
+        updated_at: v.updatedAt.toISOString(),
+        is_favorite: isFav,
+        thumbnail_id: v.thumbnailId,
+        thumbnail_url: v.thumbnailId
+          ? `${API_PREFIX}/thumbnails/${v.thumbnailId}/image`
+          : null,
+      };
+    });
 
     const enrichedVideos = await this.attachIncludes(
       videosWithFavorites as Video[],
       include,
-      userId,
+      userId
     );
 
     return {
@@ -559,33 +215,34 @@ export class VideosSearchService {
   private async attachIncludes(
     videos: Video[],
     include: VideoListInclude[],
-    userId: number,
+    userId: number
   ): Promise<Video[]> {
     if (videos.length === 0 || include.length === 0) {
       return videos;
     }
 
     const videoIds = videos.map((video) => video.id);
-    const [collections, creators, tags, studios, artwork, stats] = await Promise.all([
-      include.includes("collection")
-        ? videoCollectionsService.getCollectionContextsByVideoIds(videoIds)
-        : Promise.resolve(new Map()),
-      include.includes("creators")
-        ? creatorsRelationshipsService.getCreatorsForVideos(videoIds)
-        : Promise.resolve(new Map()),
-      include.includes("tags")
-        ? tagsService.getTagsForVideos(videoIds)
-        : Promise.resolve(new Map()),
-      include.includes("studios")
-        ? studiosRelationshipsService.getStudiosForVideos(videoIds)
-        : Promise.resolve(new Map()),
-      include.includes("artwork")
-        ? artworkService.getSummariesByVideoIds(videoIds)
-        : Promise.resolve(new Map()),
-      include.includes("stats")
-        ? videoStatsService.getSummariesForVideos(userId, videoIds)
-        : Promise.resolve(new Map()),
-    ]);
+    const [collections, creators, tags, studios, artwork, stats] =
+      await Promise.all([
+        include.includes("collection")
+          ? videoCollectionsService.getCollectionContextsByVideoIds(videoIds)
+          : Promise.resolve(new Map()),
+        include.includes("creators")
+          ? creatorsRelationshipsService.getCreatorsForVideos(videoIds)
+          : Promise.resolve(new Map()),
+        include.includes("tags")
+          ? tagsService.getTagsForVideos(videoIds)
+          : Promise.resolve(new Map()),
+        include.includes("studios")
+          ? studiosRelationshipsService.getStudiosForVideos(videoIds)
+          : Promise.resolve(new Map()),
+        include.includes("artwork")
+          ? artworkService.getSummariesByVideoIds(videoIds)
+          : Promise.resolve(new Map()),
+        include.includes("stats")
+          ? videoStatsService.getSummariesForVideos(userId, videoIds)
+          : Promise.resolve(new Map()),
+      ]);
 
     return videos.map((video) => ({
       ...video,
@@ -603,7 +260,7 @@ export class VideosSearchService {
         ? { artwork: artwork.get(video.id) ?? null }
         : {}),
       ...(include.includes("stats")
-        ? stats.get(video.id) ?? { play_count: 0, last_played_at: null }
+        ? (stats.get(video.id) ?? { play_count: 0, last_played_at: null })
         : {}),
     }));
   }
@@ -613,13 +270,13 @@ export class VideosSearchService {
    */
   async getNextVideo(
     userId: number,
-    options: NextVideoOptions,
+    options: NextVideoOptions
   ): Promise<NextVideoResult> {
     if (env.DEMO_MODE) {
       const { demoRepository } = await import("@/database/demo/repository");
       const result = demoRepository.getVideos({ ...options, limit: 10_000 });
       const currentIndex = result.data.findIndex(
-        (video: Video) => video.id === options.currentId,
+        (video: Video) => video.id === options.currentId
       );
       if (currentIndex < 0 || result.data.length === 0) {
         return {
@@ -692,53 +349,30 @@ export class VideosSearchService {
     const isDescending = order === "desc";
     const isNext = direction === "next";
 
-    let comparisonOp: SQL;
-    let sortDirection: typeof asc | typeof desc;
-
-    if (isNext) {
-      if (isDescending) {
-        comparisonOp = lte(
-          videosTable[sortColumn],
-          currentSortValue as number | string | Date,
-        );
-        sortDirection = desc;
-      } else {
-        comparisonOp = gte(
-          videosTable[sortColumn],
-          currentSortValue as number | string | Date,
-        );
-        sortDirection = asc;
-      }
-    } else {
-      if (isDescending) {
-        comparisonOp = gte(
-          videosTable[sortColumn],
-          currentSortValue as number | string | Date,
-        );
-        sortDirection = asc;
-      } else {
-        comparisonOp = lte(
-          videosTable[sortColumn],
-          currentSortValue as number | string | Date,
-        );
-        sortDirection = desc;
-      }
-    }
-
-    // Try to find next video
-    const positionalConditions = [
-      ...conditions,
-      or(
-        comparisonOp,
-        and(
-          eq(videosTable[sortColumn], currentSortValue as number | string | Date),
-          isNext
-            ? gte(videosTable.id, currentId)
-            : lte(videosTable.id, currentId),
-        ),
-      )!,
-      sql`${videosTable.id} != ${currentId}`,
-    ];
+    const ascending = isNext !== isDescending;
+    const sortDirection = ascending ? asc : desc;
+    const column = videosTable[sortColumn];
+    const idComparison = ascending
+      ? gt(videosTable.id, currentId)
+      : lt(videosTable.id, currentId);
+    // PostgreSQL's default order puts NULL last ascending and first descending.
+    // Treat unknown metadata as an ordered group, including its ID tie-break.
+    const positionalComparison =
+      currentSortValue == null
+        ? ascending
+          ? and(isNull(column), idComparison)
+          : or(isNotNull(column), and(isNull(column), idComparison))
+        : or(
+            ascending
+              ? gt(column, currentSortValue as number | string | Date)
+              : lt(column, currentSortValue as number | string | Date),
+            and(
+              eq(column, currentSortValue as number | string | Date),
+              idComparison
+            ),
+            ascending ? isNull(column) : undefined
+          );
+    const positionalConditions = [...conditions, positionalComparison!];
 
     const nextVideoResult = await db
       .select({
@@ -772,7 +406,7 @@ export class VideosSearchService {
       .where(and(...positionalConditions))
       .orderBy(
         sortDirection(videosTable[sortColumn]),
-        sortDirection(videosTable.id),
+        sortDirection(videosTable.id)
       )
       .limit(1);
 
@@ -822,7 +456,7 @@ export class VideosSearchService {
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(
           wrapDirection(videosTable[sortColumn]),
-          wrapDirection(videosTable.id),
+          wrapDirection(videosTable.id)
         )
         .limit(1);
 
@@ -882,7 +516,7 @@ export class VideosSearchService {
     return {
       video: videoResponse,
       meta: {
-        remaining: Number(remainingCountResult[0]?.count || 0),
+        remaining: Math.max(0, Number(remainingCountResult[0]?.count || 0)),
         total_matching: Number(totalCountResult[0]?.count || 0),
         has_wrapped: hasWrapped,
       },
@@ -894,7 +528,7 @@ export class VideosSearchService {
    */
   async getTriageQueue(
     userId: number,
-    options: TriageQueueOptions,
+    options: TriageQueueOptions
   ): Promise<TriageQueueResult> {
     if (env.DEMO_MODE) {
       const { demoRepository } = await import("@/database/demo/repository");
@@ -940,7 +574,7 @@ export class VideosSearchService {
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(
         sortDirection(videosTable[sortColumn]),
-        sortDirection(videosTable.id),
+        sortDirection(videosTable.id)
       )
       .limit(queueLimit)
       .offset(queueOffset);

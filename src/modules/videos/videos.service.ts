@@ -7,8 +7,6 @@ import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.servic
 import {
   videosTable,
   studiosTable,
-  videoCreatorsTable,
-  videoTagsTable,
   videoStudiosTable,
   thumbnailsTable,
   favoritesTable,
@@ -57,18 +55,6 @@ import type { VideoInclude } from "./videos.types";
  * Main video service - Core CRUD operations
  */
 export class VideosService {
-  private async expandTagIds(tagIds?: number[]): Promise<number[] | undefined> {
-    if (!tagIds || tagIds.length === 0) return tagIds;
-
-    const expanded = new Set(tagIds);
-    for (const id of tagIds) {
-      const descendants = await tagsService.getDescendants(id);
-      descendants.forEach((tag) => expanded.add(tag.id));
-    }
-
-    return Array.from(expanded);
-  }
-
   /**
    * Find video file path and availability by ID (lightweight lookup for streaming)
    */
@@ -319,82 +305,8 @@ export class VideosService {
       return sliced[0];
     }
 
-    const tagIds = await this.expandTagIds(options.tagIds);
-    const resolvedOptions = { ...options, tagIds };
-    const { conditions } = buildVideoFilters(userId, resolvedOptions);
-    const matchMode = resolvedOptions.matchMode ?? "any";
-
-    if (
-      resolvedOptions.creatorIds !== undefined &&
-      resolvedOptions.creatorIds.length > 0
-    ) {
-      if (matchMode === "all") {
-        conditions.push(sql`
-          (
-            SELECT COUNT(DISTINCT ${videoCreatorsTable.creatorId})
-            FROM ${videoCreatorsTable}
-            WHERE ${videoCreatorsTable.videoId} = ${videosTable.id}
-              AND ${inArray(videoCreatorsTable.creatorId, resolvedOptions.creatorIds)}
-          ) >= ${resolvedOptions.creatorIds.length}
-        `);
-      } else {
-        conditions.push(sql`
-          EXISTS (
-            SELECT 1 FROM ${videoCreatorsTable}
-            WHERE ${videoCreatorsTable.videoId} = ${videosTable.id}
-              AND ${inArray(videoCreatorsTable.creatorId, resolvedOptions.creatorIds)}
-          )
-        `);
-      }
-    }
-
-    if (tagIds !== undefined && tagIds.length > 0) {
-      if (matchMode === "all") {
-        conditions.push(sql`
-          (
-            SELECT COUNT(DISTINCT ${videoTagsTable.tagId})
-            FROM ${videoTagsTable}
-            WHERE ${videoTagsTable.videoId} = ${videosTable.id}
-              AND ${inArray(videoTagsTable.tagId, tagIds)}
-          ) >= ${tagIds.length}
-        `);
-      } else {
-        conditions.push(sql`
-          EXISTS (
-            SELECT 1 FROM ${videoTagsTable}
-            WHERE ${videoTagsTable.videoId} = ${videosTable.id}
-              AND ${inArray(videoTagsTable.tagId, tagIds)}
-          )
-        `);
-      }
-    }
-
-    if (
-      resolvedOptions.studioIds !== undefined &&
-      resolvedOptions.studioIds.length > 0
-    ) {
-      if (matchMode === "all") {
-        conditions.push(sql`
-          (
-            SELECT COUNT(DISTINCT ${videoStudiosTable.studioId})
-            FROM ${videoStudiosTable}
-            WHERE ${videoStudiosTable.videoId} = ${videosTable.id}
-              AND ${inArray(videoStudiosTable.studioId, resolvedOptions.studioIds)}
-          ) >= ${resolvedOptions.studioIds.length}
-        `);
-      } else {
-        conditions.push(sql`
-          EXISTS (
-            SELECT 1 FROM ${videoStudiosTable}
-            WHERE ${videoStudiosTable.videoId} = ${videosTable.id}
-              AND ${inArray(videoStudiosTable.studioId, resolvedOptions.studioIds)}
-          )
-        `);
-      }
-    }
-
-    const limit =
-      resolvedOptions.limit !== undefined ? resolvedOptions.limit : 1;
+    const { conditions } = buildVideoFilters(userId, options);
+    const limit = options.limit ?? 1;
 
     const randomVideos = await db
       .select({ id: videosTable.id })
@@ -407,7 +319,7 @@ export class VideosService {
       throw new NotFoundError("No matching videos found");
     }
 
-    if (resolvedOptions.limit !== undefined) {
+    if (options.limit !== undefined) {
       return Promise.all(
         randomVideos.map((rv) => this.findById(rv.id, userId))
       );

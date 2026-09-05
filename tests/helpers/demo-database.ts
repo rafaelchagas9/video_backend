@@ -1,9 +1,10 @@
 import { afterAll, beforeAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { createDemoFixtureFiles } from "./demo-fixtures";
 
-/** Read local generated demo fixtures into a disposable database. */
+/** Read synthetic demo fixtures into a disposable database. */
 export function useSeededDemoDatabase({ artwork = false } = {}): void {
   const originalNodeEnv = process.env.NODE_ENV;
   let root: string;
@@ -15,16 +16,17 @@ export function useSeededDemoDatabase({ artwork = false } = {}): void {
     process.env.NODE_ENV = "test";
     ({ env } = await import("@/config/env"));
     originalAssetsDir = env.DEMO_ASSETS_DIR;
-    env.DEMO_ASSETS_DIR = "demo_mode";
     root = mkdtempSync(join(tmpdir(), "conversor-demo-test-"));
+    env.DEMO_ASSETS_DIR = root;
+    const fixtures = createDemoFixtureFiles(root);
     demo = await import("@/database/demo");
     demo.setDemoDatabasePathForTests(join(root, "demo.sqlite"));
-    demo.importDemoJsonFile(resolve("demo_mode/demo_mode.json"), {
+    demo.importDemoJsonFile(fixtures.seedPath, {
       reset: true,
     });
     if (artwork) {
       demo.importDemoArtworkManifestFile(
-        resolve("demo_mode/artwork/manifest.json")
+        fixtures.manifestPath
       );
     }
   });

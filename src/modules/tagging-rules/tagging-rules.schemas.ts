@@ -83,44 +83,109 @@ export const idParamSchema = z.object({
 });
 
 export const listQuerySchema = z.object({
-  include_disabled: z.coerce.boolean().optional().default(false),
+  include_disabled: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional()
+    .default(false),
 });
 
-const ruleConditionInputSchema = z.object({
-  condition_type: z.enum([
-    "path_pattern",
-    "file_pattern",
-    "duration_range",
-    "resolution",
-    "codec",
-    "file_size",
-  ]),
-  operator: z.enum([
-    "matches",
-    "equals",
-    "contains",
-    "gt",
-    "lt",
-    "gte",
-    "lte",
-    "regex",
-  ]),
-  value: z.string().min(1).max(1000),
-});
+const ruleConditionInputSchema = z
+  .object({
+    condition_type: z.enum([
+      "path_pattern",
+      "file_pattern",
+      "duration_range",
+      "resolution",
+      "codec",
+      "file_size",
+    ]),
+    operator: z.enum([
+      "matches",
+      "equals",
+      "contains",
+      "gt",
+      "lt",
+      "gte",
+      "lte",
+      "regex",
+    ]),
+    value: z.string().trim().min(1).max(1000),
+  })
+  .superRefine((condition, ctx) => {
+    const numeric = ["duration_range", "file_size", "resolution"].includes(
+      condition.condition_type
+    );
+    const allowed = numeric
+      ? ["equals", "gt", "gte", "lt", "lte"]
+      : ["equals", "contains", "matches", "regex"];
+    if (!allowed.includes(condition.operator))
+      ctx.addIssue({
+        code: "custom",
+        path: ["operator"],
+        message: "Operator is not supported for this condition type",
+      });
+    if (numeric) {
+      const value = condition.value.toLowerCase();
+      const parsed = Number(
+        condition.condition_type === "resolution"
+          ? value === "4k"
+            ? 2160
+            : value === "8k"
+              ? 4320
+              : value.replace(/p$/, "")
+          : value
+      );
+      if (!Number.isFinite(parsed) || parsed < 0)
+        ctx.addIssue({
+          code: "custom",
+          path: ["value"],
+          message:
+            "Use a nonnegative number: duration in seconds, size in bytes, resolution in vertical pixels (or 1080p/4K)",
+        });
+    } else if (
+      condition.operator === "regex" ||
+      condition.operator === "matches"
+    ) {
+      try {
+        new RegExp(condition.value);
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          path: ["value"],
+          message: "Invalid regular expression",
+        });
+      }
+    }
+  });
 
-const ruleActionInputSchema = z.object({
-  action_type: z.enum([
-    "add_tag",
-    "remove_tag",
-    "add_creator",
-    "remove_creator",
-    "add_studio",
-    "remove_studio",
-  ]),
-  target_id: z.number().int().positive().optional(),
-  target_name: z.string().optional(),
-  dynamic_value: z.string().optional(),
-});
+const ruleActionInputSchema = z
+  .object({
+    action_type: z.enum([
+      "add_tag",
+      "remove_tag",
+      "add_creator",
+      "remove_creator",
+      "add_studio",
+      "remove_studio",
+    ]),
+    target_id: z.number().int().positive().optional(),
+    target_name: z.string().trim().min(1).max(255).optional(),
+    dynamic_value: z
+      .string()
+      .regex(
+        /^\$[A-Za-z_][A-Za-z0-9_]*$/,
+        "Use a named regex capture, for example $creator"
+      )
+      .optional(),
+  })
+  .refine(
+    (action) =>
+      action.target_id !== undefined ||
+      action.target_name !== undefined ||
+      action.dynamic_value !== undefined,
+    { message: "An action requires a target ID, name, or named capture" }
+  );
 
 export const createTaggingRuleSchema = z.object({
   name: z.string().min(1).max(255),
@@ -174,8 +239,8 @@ export const testRuleResponseSchema = z.object({
 });
 
 export const applyRulesSchema = z.object({
-  video_ids: z.array(z.number().int().positive()).optional(),
-  dry_run: z.coerce.boolean().default(false),
+  video_ids: z.array(z.number().int().positive()).max(1000).optional(),
+  dry_run: z.boolean().default(false),
   limit: z.coerce.number().int().positive().max(1000).default(100),
 });
 

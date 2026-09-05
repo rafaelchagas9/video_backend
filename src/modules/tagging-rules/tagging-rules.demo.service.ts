@@ -1,4 +1,8 @@
-import { getDemoSqlite, initializeDemoDatabase } from "@/database/demo";
+import {
+  getDemoSqlite,
+  initializeDemoDatabase,
+  withDemoTransaction,
+} from "@/database/demo";
 import { ConflictError, NotFoundError } from "@/utils/errors";
 import type {
   ApplyRulesResult,
@@ -11,21 +15,13 @@ import type {
 } from "./tagging-rules.types";
 import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
 
+import { compileConditions, type RuleVideo } from "./tagging-rules.matcher";
+
 const RESOURCE_KIND = "tagging-rule";
 
 interface ResourceRow {
   id: string;
   payload_json: string;
-}
-interface DemoVideo {
-  id: number;
-  file_path: string;
-  file_name: string;
-  duration_seconds: number | null;
-  width: number | null;
-  height: number | null;
-  codec: string | null;
-  file_size_bytes: number;
 }
 
 function now(): string {
@@ -144,8 +140,9 @@ export class TaggingRulesDemoService {
   async testRule(ruleId: number, limit = 10): Promise<TestRuleResult> {
     const rule = await this.findById(ruleId);
     const sampleMatches: TestRuleResult["sample_matches"] = [];
+    const evaluate = compileConditions(rule.conditions ?? []);
     for (const video of this.videos(undefined, limit)) {
-      const conditions = this.evaluate(video, rule.conditions ?? []);
+      const { matchedConditions: conditions } = evaluate(video);
       if (conditions.length > 0)
         sampleMatches.push({
           video_id: video.id,
@@ -163,7 +160,12 @@ export class TaggingRulesDemoService {
     limit?: number;
   }): Promise<ApplyRulesResult> {
     const rules = await this.list(false);
-    const videos = this.videos(input.video_ids, input.limit ?? 100);
+    const videos = rules.length
+      ? this.videos(input.video_ids, input.limit ?? 100)
+      : [];
+    const evaluators = new Map(
+      rules.map((rule) => [rule.id, compileConditions(rule.conditions ?? [])])
+    );
     const result: ApplyRulesResult = {
       processed: videos.length,
       tagged: 0,
@@ -172,10 +174,12 @@ export class TaggingRulesDemoService {
       log: [],
     };
     for (const video of videos) {
+      let videoChanged = false;
       for (const rule of rules) {
-        if (this.evaluate(video, rule.conditions ?? []).length === 0) continue;
+        const { matchedConditions, captures } = evaluators.get(rule.id)!(video);
+        if (matchedConditions.length === 0 || !rule.actions?.length) continue;
         if (input.dry_run) {
-          result.tagged += 1;
+          videoChanged = true;
           result.log.push({
             video_id: video.id,
             rule_id: rule.id,
@@ -184,16 +188,21 @@ export class TaggingRulesDemoService {
           continue;
         }
         try {
-          for (const action of rule.actions ?? []) {
-            if (!this.applyAction(video.id, action)) continue;
-            result.tagged += 1;
-            if (action.action_type === "add_tag")
-              result.details.tags_added += 1;
-            if (action.action_type === "add_creator")
-              result.details.creators_added += 1;
-            if (action.action_type === "add_studio")
-              result.details.studios_added += 1;
-          }
+          const changes = withDemoTransaction(() => {
+            const counts = { changed: false, tags: 0, creators: 0, studios: 0 };
+            for (const action of rule.actions ?? []) {
+              if (!this.applyAction(video.id, action, captures)) continue;
+              counts.changed = true;
+              if (action.action_type === "add_tag") counts.tags++;
+              if (action.action_type === "add_creator") counts.creators++;
+              if (action.action_type === "add_studio") counts.studios++;
+            }
+            return counts;
+          });
+          videoChanged ||= changes.changed;
+          result.details.tags_added += changes.tags;
+          result.details.creators_added += changes.creators;
+          result.details.studios_added += changes.studios;
           result.log.push({
             video_id: video.id,
             rule_id: rule.id,
@@ -209,6 +218,7 @@ export class TaggingRulesDemoService {
           });
         }
       }
+      if (videoChanged) result.tagged++;
     }
     return result;
   }
@@ -258,81 +268,71 @@ export class TaggingRulesDemoService {
     }));
   }
 
-  private videos(ids: number[] | undefined, limit: number): DemoVideo[] {
+  private videos(ids: number[] | undefined, limit: number): RuleVideo[] {
     initializeDemoDatabase();
-    const all = getDemoSqlite()
-      .query<DemoVideo, []>(
+    if (ids?.length === 0) return [];
+    const uniqueIds = ids ? [...new Set(ids)] : undefined;
+    return getDemoSqlite()
+      .query<RuleVideo, number[]>(
         `SELECT id, file_path, file_name, duration_seconds, width, height, codec, file_size_bytes
-       FROM demo_videos WHERE is_available = 1 ORDER BY id`
+       FROM demo_videos WHERE is_available = 1
+       ${uniqueIds ? `AND id IN (${uniqueIds.map(() => "?").join(",")})` : ""}
+       ORDER BY id LIMIT ?`
       )
-      .all();
-    return (
-      ids?.length ? all.filter((video) => ids.includes(video.id)) : all
-    ).slice(0, limit);
+      .all(...(uniqueIds ?? []), limit);
   }
 
-  private evaluate(
-    video: DemoVideo,
-    conditions: TaggingRuleCondition[]
-  ): string[] {
-    return conditions
-      .filter((condition) => this.matches(video, condition))
-      .map(
-        (condition) =>
-          `${condition.condition_type} ${condition.operator} ${condition.value}`
-      );
-  }
-
-  private matches(video: DemoVideo, condition: TaggingRuleCondition): boolean {
-    const actual =
-      condition.condition_type === "path_pattern"
-        ? video.file_path
-        : condition.condition_type === "file_pattern"
-          ? video.file_name
-          : condition.condition_type === "duration_range"
-            ? video.duration_seconds
-            : condition.condition_type === "resolution"
-              ? video.height
-              : condition.condition_type === "codec"
-                ? video.codec
-                : video.file_size_bytes;
-    if (actual === null) return false;
-    if (typeof actual === "number") {
-      const numeric = Number(
-        condition.condition_type === "resolution"
-          ? condition.value.replace(/p$/i, "")
-          : condition.value
-      );
-      if (!Number.isFinite(numeric)) return false;
-      if (condition.operator === "gt") return actual > numeric;
-      if (condition.operator === "gte") return actual >= numeric;
-      if (condition.operator === "lt") return actual < numeric;
-      if (condition.operator === "lte") return actual <= numeric;
-      return actual === numeric;
-    }
-    if (condition.operator === "contains")
-      return actual.toLowerCase().includes(condition.value.toLowerCase());
-    if (condition.operator === "equals")
-      return actual.toLowerCase() === condition.value.toLowerCase();
-    if (condition.operator === "matches" || condition.operator === "regex") {
-      try {
-        return new RegExp(condition.value, "i").test(actual);
-      } catch {
-        return false;
+  private applyAction(
+    videoId: number,
+    action: TaggingRuleAction,
+    captures: Record<string, string>
+  ): boolean {
+    const kind = action.action_type.endsWith("tag")
+      ? "tag"
+      : action.action_type.endsWith("creator")
+        ? "creator"
+        : "studio";
+    const addTarget = action.action_type.startsWith("add_");
+    let targetId = action.target_id;
+    const name = action.dynamic_value
+      ? captures[action.dynamic_value.slice(1)]?.trim()
+      : action.target_name?.trim();
+    if (!targetId && name) {
+      const table =
+        kind === "tag"
+          ? "demo_tags"
+          : kind === "creator"
+            ? "demo_creators"
+            : "demo_studios";
+      const where = `name = ?${kind === "tag" ? " AND parent_id IS NULL" : ""}`;
+      let row = getDemoSqlite()
+        .query<
+          { id: number },
+          [string]
+        >(`SELECT id FROM ${table} WHERE ${where} ORDER BY id LIMIT 1`)
+        .get(name);
+      if (!row && addTarget) {
+        getDemoSqlite().run(
+          `INSERT INTO ${table} (name, created_at, updated_at) VALUES (?, ?, ?)`,
+          [name, now(), now()]
+        );
+        row = getDemoSqlite()
+          .query<
+            { id: number },
+            [string]
+          >(`SELECT id FROM ${table} WHERE ${where} ORDER BY id LIMIT 1`)
+          .get(name);
       }
+      targetId = row?.id ?? null;
+      if (!targetId && !addTarget) return false;
     }
-    return false;
-  }
-
-  private applyAction(videoId: number, action: TaggingRuleAction): boolean {
-    if (!action.target_id) return false;
+    if (!targetId)
+      throw new Error(`No target resolved for ${action.action_type}`);
     if (action.action_type === "add_studio") {
-      studioAssignmentDemoService.linkMany([videoId], [action.target_id]);
-      return true;
+      return studioAssignmentDemoService.linkMany([videoId], [targetId]) > 0;
     }
     if (action.action_type === "remove_studio") {
-      studioAssignmentDemoService.unlinkMany([videoId], [action.target_id]);
-      return true;
+      return studioAssignmentDemoService.unlinkMany([videoId], [targetId]) > 0;
     }
     const mapping = {
       add_tag: ["demo_video_tags", "tag_id", true],
@@ -344,11 +344,11 @@ export class TaggingRulesDemoService {
     const operation = add
       ? getDemoSqlite().run(
           `INSERT OR IGNORE INTO ${table} (video_id, ${column}) VALUES (?, ?)`,
-          [videoId, action.target_id]
+          [videoId, targetId]
         )
       : getDemoSqlite().run(
           `DELETE FROM ${table} WHERE video_id = ? AND ${column} = ?`,
-          [videoId, action.target_id]
+          [videoId, targetId]
         );
     return operation.changes > 0;
   }

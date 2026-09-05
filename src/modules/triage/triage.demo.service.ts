@@ -1,9 +1,8 @@
+import { getDemoSqlite, initializeDemoDatabase } from "@/database/demo";
 import {
-  getDemoSqlite,
-  initializeDemoDatabase,
-  withDemoTransaction,
-} from "@/database/demo";
-import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
+  videoRelationshipsService,
+  emptyRelationshipCounts,
+} from "@/modules/videos/videos.relationships.service";
 import { ConflictError } from "@/utils/errors";
 import type {
   GetTriageProgressInput,
@@ -104,52 +103,34 @@ export class TriageDemoService {
       .map((row) => JSON.parse(row.payload_json) as TriageProgress);
   }
 
-  async getStatistics(): Promise<TriageStatistics> {
+  async getStatistics(userId: number): Promise<TriageStatistics> {
     initializeDemoDatabase();
     const sqlite = getDemoSqlite();
-    const totalVideos = Number(
-      sqlite
-        .query<
-          { count: number },
-          []
-        >("SELECT COUNT(*) AS count FROM demo_videos WHERE is_available = 1")
-        .get()?.count ?? 0
-    );
-    const videosWithCreators = Number(
-      sqlite
-        .query<{ count: number }, []>(
-          `SELECT COUNT(DISTINCT vc.video_id) AS count
-           FROM demo_video_creators vc
-           JOIN demo_videos v ON v.id = vc.video_id
-           WHERE v.is_available = 1`
-        )
-        .get()?.count ?? 0
-    );
-    const tagged24h = Number(
-      sqlite
-        .query<{ count: number }, []>(
-          `SELECT COUNT(*) AS count FROM demo_videos v
-           WHERE v.is_available = 1
-             AND EXISTS (
-               SELECT 1 FROM demo_video_creators vc WHERE vc.video_id = v.id
-             )
-             AND datetime(v.indexed_at) >= datetime('now', '-1 day')`
-        )
-        .get()?.count ?? 0
-    );
-    const tagged7d = Number(
-      sqlite
-        .query<{ count: number }, []>(
-          `SELECT COUNT(*) AS count FROM demo_videos v
-           WHERE v.is_available = 1
-             AND EXISTS (
-               SELECT 1 FROM demo_video_creators vc WHERE vc.video_id = v.id
-             )
-             AND datetime(v.indexed_at) >= datetime('now', '-7 days')`
-        )
-        .get()?.count ?? 0
-    );
-    const progress = this.allProgress();
+    const summary = sqlite
+      .query<
+        {
+          total: number;
+          tagged: number;
+          indexed_24h: number;
+          indexed_7d: number;
+        },
+        []
+      >(
+        `
+      SELECT COUNT(*) AS total, COUNT(vc.video_id) AS tagged,
+        COUNT(CASE WHEN datetime(v.indexed_at) >= datetime('now', '-1 day') THEN vc.video_id END) AS indexed_24h,
+        COUNT(CASE WHEN datetime(v.indexed_at) >= datetime('now', '-7 days') THEN vc.video_id END) AS indexed_7d
+      FROM demo_videos v
+      LEFT JOIN (SELECT DISTINCT video_id FROM demo_video_creators) vc ON vc.video_id = v.id
+      WHERE v.is_available = 1
+    `
+      )
+      .get()!;
+    const totalVideos = summary.total;
+    const videosWithCreators = summary.tagged;
+    const tagged24h = summary.indexed_24h;
+    const tagged7d = summary.indexed_7d;
+    const progress = await this.listProgress(userId);
     const directoryPaths = new Map(
       sqlite
         .query<ResourceRow, [string]>(
@@ -190,7 +171,7 @@ export class TriageDemoService {
       recent_progress: {
         last_24h_processed: tagged24h,
         last_7d_processed: tagged7d,
-        avg_daily_rate: tagged24h,
+        avg_daily_rate: Math.round(tagged7d / 7),
       },
       filter_breakdown: progress.slice(0, 10).map((item) => ({
         filter_key: item.filter_key,
@@ -208,77 +189,19 @@ export class TriageDemoService {
   async applyBulkActions(
     input: TriageBulkActionsInput
   ): Promise<TriageBulkActionsResult> {
-    initializeDemoDatabase();
-    const details = {
-      creators_added: 0,
-      creators_removed: 0,
-      tags_added: 0,
-      tags_removed: 0,
-      studios_added: 0,
-      studios_removed: 0,
-    };
-    if (input.videoIds.length === 0) {
-      return { success: true, processed: 0, errors: 0, details };
-    }
-
     try {
-      withDemoTransaction(() => {
-        details.creators_added = this.addRelationships(
-          "demo_video_creators",
-          "creator_id",
-          input.videoIds,
-          input.actions.addCreatorIds
-        );
-        details.creators_removed = this.removeRelationships(
-          "demo_video_creators",
-          "creator_id",
-          input.videoIds,
-          input.actions.removeCreatorIds
-        );
-        details.tags_added = this.addRelationships(
-          "demo_video_tags",
-          "tag_id",
-          input.videoIds,
-          input.actions.addTagIds
-        );
-        details.tags_removed = this.removeRelationships(
-          "demo_video_tags",
-          "tag_id",
-          input.videoIds,
-          input.actions.removeTagIds
-        );
-        if (input.actions.addStudioIds?.length) {
-          details.studios_added = studioAssignmentDemoService.linkMany(input.videoIds, input.actions.addStudioIds);
-        }
-        if (input.actions.removeStudioIds?.length) {
-          details.studios_removed = studioAssignmentDemoService.unlinkMany(input.videoIds, input.actions.removeStudioIds);
-        }
-        if (input.actions.studioAssignmentStatus === "confirmed_none") {
-          studioAssignmentDemoService.confirmNone(input.videoIds);
-        } else if (input.actions.studioAssignmentStatus === "unknown") {
-          studioAssignmentDemoService.markUnknown(input.videoIds);
-        }
-      });
-      return {
-        success: true,
-        processed: input.videoIds.length,
-        errors: 0,
-        details,
-      };
+      const { processed, details } = videoRelationshipsService.applyDemo(
+        input.videoIds,
+        input.actions
+      );
+      return { success: true, processed, errors: 0, details };
     } catch (error) {
       if (error instanceof ConflictError) throw error;
       return {
         success: false,
-        processed: input.videoIds.length,
+        processed: 0,
         errors: 1,
-        details: {
-          creators_added: 0,
-          creators_removed: 0,
-          tags_added: 0,
-          tags_removed: 0,
-          studios_added: 0,
-          studios_removed: 0,
-        },
+        details: emptyRelationshipCounts(),
       };
     }
   }
@@ -300,42 +223,6 @@ export class TriageDemoService {
         0
       ) + 1
     );
-  }
-
-  private addRelationships(
-    table: string,
-    targetColumn: string,
-    videoIds: number[],
-    targetIds: number[] | undefined
-  ): number {
-    let changes = 0;
-    for (const videoId of videoIds) {
-      for (const targetId of targetIds ?? []) {
-        changes += getDemoSqlite().run(
-          `INSERT OR IGNORE INTO ${table} (video_id, ${targetColumn}) VALUES (?, ?)`,
-          [videoId, targetId]
-        ).changes;
-      }
-    }
-    return changes;
-  }
-
-  private removeRelationships(
-    table: string,
-    targetColumn: string,
-    videoIds: number[],
-    targetIds: number[] | undefined
-  ): number {
-    let changes = 0;
-    for (const videoId of videoIds) {
-      for (const targetId of targetIds ?? []) {
-        changes += getDemoSqlite().run(
-          `DELETE FROM ${table} WHERE video_id = ? AND ${targetColumn} = ?`,
-          [videoId, targetId]
-        ).changes;
-      }
-    }
-    return changes;
   }
 }
 

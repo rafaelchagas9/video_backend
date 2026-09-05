@@ -1,16 +1,16 @@
-import { pgTable, serial, text, integer, real, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, integer, bigint, real, timestamp, index } from 'drizzle-orm/pg-core';
 
 // Storage statistics snapshots (hourly)
 export const statsStorageSnapshotsTable = pgTable('stats_storage_snapshots', {
   id: serial('id').primaryKey(),
-  totalVideoSizeBytes: integer('total_video_size_bytes').notNull(),
+  totalVideoSizeBytes: bigint('total_video_size_bytes', { mode: "number" }).notNull(),
   totalVideoCount: integer('total_video_count').notNull(),
-  thumbnailsSizeBytes: integer('thumbnails_size_bytes').default(0).notNull(),
-  storyboardsSizeBytes: integer('storyboards_size_bytes').default(0).notNull(),
-  profilePicturesSizeBytes: integer('profile_pictures_size_bytes').default(0).notNull(),
-  convertedSizeBytes: integer('converted_size_bytes').default(0).notNull(),
-  facesSizeBytes: integer('faces_size_bytes').default(0).notNull(),
-  databaseSizeBytes: integer('database_size_bytes').default(0).notNull(),
+  thumbnailsSizeBytes: bigint('thumbnails_size_bytes', { mode: "number" }).default(0).notNull(),
+  storyboardsSizeBytes: bigint('storyboards_size_bytes', { mode: "number" }).default(0).notNull(),
+  profilePicturesSizeBytes: bigint('profile_pictures_size_bytes', { mode: "number" }).default(0).notNull(),
+  convertedSizeBytes: bigint('converted_size_bytes', { mode: "number" }).default(0).notNull(),
+  facesSizeBytes: bigint('faces_size_bytes', { mode: "number" }).default(0).notNull(),
+  databaseSizeBytes: bigint('database_size_bytes', { mode: "number" }).default(0).notNull(),
   directoryBreakdown: text('directory_breakdown'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => ({
@@ -23,8 +23,8 @@ export const statsLibrarySnapshotsTable = pgTable('stats_library_snapshots', {
   totalVideoCount: integer('total_video_count').notNull(),
   availableVideoCount: integer('available_video_count').notNull(),
   unavailableVideoCount: integer('unavailable_video_count').notNull(),
-  totalSizeBytes: integer('total_size_bytes').notNull(),
-  averageSizeBytes: integer('average_size_bytes').notNull(),
+  totalSizeBytes: bigint('total_size_bytes', { mode: "number" }).notNull(),
+  averageSizeBytes: bigint('average_size_bytes', { mode: "number" }).notNull(),
   totalDurationSeconds: real('total_duration_seconds').notNull(),
   averageDurationSeconds: real('average_duration_seconds').notNull(),
   resolutionBreakdown: text('resolution_breakdown'),

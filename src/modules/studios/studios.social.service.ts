@@ -8,7 +8,7 @@ import { randomUUID } from "crypto";
 import { logger } from "@/utils/logger";
 import { join } from "path";
 import { processProfilePicture } from "@/utils/image-processing";
-import { imageDownloadRateLimiter } from "@/utils/async-rate-limiter";
+import { downloadRemoteImage } from "@/utils/remote-image-download";
 import type {
   Studio,
   StudioSocialLink,
@@ -117,27 +117,7 @@ export class StudiosSocialService {
       return demoMediaAssetsService.setStudioPictureFromUrl(studioId, url);
     await this.findStudioById(studioId);
 
-    // Download image from URL
-    const buffer = await imageDownloadRateLimiter.schedule(async () => {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(
-          `Failed to download image: ${response.status} ${response.statusText}`
-        );
-      }
-
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.startsWith("image/")) {
-        throw new Error("URL does not point to a valid image");
-      }
-
-      return Buffer.from(await response.arrayBuffer());
-    });
-
-    // Validate minimum size
-    if (buffer.length < 100) {
-      throw new Error("Downloaded image is too small");
-    }
+    const buffer = await downloadRemoteImage(url);
 
     return this.uploadProfilePicture(studioId, buffer, "download");
   }
@@ -170,14 +150,14 @@ export class StudiosSocialService {
   async updateSocialLink(
     id: number,
     input: UpdateStudioSocialLinkInput,
-    studioId?: number
+    studioId: number
   ): Promise<StudioSocialLink> {
     if (env.DEMO_MODE) {
       if (studioId === undefined)
         throw new NotFoundError(`Studio social link not found with id: ${id}`);
       return studiosDemoService.updateSocialLink(studioId, id, input);
     }
-    await this.findSocialLinkById(id); // Ensure exists
+    await this.findSocialLinkById(id, studioId); // Ensure exists
 
     const updates: any = {};
 
@@ -190,28 +170,38 @@ export class StudiosSocialService {
     }
 
     if (Object.keys(updates).length === 0) {
-      return this.findSocialLinkById(id);
+      return this.findSocialLinkById(id, studioId);
     }
 
     await db
       .update(studioSocialLinksTable)
       .set(updates)
-      .where(eq(studioSocialLinksTable.id, id));
+      .where(
+        and(
+          eq(studioSocialLinksTable.id, id),
+          eq(studioSocialLinksTable.studioId, studioId)
+        )
+      );
 
-    return this.findSocialLinkById(id);
+    return this.findSocialLinkById(id, studioId);
   }
 
-  async deleteSocialLink(id: number, studioId?: number): Promise<void> {
+  async deleteSocialLink(id: number, studioId: number): Promise<void> {
     if (env.DEMO_MODE) {
       if (studioId === undefined)
         throw new NotFoundError(`Studio social link not found with id: ${id}`);
       studiosDemoService.deleteSocialLink(studioId, id);
       return;
     }
-    await this.findSocialLinkById(id); // Ensure exists
+    await this.findSocialLinkById(id, studioId); // Ensure exists
     await db
       .delete(studioSocialLinksTable)
-      .where(eq(studioSocialLinksTable.id, id));
+      .where(
+        and(
+          eq(studioSocialLinksTable.id, id),
+          eq(studioSocialLinksTable.studioId, studioId)
+        )
+      );
   }
 
   async getSocialLinks(studioId: number): Promise<StudioSocialLink[]> {
@@ -347,11 +337,21 @@ export class StudiosSocialService {
     return this.mapStudioToSnakeCase(studio);
   }
 
-  private async findSocialLinkById(id: number): Promise<StudioSocialLink> {
+  private async findSocialLinkById(
+    id: number,
+    studioId?: number
+  ): Promise<StudioSocialLink> {
     const link = await db
       .select()
       .from(studioSocialLinksTable)
-      .where(eq(studioSocialLinksTable.id, id))
+      .where(
+        and(
+          eq(studioSocialLinksTable.id, id),
+          studioId === undefined
+            ? undefined
+            : eq(studioSocialLinksTable.studioId, studioId)
+        )
+      )
       .limit(1)
       .then((rows) => rows[0] || null);
 

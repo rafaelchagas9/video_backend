@@ -87,10 +87,9 @@ mock.module("@/utils/image-processing", () => ({
   processProfilePicture: processPicture,
 }));
 mock.module("@/utils/logger", () => ({ logger: { warn } }));
-mock.module("@/utils/async-rate-limiter", () => ({
-  imageDownloadRateLimiter: {
-    schedule: (run: () => Promise<unknown>) => run(),
-  },
+const downloadImage = mock(async (_url: string) => Buffer.alloc(100));
+mock.module("@/utils/remote-image-download", () => ({
+  downloadRemoteImage: downloadImage,
 }));
 mock.module("@/modules/studios/studios.demo.service", () => ({
   studiosDemoService: {},
@@ -213,16 +212,12 @@ describe("studio picture replacement", () => {
   });
 
   it("uses the same failure-safe replacement flow for downloaded pictures", async () => {
-    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(Buffer.alloc(100), {
-        headers: { "content-type": "image/png" },
-      })
-    );
+    downloadImage.mockClear();
     updateError = new Error("database unavailable");
     await expect(
       service.setPictureFromUrl(7, "https://example.test/picture.png")
     ).rejects.toThrow("database unavailable");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(downloadImage).toHaveBeenCalledWith("https://example.test/picture.png");
     expectOldPicturePreserved();
     expect(readdirSync(directory)).toEqual(["old.webp"]);
   });

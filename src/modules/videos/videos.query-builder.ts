@@ -1,9 +1,12 @@
 import { SQL, or, eq, gte, lt, lte, sql, ilike, inArray } from "drizzle-orm";
 import {
   videosTable,
+  favoritesTable,
+  thumbnailsTable,
   ratingsTable,
   videoCreatorsTable,
   videoTagsTable,
+  tagsTable,
   videoStudiosTable,
   videoStatsTable,
 } from "@/database/schema";
@@ -15,14 +18,9 @@ import type { ListVideosOptions } from "./videos.types";
  */
 export function buildVideoFilters(
   userId: number,
-  options: ListVideosOptions,
+  options: ListVideosOptions
 ): {
   conditions: SQL[];
-  needsCreatorJoin: boolean;
-  needsTagJoin: boolean;
-  needsStudioJoin: boolean;
-  needsRatingJoin: boolean;
-  matchMode: "any" | "all";
 } {
   const {
     directory_id,
@@ -65,8 +63,8 @@ export function buildVideoFilters(
     studioIds,
     matchMode = "any",
     // Presence flags
-    isFavorite: _isFavorite, // Not yet implemented
-    hasThumbnail: _hasThumbnail, // Not yet implemented
+    isFavorite,
+    hasThumbnail,
     isAvailable,
     // Relationship presence filters
     hasTags,
@@ -78,17 +76,23 @@ export function buildVideoFilters(
 
   const conditions: SQL[] = [];
 
-  // Determine required JOINs
-  const needsRatingJoin = minRating !== undefined || maxRating !== undefined;
-  const needsCreatorJoin = !!(creatorIds && creatorIds.length > 0);
-  const needsTagJoin = !!(tagIds && tagIds.length > 0);
-  const needsStudioJoin = !!(studioIds && studioIds.length > 0);
-
   // Availability filter
   if (isAvailable !== undefined) {
     conditions.push(eq(videosTable.isAvailable, isAvailable));
   } else if (!include_hidden) {
     conditions.push(eq(videosTable.isAvailable, true));
+  }
+
+  if (isFavorite !== undefined) {
+    const favorite = sql`EXISTS (SELECT 1 FROM ${favoritesTable}
+      WHERE ${favoritesTable.videoId} = ${videosTable.id}
+        AND ${favoritesTable.userId} = ${userId})`;
+    conditions.push(isFavorite ? favorite : sql`NOT ${favorite}`);
+  }
+  if (hasThumbnail !== undefined) {
+    const thumbnail = sql`EXISTS (SELECT 1 FROM ${thumbnailsTable}
+      WHERE ${thumbnailsTable.videoId} = ${videosTable.id})`;
+    conditions.push(hasThumbnail ? thumbnail : sql`NOT ${thumbnail}`);
   }
 
   // Directory filter
@@ -151,9 +155,7 @@ export function buildVideoFilters(
       searchConditions.push(ilike(videosTable.filePath, searchPattern));
     }
 
-    conditions.push(
-      or(...searchConditions)!,
-    );
+    conditions.push(or(...searchConditions)!);
   }
 
   // Resolution filters
@@ -192,7 +194,7 @@ export function buildVideoFilters(
   }
   if (audioCodec) {
     conditions.push(
-      sql`LOWER(${videosTable.audioCodec}) = LOWER(${audioCodec})`,
+      sql`LOWER(${videosTable.audioCodec}) = LOWER(${audioCodec})`
     );
   }
 
@@ -212,64 +214,108 @@ export function buildVideoFilters(
     conditions.push(lte(videosTable.fps, maxFps));
   }
 
-  // NOTE: Rating filters will be applied via JOIN subquery in the search service
+  // Ratings are library-wide (the ratings table has no user_id).
+  const averageRating = sql`(SELECT AVG(${ratingsTable.rating}) FROM ${ratingsTable} WHERE ${ratingsTable.videoId} = ${videosTable.id})`;
+  if (minRating !== undefined) conditions.push(gte(averageRating, minRating));
+  if (maxRating !== undefined) conditions.push(lte(averageRating, maxRating));
+
+  for (const [ids, table, column, videoColumn] of [
+    [
+      creatorIds,
+      videoCreatorsTable,
+      videoCreatorsTable.creatorId,
+      videoCreatorsTable.videoId,
+    ],
+    [
+      studioIds,
+      videoStudiosTable,
+      videoStudiosTable.studioId,
+      videoStudiosTable.videoId,
+    ],
+  ] as const) {
+    const selected = [...new Set(ids ?? [])];
+    if (!selected.length) continue;
+    const predicate = sql`${videoColumn} = ${videosTable.id} AND ${inArray(column, selected)}`;
+    conditions.push(
+      matchMode === "all"
+        ? sql`(SELECT COUNT(DISTINCT ${column}) FROM ${table} WHERE ${predicate}) = ${selected.length}`
+        : sql`EXISTS (SELECT 1 FROM ${table} WHERE ${predicate})`
+    );
+  }
+
+  const selectedTags = [...new Set(tagIds ?? [])];
+  if (selectedTags.length) {
+    // Each selected parent represents its subtree. ALL means one match for
+    // every selected root, not a requirement to attach every descendant tag.
+    conditions.push(sql`${videosTable.id} IN (
+      WITH RECURSIVE selected_tags(id, root_id) AS (
+        SELECT ${tagsTable.id}, ${tagsTable.id} FROM ${tagsTable} WHERE ${inArray(tagsTable.id, selectedTags)}
+        UNION
+        SELECT child.id, selected_tags.root_id FROM ${tagsTable} child
+        JOIN selected_tags ON child.parent_id = selected_tags.id
+      )
+      SELECT ${videoTagsTable.videoId} FROM ${videoTagsTable} JOIN selected_tags ON selected_tags.id = ${videoTagsTable.tagId}
+      ${matchMode === "all" ? sql`GROUP BY ${videoTagsTable.videoId} HAVING COUNT(DISTINCT selected_tags.root_id) = ${selectedTags.length}` : sql``}
+    )`);
+  }
 
   // Relationship presence filters (using EXISTS subqueries)
   if (hasTags === true) {
     conditions.push(
-      sql`EXISTS (SELECT 1 FROM ${videoTagsTable} WHERE ${videoTagsTable.videoId} = ${videosTable.id})`,
+      sql`EXISTS (SELECT 1 FROM ${videoTagsTable} WHERE ${videoTagsTable.videoId} = ${videosTable.id})`
     );
   } else if (hasTags === false) {
     conditions.push(
-      sql`NOT EXISTS (SELECT 1 FROM ${videoTagsTable} WHERE ${videoTagsTable.videoId} = ${videosTable.id})`,
+      sql`NOT EXISTS (SELECT 1 FROM ${videoTagsTable} WHERE ${videoTagsTable.videoId} = ${videosTable.id})`
     );
   }
 
   if (hasCreator === true) {
     conditions.push(
-      sql`EXISTS (SELECT 1 FROM ${videoCreatorsTable} WHERE ${videoCreatorsTable.videoId} = ${videosTable.id})`,
+      sql`EXISTS (SELECT 1 FROM ${videoCreatorsTable} WHERE ${videoCreatorsTable.videoId} = ${videosTable.id})`
     );
   } else if (hasCreator === false) {
     conditions.push(
-      sql`NOT EXISTS (SELECT 1 FROM ${videoCreatorsTable} WHERE ${videoCreatorsTable.videoId} = ${videosTable.id})`,
+      sql`NOT EXISTS (SELECT 1 FROM ${videoCreatorsTable} WHERE ${videoCreatorsTable.videoId} = ${videosTable.id})`
     );
   }
 
   if (hasStudio === true) {
     conditions.push(
-      sql`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`,
+      sql`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`
     );
   } else if (hasStudio === false) {
     conditions.push(
-      sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`,
+      sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`
     );
   }
 
   if (studioAssignmentStatus === "assigned") {
-    conditions.push(sql`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`);
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`
+    );
   } else if (studioAssignmentStatus === "confirmed_none") {
-    conditions.push(sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id}) AND ${videosTable.studioAbsenceConfirmedAt} IS NOT NULL`);
+    conditions.push(
+      sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id}) AND ${videosTable.studioAbsenceConfirmedAt} IS NOT NULL`
+    );
   } else if (studioAssignmentStatus === "unknown") {
-    conditions.push(sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id}) AND ${videosTable.studioAbsenceConfirmedAt} IS NULL`);
+    conditions.push(
+      sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id}) AND ${videosTable.studioAbsenceConfirmedAt} IS NULL`
+    );
   }
 
   if (hasRating === true) {
     conditions.push(
-      sql`EXISTS (SELECT 1 FROM ${ratingsTable} WHERE ${ratingsTable.videoId} = ${videosTable.id})`,
+      sql`EXISTS (SELECT 1 FROM ${ratingsTable} WHERE ${ratingsTable.videoId} = ${videosTable.id})`
     );
   } else if (hasRating === false) {
     conditions.push(
-      sql`NOT EXISTS (SELECT 1 FROM ${ratingsTable} WHERE ${ratingsTable.videoId} = ${videosTable.id})`,
+      sql`NOT EXISTS (SELECT 1 FROM ${ratingsTable} WHERE ${ratingsTable.videoId} = ${videosTable.id})`
     );
   }
 
   return {
     conditions,
-    needsCreatorJoin,
-    needsTagJoin,
-    needsStudioJoin,
-    needsRatingJoin,
-    matchMode,
   };
 }
 
@@ -277,7 +323,7 @@ export function buildVideoFilters(
  * Get valid sort column for videos table
  */
 export function getValidSortColumn(
-  sort: string,
+  sort: string
 ): keyof typeof videosTable.$inferSelect {
   const validSortColumns = [
     "createdAt",

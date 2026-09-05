@@ -1,10 +1,6 @@
 import { db } from "@/config/drizzle";
-import { and, eq, desc, sql, inArray } from "drizzle-orm";
-import {
-  triageProgressTable,
-  videoCreatorsTable,
-  videoTagsTable,
-} from "@/database/schema";
+import { and, eq, desc, sql } from "drizzle-orm";
+import { triageProgressTable } from "@/database/schema";
 import type {
   TriageProgress,
   SaveTriageProgressInput,
@@ -15,7 +11,10 @@ import type {
 } from "./triage.types";
 import { env } from "@/config/env";
 import { triageDemoService } from "./triage.demo.service";
-import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
+import {
+  videoRelationshipsService,
+  emptyRelationshipCounts,
+} from "@/modules/videos/videos.relationships.service";
 import { ConflictError } from "@/utils/errors";
 
 export class TriageService {
@@ -94,46 +93,26 @@ export class TriageService {
     return results.map((row) => this.mapToSnakeCase(row));
   }
 
-  async getStatistics(): Promise<TriageStatistics> {
-    if (env.DEMO_MODE) return triageDemoService.getStatistics();
-    // Total videos count
-    const totalVideosResult = await db.execute(
-      sql`SELECT COUNT(*) as count FROM videos WHERE is_available = true`
-    );
-    const totalVideos = Number((totalVideosResult[0] as any).count || 0);
-
-    // Videos with creators count
-    const videosWithCreatorsResult = await db.execute(
-      sql`SELECT COUNT(DISTINCT video_id) as count FROM video_creators`
-    );
-    const videosWithCreators = Number(
-      (videosWithCreatorsResult[0] as any).count || 0
-    );
-
-    const taggedPercentage =
-      totalVideos > 0
-        ? Math.round((videosWithCreators / totalVideos) * 100)
-        : 100;
-
-    // Tagged in last 24 hours
-    const tagged24hResult = await db.execute(sql`
-      SELECT COUNT(*) as count FROM videos v
+  async getStatistics(userId: number): Promise<TriageStatistics> {
+    if (env.DEMO_MODE) return triageDemoService.getStatistics(userId);
+    const [summary] = await db.execute(sql`
+      SELECT COUNT(*) AS total,
+             COUNT(vc.video_id) AS tagged,
+             COUNT(vc.video_id) FILTER (WHERE v.indexed_at >= NOW() - INTERVAL '24 hours') AS indexed_24h,
+             COUNT(vc.video_id) FILTER (WHERE v.indexed_at >= NOW() - INTERVAL '7 days') AS indexed_7d
+      FROM videos v
+      LEFT JOIN (SELECT DISTINCT video_id FROM video_creators) vc ON vc.video_id = v.id
       WHERE v.is_available = true
-      AND EXISTS (SELECT 1 FROM video_creators vc WHERE vc.video_id = v.id)
-      AND v.indexed_at >= NOW() - INTERVAL '24 hours'
     `);
-    const tagged24h = Number((tagged24hResult[0] as any).count || 0);
-
-    // Tagged in last 7 days
-    const tagged7dResult = await db.execute(sql`
-      SELECT COUNT(*) as count FROM videos v
-      WHERE v.is_available = true
-      AND EXISTS (SELECT 1 FROM video_creators vc WHERE vc.video_id = v.id)
-      AND v.indexed_at >= NOW() - INTERVAL '7 days'
-    `);
-    const tagged7d = Number((tagged7dResult[0] as any).count || 0);
-
-    const avgDailyRate = Math.round(tagged24h / 1);
+    const totalVideos = Number(summary.total);
+    const videosWithCreators = Number(summary.tagged);
+    const taggedPercentage = totalVideos
+      ? Math.round((videosWithCreators / totalVideos) * 100)
+      : 100;
+    // These legacy response fields count indexed videos with creators; they are
+    // not a tagging history (relationship creation timestamps are not stored).
+    const tagged24h = Number(summary.indexed_24h);
+    const tagged7d = Number(summary.indexed_7d);
 
     // Filter breakdown
     const filterBreakdownResult = await db.execute(sql`
@@ -142,6 +121,7 @@ export class TriageService {
                   THEN ROUND((CAST(processed_count AS REAL) / total_count) * 100)
                   ELSE 0 END as percentage
       FROM triage_progress
+      WHERE user_id = ${userId}
       ORDER BY updated_at DESC
       LIMIT 10
     `);
@@ -178,7 +158,7 @@ export class TriageService {
       recent_progress: {
         last_24h_processed: tagged24h,
         last_7d_processed: tagged7d,
-        avg_daily_rate: avgDailyRate,
+        avg_daily_rate: Math.round(tagged7d / 7),
       },
       filter_breakdown: filterBreakdown,
       top_directories: topDirectories,
@@ -189,133 +169,21 @@ export class TriageService {
     input: TriageBulkActionsInput
   ): Promise<TriageBulkActionsResult> {
     if (env.DEMO_MODE) return triageDemoService.applyBulkActions(input);
-    const { videoIds, actions } = input;
-
-    if (videoIds.length === 0) {
-      return {
-        success: true,
-        processed: 0,
-        errors: 0,
-        details: {
-          creators_added: 0,
-          creators_removed: 0,
-          tags_added: 0,
-          tags_removed: 0,
-          studios_added: 0,
-          studios_removed: 0,
-        },
-      };
-    }
-
-    let errors = 0;
-    let creatorsAdded = 0;
-    let creatorsRemoved = 0;
-    let tagsAdded = 0;
-    let tagsRemoved = 0;
-    let studiosAdded = 0;
-    let studiosRemoved = 0;
-
     try {
-      await db.transaction(async (tx) => {
-        // Add creators
-        if (actions.addCreatorIds && actions.addCreatorIds.length > 0) {
-          const values = videoIds.flatMap((videoId) =>
-            actions.addCreatorIds!.map((creatorId) => ({
-              videoId,
-              creatorId,
-            }))
-          );
-
-          const result = await tx
-            .insert(videoCreatorsTable)
-            .values(values)
-            .onConflictDoNothing()
-            .returning({ videoId: videoCreatorsTable.videoId });
-
-          creatorsAdded = result.length;
-        }
-
-        // Remove creators
-        if (actions.removeCreatorIds && actions.removeCreatorIds.length > 0) {
-          const result = await tx
-            .delete(videoCreatorsTable)
-            .where(
-              and(
-                inArray(videoCreatorsTable.videoId, videoIds),
-                inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds)
-              )
-            )
-            .returning({ videoId: videoCreatorsTable.videoId });
-
-          creatorsRemoved = result.length;
-        }
-
-        // Add tags
-        if (actions.addTagIds && actions.addTagIds.length > 0) {
-          const values = videoIds.flatMap((videoId) =>
-            actions.addTagIds!.map((tagId) => ({
-              videoId,
-              tagId,
-            }))
-          );
-
-          const result = await tx
-            .insert(videoTagsTable)
-            .values(values)
-            .onConflictDoNothing()
-            .returning({ videoId: videoTagsTable.videoId });
-
-          tagsAdded = result.length;
-        }
-
-        // Remove tags
-        if (actions.removeTagIds && actions.removeTagIds.length > 0) {
-          const result = await tx
-            .delete(videoTagsTable)
-            .where(
-              and(
-                inArray(videoTagsTable.videoId, videoIds),
-                inArray(videoTagsTable.tagId, actions.removeTagIds)
-              )
-            )
-            .returning({ videoId: videoTagsTable.videoId });
-
-          tagsRemoved = result.length;
-        }
-
-        // Add studios
-        if (actions.addStudioIds && actions.addStudioIds.length > 0) {
-          studiosAdded = await studioAssignmentService.linkMany(videoIds, actions.addStudioIds, tx);
-        }
-
-        // Remove studios
-        if (actions.removeStudioIds && actions.removeStudioIds.length > 0) {
-          studiosRemoved = await studioAssignmentService.unlinkMany(videoIds, actions.removeStudioIds, tx);
-        }
-        if (actions.studioAssignmentStatus === "confirmed_none") {
-          await studioAssignmentService.confirmNone(videoIds, tx);
-        } else if (actions.studioAssignmentStatus === "unknown") {
-          await studioAssignmentService.markUnknown(videoIds, tx);
-        }
-      });
+      const { processed, details } = await videoRelationshipsService.apply(
+        input.videoIds,
+        input.actions
+      );
+      return { success: true, processed, errors: 0, details };
     } catch (error) {
       if (error instanceof ConflictError) throw error;
-      errors++;
+      return {
+        success: false,
+        processed: 0,
+        errors: 1,
+        details: emptyRelationshipCounts(),
+      };
     }
-
-    return {
-      success: errors === 0,
-      processed: videoIds.length,
-      errors,
-      details: {
-        creators_added: creatorsAdded,
-        creators_removed: creatorsRemoved,
-        tags_added: tagsAdded,
-        tags_removed: tagsRemoved,
-        studios_added: studiosAdded,
-        studios_removed: studiosRemoved,
-      },
-    };
   }
 
   private mapToSnakeCase(row: any): TriageProgress {

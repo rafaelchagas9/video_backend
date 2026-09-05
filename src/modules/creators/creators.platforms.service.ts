@@ -70,14 +70,14 @@ export class CreatorsPlatformsService {
   async updatePlatformProfile(
     id: number,
     input: UpdateCreatorPlatformInput,
-    creatorId?: number
+    creatorId: number
   ): Promise<CreatorPlatform> {
     if (env.DEMO_MODE) {
       if (creatorId === undefined)
         throw new NotFoundError(`Platform profile not found with id: ${id}`);
       return creatorsDemoService.updatePlatform(creatorId, id, input);
     }
-    await this.findPlatformProfileById(id); // Ensure exists
+    await this.findPlatformProfileById(id, creatorId); // Ensure exists
 
     const updates: any = {};
 
@@ -94,7 +94,7 @@ export class CreatorsPlatformsService {
     }
 
     if (Object.keys(updates).length === 0) {
-      return this.findPlatformProfileById(id);
+      return this.findPlatformProfileById(id, creatorId);
     }
 
     updates.updatedAt = new Date();
@@ -102,22 +102,32 @@ export class CreatorsPlatformsService {
     await db
       .update(creatorPlatformsTable)
       .set(updates)
-      .where(eq(creatorPlatformsTable.id, id));
+      .where(
+        and(
+          eq(creatorPlatformsTable.id, id),
+          eq(creatorPlatformsTable.creatorId, creatorId)
+        )
+      );
 
-    return this.findPlatformProfileById(id);
+    return this.findPlatformProfileById(id, creatorId);
   }
 
-  async deletePlatformProfile(id: number, creatorId?: number): Promise<void> {
+  async deletePlatformProfile(id: number, creatorId: number): Promise<void> {
     if (env.DEMO_MODE) {
       if (creatorId === undefined)
         throw new NotFoundError(`Platform profile not found with id: ${id}`);
       creatorsDemoService.deletePlatform(creatorId, id);
       return;
     }
-    await this.findPlatformProfileById(id); // Ensure exists
+    await this.findPlatformProfileById(id, creatorId); // Ensure exists
     await db
       .delete(creatorPlatformsTable)
-      .where(eq(creatorPlatformsTable.id, id));
+      .where(
+        and(
+          eq(creatorPlatformsTable.id, id),
+          eq(creatorPlatformsTable.creatorId, creatorId)
+        )
+      );
   }
 
   async getPlatformProfiles(creatorId: number): Promise<CreatorPlatform[]> {
@@ -260,7 +270,10 @@ export class CreatorsPlatformsService {
     return { created, updated, errors };
   }
 
-  private async findPlatformProfileById(id: number): Promise<CreatorPlatform> {
+  private async findPlatformProfileById(
+    id: number,
+    creatorId?: number
+  ): Promise<CreatorPlatform> {
     const profile = await db
       .select({
         id: creatorPlatformsTable.id,
@@ -278,7 +291,14 @@ export class CreatorsPlatformsService {
         platformsTable,
         eq(creatorPlatformsTable.platformId, platformsTable.id)
       )
-      .where(eq(creatorPlatformsTable.id, id))
+      .where(
+        and(
+          eq(creatorPlatformsTable.id, id),
+          creatorId === undefined
+            ? undefined
+            : eq(creatorPlatformsTable.creatorId, creatorId)
+        )
+      )
       .limit(1);
 
     if (!profile || profile.length === 0) {

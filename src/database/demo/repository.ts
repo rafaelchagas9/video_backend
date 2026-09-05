@@ -12,6 +12,8 @@ import {
   withDemoTransaction,
 } from "./client";
 
+import { buildDemoVideoQuery } from "./video-query";
+
 const DEMO_USER_ID = 1;
 type DemoPage = {
   data: any[];
@@ -429,100 +431,13 @@ export class DemoRepository {
 
   getVideos(options: any = {}): DemoPage {
     this.ensureReady();
-    let list = this.rows("SELECT * FROM demo_videos ORDER BY id").map((row) =>
-      this.videoFromRow(row)
-    );
-    if (
-      options.ids &&
-      (Array.isArray(options.ids) ? options.ids.length : true)
-    ) {
-      const ids = (
-        Array.isArray(options.ids) ? options.ids : [options.ids]
-      ).map(Number);
-      list = list.filter((video) => ids.includes(video.id));
-    }
-    if (options.search) {
-      const search = String(options.search).toLowerCase();
-      list = list.filter((video) =>
-        [video.title, video.description, video.themes, video.file_name]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(search))
-      );
-    }
-    const filterRelation = (
-      key: "tags" | "creators" | "studios",
-      values: any
-    ) => {
-      if (!values || values.length === 0) return;
-      const ids = (Array.isArray(values) ? values : [values]).map(Number);
-      list = list.filter((video) =>
-        video[key].some((item: any) => ids.includes(item.id))
-      );
-    };
-    filterRelation("tags", options.tagIds);
-    filterRelation("creators", options.creatorIds);
-    filterRelation("studios", options.studioIds);
-    if (options.hasStudio === true)
-      list = list.filter((video) => video.studios.length > 0);
-    if (options.hasStudio === false)
-      list = list.filter((video) => video.studios.length === 0);
-    if (options.studioAssignmentStatus) {
-      list = list.filter(
-        (video) =>
-          video.studio_assignment_status === options.studioAssignmentStatus
-      );
-    }
-    if (options.createdFrom) {
-      const timestamp = new Date(options.createdFrom).getTime();
-      list = list.filter(
-        (video) => new Date(video.created_at).getTime() >= timestamp
-      );
-    }
-    if (options.createdBefore) {
-      const timestamp = new Date(options.createdBefore).getTime();
-      list = list.filter(
-        (video) => new Date(video.created_at).getTime() < timestamp
-      );
-    }
-    if (options.minPlayCount !== undefined) {
-      list = list.filter(
-        (video) =>
-          Number(video.stats?.playCount ?? 0) >= Number(options.minPlayCount)
-      );
-    }
-    if (options.maxPlayCount !== undefined) {
-      list = list.filter(
-        (video) =>
-          Number(video.stats?.playCount ?? 0) <= Number(options.maxPlayCount)
-      );
-    }
-    if (options.lastPlayedBefore) {
-      const timestamp = new Date(options.lastPlayedBefore).getTime();
-      list = list.filter((video) => {
-        const value = video.stats?.lastPlayedAt;
-        return (
-          value !== null &&
-          value !== undefined &&
-          new Date(value).getTime() < timestamp
-        );
-      });
-    }
-    if (options.lastPlayedAfter) {
-      const timestamp = new Date(options.lastPlayedAfter).getTime();
-      list = list.filter((video) => {
-        const value = video.stats?.lastPlayedAt;
-        return (
-          value !== null &&
-          value !== undefined &&
-          new Date(value).getTime() >= timestamp
-        );
-      });
-    }
-    const page = Number(options.page || 1);
-    const limit = Number(options.limit || 20);
-    const total = list.length;
+    const { where, parameters, orderBy } = buildDemoVideoQuery(options, DEMO_USER_ID);
+    const page = Math.max(1, Number(options.page) || 1);
+    const limit = Math.max(1, Number(options.limit) || 20);
+    const total = Number(this.scalar(`SELECT COUNT(*) FROM demo_videos v ${where}`, ...parameters));
+    const rows = this.rows(`SELECT v.* FROM demo_videos v ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, ...parameters, limit, (page - 1) * limit);
     return {
-      data: list.slice((page - 1) * limit, page * limit),
+      data: rows.map((row) => this.videoFromRow(row)),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }

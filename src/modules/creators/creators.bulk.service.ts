@@ -358,7 +358,7 @@ export class CreatorsBulkService {
                     p.username === ep.username
                 )
               ) {
-                await creatorsPlatformsService.deletePlatformProfile(ep.id);
+                await creatorsPlatformsService.deletePlatformProfile(ep.id, creatorId);
               }
             }
           }
@@ -379,7 +379,7 @@ export class CreatorsBulkService {
                   (sl) => sl.platform_name === el.platform_name
                 )
               ) {
-                await creatorsSocialService.deleteSocialLink(el.id);
+                await creatorsSocialService.deleteSocialLink(el.id, creatorId);
               }
             }
           }
@@ -395,7 +395,7 @@ export class CreatorsBulkService {
             const existing = await creatorsAliasesService.getAliases(creatorId);
             for (const ea of existing) {
               if (!item.aliases.some((a) => a.name === ea.name)) {
-                await creatorsAliasesService.deleteAlias(ea.id);
+                await creatorsAliasesService.deleteAlias(ea.id, creatorId);
               }
             }
           }

@@ -2,7 +2,7 @@ import {
   pgTable,
   serial,
   text,
-  integer,
+  integer, bigint,
   real,
   boolean,
   timestamp,
@@ -25,7 +25,7 @@ export const videosTable = pgTable(
       .references(() => watchedDirectoriesTable.id, { onDelete: "cascade" }),
 
     // File metadata
-    fileSizeBytes: integer("file_size_bytes").notNull(),
+    fileSizeBytes: bigint("file_size_bytes", { mode: "number" }).notNull(),
     fileHash: text("file_hash"),
 
     // Video metadata (extracted)

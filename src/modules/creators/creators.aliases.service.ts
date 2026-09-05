@@ -47,14 +47,14 @@ export class CreatorsAliasesService {
   async updateAlias(
     id: number,
     input: UpdateAliasInput,
-    creatorId?: number
+    creatorId: number
   ): Promise<Alias> {
     if (env.DEMO_MODE) {
       if (creatorId === undefined)
         throw new NotFoundError(`Alias not found with id: ${id}`);
       return creatorsDemoService.updateAlias(creatorId, id, input);
     }
-    await this.findAliasById(id); // Ensure exists
+    await this.findAliasById(id, creatorId); // Ensure exists
 
     const updates: any = {};
 
@@ -67,16 +67,21 @@ export class CreatorsAliasesService {
     }
 
     if (Object.keys(updates).length === 0) {
-      return this.findAliasById(id);
+      return this.findAliasById(id, creatorId);
     }
 
     try {
       await db
         .update(creatorAliasesTable)
         .set(updates)
-        .where(eq(creatorAliasesTable.id, id));
+        .where(
+          and(
+            eq(creatorAliasesTable.id, id),
+            eq(creatorAliasesTable.creatorId, creatorId)
+          )
+        );
 
-      return this.findAliasById(id);
+      return this.findAliasById(id, creatorId);
     } catch (error: any) {
       if (isUniqueViolation(error)) {
         throw new ConflictError("This alias already exists for the creator");
@@ -85,15 +90,22 @@ export class CreatorsAliasesService {
     }
   }
 
-  async deleteAlias(id: number, creatorId?: number): Promise<void> {
+  async deleteAlias(id: number, creatorId: number): Promise<void> {
     if (env.DEMO_MODE) {
       if (creatorId === undefined)
         throw new NotFoundError(`Alias not found with id: ${id}`);
       creatorsDemoService.deleteAlias(creatorId, id);
       return;
     }
-    await this.findAliasById(id); // Ensure exists
-    await db.delete(creatorAliasesTable).where(eq(creatorAliasesTable.id, id));
+    await this.findAliasById(id, creatorId); // Ensure exists
+    await db
+      .delete(creatorAliasesTable)
+      .where(
+        and(
+          eq(creatorAliasesTable.id, id),
+          eq(creatorAliasesTable.creatorId, creatorId)
+        )
+      );
   }
 
   async getAliases(creatorId: number): Promise<Alias[]> {
@@ -200,11 +212,18 @@ export class CreatorsAliasesService {
     return { created, updated, errors };
   }
 
-  private async findAliasById(id: number): Promise<Alias> {
+  private async findAliasById(id: number, creatorId?: number): Promise<Alias> {
     const alias = await db
       .select()
       .from(creatorAliasesTable)
-      .where(eq(creatorAliasesTable.id, id))
+      .where(
+        and(
+          eq(creatorAliasesTable.id, id),
+          creatorId === undefined
+            ? undefined
+            : eq(creatorAliasesTable.creatorId, creatorId)
+        )
+      )
       .limit(1);
 
     if (!alias || alias.length === 0) {

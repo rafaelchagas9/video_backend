@@ -471,7 +471,7 @@ export async function conversionRoutes(fastify: FastifyInstance) {
         tags: ["conversion"],
         summary: "Delete conversion job",
         description:
-          "Delete a completed/failed/cancelled conversion job and its output file",
+          "Delete a completed/failed/cancelled conversion job. Its output media is preserved.",
         params: jobIdParamSchema,
         response: {
           200: z.object({

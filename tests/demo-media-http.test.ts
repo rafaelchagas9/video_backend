@@ -506,7 +506,7 @@ describe("demo media HTTP contracts and asset isolation", () => {
   it("marks one missing video unavailable without verifying any sibling", async () => {
     const { demoSchema, getDemoDatabase } = await import("@/database/demo");
     const db = getDemoDatabase();
-    const timestamp = new Date().toISOString();
+    const timestamp = "2026-01-01T00:00:00.000Z";
     const untouchedAt = "2026-07-01T00:00:00.000Z";
     const missingPath = join(assetsRoot, "seed", "missing-video.bin");
 

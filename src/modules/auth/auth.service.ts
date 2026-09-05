@@ -54,6 +54,7 @@ type BetterAuthSessionPayload = {
 type BetterAuthAuthResponse = {
   user?: BetterAuthUser;
   token?: string | null;
+  message?: string;
 };
 
 function toHeaders(headers: IncomingHttpHeaders | Headers): Headers {
@@ -61,7 +62,9 @@ function toHeaders(headers: IncomingHttpHeaders | Headers): Headers {
 }
 
 function toIsoString(value: Date | string): string {
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date(value).toISOString();
 }
 
 function toNumericUserId(value: string | number): number {
@@ -81,7 +84,7 @@ function getFallbackName(email: string): string {
 
 function mapBetterAuthError(error: unknown): never {
   if (isAPIError(error)) {
-    throw new AppError(Number(error.status), error.message);
+    throw new AppError(error.statusCode, error.message);
   }
 
   throw error;
@@ -135,6 +138,18 @@ export class AuthService {
     return user.email;
   }
 
+  private async assertAuthResponse(response: Response): Promise<void> {
+    if (response.ok) return;
+    const payload = (await response
+      .clone()
+      .json()
+      .catch(() => null)) as BetterAuthAuthResponse | null;
+    throw new AppError(
+      response.status,
+      payload?.message || "Authentication failed"
+    );
+  }
+
   private normalizeUser(user: BetterAuthUser): AuthUser {
     return {
       id: toNumericUserId(user.id),
@@ -163,7 +178,7 @@ export class AuthService {
 
   async register(
     input: RegisterInput,
-    headers: IncomingHttpHeaders | Headers,
+    headers: IncomingHttpHeaders | Headers
   ): Promise<{ user: AuthUser; response: Response }> {
     if (env.DEMO_MODE) {
       return {
@@ -173,17 +188,24 @@ export class AuthService {
     }
 
     try {
-      const { auth } = await import("@/lib/auth");
-      const response = await auth.api.signUpEmail({
-        asResponse: true,
-        headers: toHeaders(headers),
-        body: {
-          email: input.email,
-          password: input.password,
-          name: input.name?.trim() || getFallbackName(input.email),
-        },
+      const { withOwnerRegistration } = await import("@/lib/auth");
+      const response = await withOwnerRegistration(async (registrationAuth) => {
+        const result = await registrationAuth.api.signUpEmail({
+          asResponse: true,
+          headers: toHeaders(headers),
+          body: {
+            email: input.email,
+            password: input.password,
+            name: input.name?.trim() || getFallbackName(input.email),
+          },
+        });
+        // Throw before transaction commit so failed credential creation cannot
+        // leave an unusable owner account that permanently closes registration.
+        await this.assertAuthResponse(result);
+        return result;
       });
 
+      await this.assertAuthResponse(response);
       const payload = (await response.clone().json()) as BetterAuthAuthResponse;
 
       if (!payload.user) {
@@ -201,7 +223,7 @@ export class AuthService {
 
   async login(
     input: LoginInput,
-    headers: IncomingHttpHeaders | Headers,
+    headers: IncomingHttpHeaders | Headers
   ): Promise<{ user: AuthUser; response: Response }> {
     if (env.DEMO_MODE) {
       return {
@@ -222,6 +244,7 @@ export class AuthService {
         },
       });
 
+      await this.assertAuthResponse(response);
       const payload = (await response.clone().json()) as BetterAuthAuthResponse;
 
       if (!payload.user) {
@@ -254,7 +277,7 @@ export class AuthService {
   }
 
   async getSession(
-    headers: IncomingHttpHeaders | Headers,
+    headers: IncomingHttpHeaders | Headers
   ): Promise<AuthSessionData | null> {
     if (env.DEMO_MODE) {
       return this.getDemoSession();
@@ -301,7 +324,9 @@ export class AuthService {
     const session = await this.getSession(headers);
 
     if (!session) {
-      throw new UnauthorizedError("Invalid or expired session. Please log in again.");
+      throw new UnauthorizedError(
+        "Invalid or expired session. Please log in again."
+      );
     }
 
     return session.user;

@@ -15,7 +15,10 @@ import { metadataService } from "@/modules/videos/metadata.service";
 import { directoriesService } from "./directories.service";
 import { directoryScansService } from "./directory-scans.service";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
-import { deriveStudioAssignmentStatus, type Video } from "@/modules/videos/videos.types";
+import {
+  deriveStudioAssignmentStatus,
+  type Video,
+} from "@/modules/videos/videos.types";
 import type { Directory, ScanResult, ScanRun } from "./directories.types";
 import { ConflictError } from "@/utils/errors";
 
@@ -299,6 +302,9 @@ export class WatcherService {
         const fullPath = join(directoryPath, entry.name);
 
         if (entry.isDirectory()) {
+          // Conversion attempts own these temporary directories. Their outputs
+          // are incomplete until published and are removed after the attempt.
+          if (entry.name.startsWith(".conversion-")) continue;
           // Recursively scan subdirectories
           await this.findVideoFiles(fullPath, files);
         } else if (entry.isFile() && isVideoFile(fullPath)) {
@@ -576,9 +582,13 @@ export class WatcherService {
     if (!video) {
       throw new Error("Video not found after indexing");
     }
-    const [assignment] = await db.select({
-      hasStudio: sql<boolean>`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${video.id})`,
-    }).from(videosTable).where(eq(videosTable.id, video.id)).limit(1);
+    const [assignment] = await db
+      .select({
+        hasStudio: sql<boolean>`EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${video.id})`,
+      })
+      .from(videosTable)
+      .where(eq(videosTable.id, video.id))
+      .limit(1);
 
     return {
       id: video.id,
@@ -598,7 +608,10 @@ export class WatcherService {
       description: video.description,
       themes: video.themes,
       is_available: video.isAvailable,
-      studio_assignment_status: deriveStudioAssignmentStatus(Boolean(assignment?.hasStudio), video.studioAbsenceConfirmedAt),
+      studio_assignment_status: deriveStudioAssignmentStatus(
+        Boolean(assignment?.hasStudio),
+        video.studioAbsenceConfirmedAt
+      ),
       last_verified_at: video.lastVerifiedAt?.toISOString() ?? null,
       indexed_at: video.indexedAt.toISOString(),
       created_at: video.createdAt.toISOString(),

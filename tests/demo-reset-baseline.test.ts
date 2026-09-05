@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, rmSync, statSync } from "fs";
-import { resolve } from "path";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { env } from "@/config/env";
+import { createDemoFixtureFiles } from "./helpers/demo-fixtures";
 
 process.env.NODE_ENV = "test";
 process.env.POSTGRES_USER ||= "demo-reset-test";
@@ -9,7 +12,9 @@ process.env.POSTGRES_PASSWORD ||= "demo-reset-test";
 process.env.SESSION_SECRET ||=
   "demo-reset-session-secret-at-least-32-characters";
 
-const databasePath = `/tmp/conversor-video-demo-reset-${process.pid}.sqlite`;
+const fixtureRoot = mkdtempSync(join(tmpdir(), "demo-reset-fixture-"));
+const originalAssetsDir = env.DEMO_ASSETS_DIR;
+const databasePath = join(fixtureRoot, "demo.sqlite");
 const baselinePath = `${databasePath}.baseline`;
 let demo: typeof import("@/database/demo");
 
@@ -31,19 +36,18 @@ describe("immutable demo SQLite baseline reset", () => {
     removeDatabases();
     demo = await import("@/database/demo");
     demo.setDemoDatabasePathForTests(databasePath);
-    demo.importDemoJsonFile(
-      resolve(process.cwd(), "demo_mode", "demo_mode.json"),
-      { reset: true }
-    );
-    demo.importDemoArtworkManifestFile(
-      resolve(process.cwd(), "demo_mode", "artwork", "manifest.json")
-    );
+    env.DEMO_ASSETS_DIR = fixtureRoot;
+    const fixtures = createDemoFixtureFiles(fixtureRoot);
+    demo.importDemoJsonFile(fixtures.seedPath, { reset: true });
+    demo.importDemoArtworkManifestFile(fixtures.manifestPath);
     demo.createDemoBaselineSnapshot();
   });
 
   afterAll(() => {
     demo.setDemoDatabasePathForTests(null);
     removeDatabases();
+    env.DEMO_ASSETS_DIR = originalAssetsDir;
+    rmSync(fixtureRoot, { recursive: true, force: true });
   });
 
   it("fully restores catalog, relationships, artwork, and resources", () => {

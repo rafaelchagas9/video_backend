@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { env } from "@/config/env";
 import { describe, expect, it } from "bun:test";
 import { demoRepository } from "@/database/demo/repository";
 import { isDemoAssetPath } from "@/database/demo/assets";
@@ -25,10 +27,10 @@ useSeededDemoDatabase();
 
 describe("Demo repository response contracts", () => {
   it("rejects asset paths outside demo_mode", () => {
-    expect(isDemoAssetPath("demo_mode/video/trailer.webm", "/srv/app")).toBe(
+    expect(isDemoAssetPath(join(env.DEMO_ASSETS_DIR, "video/trailer.webm"), "/srv/app")).toBe(
       true
     );
-    expect(isDemoAssetPath("demo_mode/../private/video.mp4", "/srv/app")).toBe(
+    expect(isDemoAssetPath(join(env.DEMO_ASSETS_DIR, "../private/video.mp4"), "/srv/app")).toBe(
       false
     );
     expect(isDemoAssetPath("/personal/videos/private.mp4", "/srv/app")).toBe(

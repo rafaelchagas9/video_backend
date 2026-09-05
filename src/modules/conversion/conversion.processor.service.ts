@@ -2,8 +2,15 @@
  * Conversion processor service
  * Handles the processing of conversion jobs from the queue
  */
-import { statSync, unlinkSync } from "fs";
-import { basename } from "path";
+import {
+  existsSync,
+  lstatSync,
+  statSync,
+  unlinkSync,
+  type BigIntStats,
+} from "fs";
+import { link, mkdtemp, rm } from "fs/promises";
+import { basename, dirname, join } from "path";
 import { getPreset } from "@/config/presets";
 import { metadataService } from "@/modules/videos/metadata.service";
 import { videosService } from "@/modules/videos/videos.service";
@@ -21,7 +28,6 @@ import {
 import { eventsService } from "@/modules/events/events.service";
 import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
-import type { Video } from "@/modules/videos/videos.types";
 import type {
   ConversionMediaMetadata,
   QueueJobPayload,
@@ -48,6 +54,8 @@ export class ConversionProcessorService {
 
     let videoContext: ReturnType<typeof createVideoEventContext> | null = null;
     let progressUpdates = Promise.resolve();
+    let tempDirectory: string | null = null;
+    let completed = false;
 
     try {
       const startedAt = new Date();
@@ -83,8 +91,10 @@ export class ConversionProcessorService {
       });
 
       let originalSizeBytes = video.file_size_bytes;
+      let originalIdentity: BigIntStats | null = null;
 
       try {
+        originalIdentity = lstatSync(inputPath, { bigint: true });
         originalSizeBytes = statSync(inputPath).size;
       } catch (error) {
         logger.warn(
@@ -96,16 +106,36 @@ export class ConversionProcessorService {
       // Probe the source before it is (possibly) replaced, so history keeps a
       // record of what was actually fed to the encoder.
       const sourceMetadata = this.withDerivedBitrate(
-        (await this.probeMedia(inputPath)) ?? this.metadataFromVideo(video),
+        await this.probeMedia(inputPath),
         originalSizeBytes
       );
 
+      if (
+        !sourceMetadata?.durationSeconds ||
+        !Number.isFinite(sourceMetadata.durationSeconds) ||
+        sourceMetadata.durationSeconds <= 0
+      ) {
+        throw new Error(
+          "Source video metadata and duration could not be verified"
+        );
+      }
+
+      if (existsSync(outputPath)) {
+        throw new Error(
+          "Conversion output already exists; refusing to overwrite it"
+        );
+      }
+      tempDirectory = await mkdtemp(join(dirname(outputPath), ".conversion-"));
+      const temporaryOutput = join(tempDirectory, "output.mkv");
+
+      // Encode only into a directory owned by this attempt. Fallbacks and
+      // cancellation must never truncate or remove a pre-existing media file.
       // Build and run FFmpeg command with progress callback
       const ffmpegResult = await ffmpegService.runConversion(
         jobId,
         video,
         inputPath,
-        outputPath,
+        temporaryOutput,
         preset,
         job.target_resolution,
         (progress) => {
@@ -140,21 +170,23 @@ export class ConversionProcessorService {
       await progressUpdates;
       if (signal.aborted) throw new ConversionCancelledError();
 
-      // Get output file size
-      const stats = statSync(outputPath);
-      const completedAt = new Date();
+      const stats = statSync(temporaryOutput);
+      const outputMetadata = this.withDerivedBitrate(
+        await this.probeMedia(temporaryOutput),
+        stats.size
+      );
+      this.validateOutput(sourceMetadata, outputMetadata, stats.size);
+      if (signal.aborted) throw new ConversionCancelledError();
 
-      // Update job as completed
-      const completed = await conversionJobsService.markAsCompleted(
+      // link is atomic, cannot overwrite an existing path, and uses the same
+      // filesystem as the output. A collision preserves both files.
+      await link(temporaryOutput, outputPath);
+      const completedAt = new Date();
+      completed = await conversionJobsService.markAsCompleted(
         jobId,
         stats.size
       );
       if (!completed) throw new ConversionCancelledError();
-
-      const outputMetadata = this.withDerivedBitrate(
-        await this.probeMedia(outputPath),
-        stats.size
-      );
 
       try {
         const effectiveResolution = formatEffectiveResolution(
@@ -233,8 +265,24 @@ export class ConversionProcessorService {
             { videoId, jobId },
             "Replacing original file in-place (preserving video record and relations)"
           );
-          unlinkSync(inputPath);
           await videosService.replaceFile(videoId, outputPath);
+          const currentIdentity = lstatSync(inputPath, { bigint: true });
+          if (
+            originalIdentity?.isFile() &&
+            currentIdentity.isFile() &&
+            originalIdentity.dev === currentIdentity.dev &&
+            originalIdentity.ino === currentIdentity.ino &&
+            originalIdentity.size === currentIdentity.size &&
+            originalIdentity.mtimeNs === currentIdentity.mtimeNs &&
+            originalIdentity.ctimeNs === currentIdentity.ctimeNs
+          ) {
+            unlinkSync(inputPath);
+          } else {
+            logger.warn(
+              { videoId, jobId },
+              "Source changed during conversion; preserving the current file"
+            );
+          }
         } catch (error) {
           logger.error(
             { error, videoId },
@@ -250,8 +298,16 @@ export class ConversionProcessorService {
       }
     } catch (error) {
       await progressUpdates;
+      if (completed) {
+        // Completion is committed. Batch/event enrichment failures cannot
+        // retroactively cancel the job or remove its published media.
+        logger.error(
+          { error, jobId },
+          "Conversion completed; follow-up work failed"
+        );
+        return;
+      }
       if (signal.aborted || error instanceof ConversionCancelledError) {
-        this.removeOutputIfPresent(outputPath);
         logger.info({ jobId }, "Conversion cancelled");
         if (batchId) {
           await conversionBatchService.checkBatchCompletion(batchId);
@@ -272,7 +328,6 @@ export class ConversionProcessorService {
       );
       if (!failed) {
         // A cancellation won the database race before the queue signal arrived.
-        this.removeOutputIfPresent(outputPath);
         if (batchId) {
           await conversionBatchService.checkBatchCompletion(batchId);
         }
@@ -300,25 +355,52 @@ export class ConversionProcessorService {
       }
 
       throw error;
-    }
-  }
-
-  private removeOutputIfPresent(outputPath: string): void {
-    try {
-      unlinkSync(outputPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        logger.warn(
-          { error, outputPath },
-          "Failed to remove cancelled conversion output"
+    } finally {
+      if (tempDirectory) {
+        await rm(tempDirectory, { recursive: true, force: true }).catch(
+          (error) => {
+            logger.warn(
+              { error, jobId },
+              "Failed to remove conversion staging directory"
+            );
+          }
         );
       }
     }
   }
 
+  private validateOutput(
+    source: ConversionMediaMetadata | null,
+    output: ConversionMediaMetadata | null,
+    sizeBytes: number
+  ): void {
+    if (
+      sizeBytes <= 0 ||
+      !output ||
+      !output.width ||
+      !output.height ||
+      !output.durationSeconds ||
+      !Number.isFinite(output.durationSeconds) ||
+      output.durationSeconds <= 0
+    ) {
+      throw new Error(
+        "Converted video is empty or its metadata could not be validated"
+      );
+    }
+    if (
+      source?.durationSeconds &&
+      Math.abs(output.durationSeconds - source.durationSeconds) > 1
+    ) {
+      throw new Error("Converted video duration does not match the source");
+    }
+    if (source?.audioCodec && !output.audioCodec) {
+      throw new Error("Converted video is missing the source audio stream");
+    }
+  }
+
   /**
-   * Probe a file for technical metadata. Never throws: history is
-   * supplementary and must not fail an otherwise successful conversion.
+   * Probe media for conversion validation and history. The caller rejects
+   * publication when required source or output metadata is unavailable.
    */
   private async probeMedia(
     filePath: string
@@ -339,18 +421,6 @@ export class ConversionProcessorService {
       logger.warn({ error, filePath }, "Failed to probe conversion metadata");
       return null;
     }
-  }
-
-  private metadataFromVideo(video: Video): ConversionMediaMetadata {
-    return {
-      width: video.width,
-      height: video.height,
-      fps: video.fps,
-      codec: video.codec,
-      audioCodec: video.audio_codec,
-      bitrate: video.bitrate,
-      durationSeconds: video.duration_seconds,
-    };
   }
 
   /**

@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 /**
  * Video conversion service orchestrator
  * Coordinates conversion jobs using specialized services
@@ -282,8 +283,7 @@ export class ConversionService {
     preset: { id: string }
   ): string {
     const baseName = basename(originalName, extname(originalName));
-    const timestamp = Date.now();
-    return `${baseName}_${preset.id}_${timestamp}.mkv`;
+    return `${baseName}_${preset.id}_${randomUUID()}.mkv`;
   }
 
   /**
@@ -336,18 +336,8 @@ export class ConversionService {
       throw new BadRequestError(`Cannot delete job in ${job.status} status`);
     }
 
-    // Delete output file if exists
-    if (job.output_path && existsSync(job.output_path)) {
-      try {
-        const fs = await import("fs");
-        fs.unlinkSync(job.output_path);
-      } catch (error) {
-        logger.warn(
-          { error, path: job.output_path },
-          "Failed to delete output file"
-        );
-      }
-    }
+    // Removing job history must not remove media: the output may now be the
+    // library's active video, or have been indexed independently by a watcher.
 
     await conversionJobsService.delete(id);
   }

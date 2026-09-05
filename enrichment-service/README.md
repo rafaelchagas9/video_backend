@@ -43,7 +43,7 @@ query results and credentials out of commits. Automated source tests use mocked
 responses:
 
 ```bash
-uv run python -m unittest discover -s tests -v
+uv run python -m unittest discover -s . -p 'test_*.py' -v
 ```
 
 Image search and social/platform scraping remain possible future sources; they

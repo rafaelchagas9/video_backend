@@ -1,43 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { existsSync, rmSync } from "fs";
-import { tmpdir } from "os";
-import { resolve } from "path";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { useSeededDemoDatabase } from "./helpers/demo-database";
 import {
   videoListResponseSchema,
   videoResponseSchema,
 } from "@/modules/videos/videos.schemas";
 import { creatorListResponseSchema } from "@/modules/creators/creators.schemas";
 
-const databasePath = resolve(
-  process.cwd(),
-  tmpdir(),
-  `demo-test-${process.pid}-${Date.now()}.sqlite`
-);
-const originalNodeEnv = process.env.NODE_ENV;
-
+useSeededDemoDatabase();
 let demo: typeof import("@/database/demo");
-
-beforeAll(async () => {
-  process.env.NODE_ENV = "test";
-  demo = await import("@/database/demo");
-  demo.setDemoDatabasePathForTests(databasePath);
-  demo.importDemoJsonFile(
-    resolve(process.cwd(), "demo_mode", "demo_mode.json"),
-    {
-      reset: true,
-    }
-  );
-});
-
-afterAll(() => {
-  demo.setDemoDatabasePathForTests(null);
-  for (const suffix of ["", "-wal", "-shm"]) {
-    const path = `${databasePath}${suffix}`;
-    if (existsSync(path)) rmSync(path);
-  }
-  if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
-  else process.env.NODE_ENV = originalNodeEnv;
-});
+beforeAll(async () => { demo = await import("@/database/demo"); });
 
 describe("SQLite demo repository", () => {
   it("imports the relationship-rich seed and materializes pagination rows", () => {

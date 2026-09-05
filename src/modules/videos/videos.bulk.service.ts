@@ -2,8 +2,6 @@ import { eq, inArray, and, sql, desc, asc } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   videosTable,
-  videoCreatorsTable,
-  videoTagsTable,
   favoritesTable,
   thumbnailsTable,
   storyboardsTable,
@@ -18,14 +16,9 @@ import type { ListVideosOptions } from "./videos.types";
 import { buildVideoFilters } from "./videos.query-builder";
 import { env } from "@/config/env";
 import { videosDemoService } from "./videos.demo.service";
-import { studioAssignmentService } from "@/modules/studios/studio-assignment.service";
+import { videoRelationshipsService } from "./videos.relationships.service";
 import { editsDemoService } from "@/modules/edits/edits.demo.service";
-import {
-  demoRepository,
-  demoSchema,
-  getDemoDatabase,
-  withDemoTransaction,
-} from "@/database/demo";
+import { demoRepository } from "@/database/demo";
 
 /**
  * Service for bulk video operations
@@ -213,44 +206,10 @@ export class VideosBulkService {
     creatorIds: number[];
     action: "add" | "remove";
   }): Promise<void> {
-    const { videoIds, creatorIds, action } = input;
-    if (videoIds.length === 0 || creatorIds.length === 0) return;
-    if (env.DEMO_MODE) {
-      videosDemoService.updateRelationships(
-        videoIds,
-        "creators",
-        creatorIds,
-        action
-      );
-      return;
-    }
-
-    await db.transaction(async (tx) => {
-      if (action === "add") {
-        // Generate all combinations of videoId x creatorId
-        const values = videoIds.flatMap((videoId) =>
-          creatorIds.map((creatorId) => ({
-            videoId,
-            creatorId,
-          }))
-        );
-
-        // Bulk insert with conflict handling
-        await tx
-          .insert(videoCreatorsTable)
-          .values(values)
-          .onConflictDoNothing();
-      } else {
-        // Remove all specified creator-video relationships
-        await tx
-          .delete(videoCreatorsTable)
-          .where(
-            and(
-              inArray(videoCreatorsTable.videoId, videoIds),
-              inArray(videoCreatorsTable.creatorId, creatorIds)
-            )
-          );
-      }
+    if (!input.videoIds.length || !input.creatorIds.length) return;
+    await videoRelationshipsService.apply(input.videoIds, {
+      [input.action === "add" ? "addCreatorIds" : "removeCreatorIds"]:
+        input.creatorIds,
     });
   }
 
@@ -262,36 +221,9 @@ export class VideosBulkService {
     tagIds: number[];
     action: "add" | "remove";
   }): Promise<void> {
-    const { videoIds, tagIds, action } = input;
-    if (videoIds.length === 0 || tagIds.length === 0) return;
-    if (env.DEMO_MODE) {
-      videosDemoService.updateRelationships(videoIds, "tags", tagIds, action);
-      return;
-    }
-
-    await db.transaction(async (tx) => {
-      if (action === "add") {
-        // Generate all combinations of videoId x tagId
-        const values = videoIds.flatMap((videoId) =>
-          tagIds.map((tagId) => ({
-            videoId,
-            tagId,
-          }))
-        );
-
-        // Bulk insert with conflict handling
-        await tx.insert(videoTagsTable).values(values).onConflictDoNothing();
-      } else {
-        // Remove all specified tag-video relationships
-        await tx
-          .delete(videoTagsTable)
-          .where(
-            and(
-              inArray(videoTagsTable.videoId, videoIds),
-              inArray(videoTagsTable.tagId, tagIds)
-            )
-          );
-      }
+    if (!input.videoIds.length || !input.tagIds.length) return;
+    await videoRelationshipsService.apply(input.videoIds, {
+      [input.action === "add" ? "addTagIds" : "removeTagIds"]: input.tagIds,
     });
   }
 
@@ -303,25 +235,10 @@ export class VideosBulkService {
     studioIds: number[];
     action: "add" | "remove";
   }): Promise<void> {
-    const { videoIds, studioIds, action } = input;
-    if (videoIds.length === 0 || studioIds.length === 0) return;
-    if (env.DEMO_MODE) {
-      videosDemoService.updateRelationships(
-        videoIds,
-        "studios",
-        studioIds,
-        action
-      );
-      return;
-    }
-
-    await db.transaction(async (tx) => {
-      if (action === "add") {
-        await studioAssignmentService.linkMany(videoIds, studioIds, tx);
-      } else {
-        // Remove all specified studio-video relationships
-        await studioAssignmentService.unlinkMany(videoIds, studioIds, tx);
-      }
+    if (!input.videoIds.length || !input.studioIds.length) return;
+    await videoRelationshipsService.apply(input.videoIds, {
+      [input.action === "add" ? "addStudioIds" : "removeStudioIds"]:
+        input.studioIds,
     });
   }
 
@@ -470,226 +387,23 @@ export class VideosBulkService {
       studios_removed: number;
     };
   }> {
-    if (env.DEMO_MODE) {
-      const videoIds = demoRepository
-        .getVideos({ ...filter, limit: 10_000 })
-        .data.map((video: { id: number }) => video.id);
-      const counts = {
-        creators_added: 0,
-        creators_removed: 0,
-        tags_added: 0,
-        tags_removed: 0,
-        studios_added: 0,
-        studios_removed: 0,
-      };
-      const apply = (
-        kind: "creators" | "tags" | "studios",
-        ids: number[] | undefined,
-        action: "add" | "remove"
-      ) => {
-        if (!ids?.length || !videoIds.length) return;
-        const before = this.countDemoRelationships(kind, videoIds, ids);
-        videosDemoService.updateRelationships(videoIds, kind, ids, action);
-        const after = this.countDemoRelationships(kind, videoIds, ids);
-        const key =
-          `${kind}_${action === "add" ? "added" : "removed"}` as keyof typeof counts;
-        counts[key] = Math.abs(after - before);
-      };
-      withDemoTransaction(() => {
-        apply("creators", actions.addCreatorIds, "add");
-        apply("creators", actions.removeCreatorIds, "remove");
-        apply("tags", actions.addTagIds, "add");
-        apply("tags", actions.removeTagIds, "remove");
-        apply("studios", actions.addStudioIds, "add");
-        apply("studios", actions.removeStudioIds, "remove");
-      });
-      return {
-        matched: videoIds.length,
-        affected: videoIds.length,
-        errors: 0,
-        details: counts,
-      };
-    }
-    // Build filter conditions
     const { conditions } = buildVideoFilters(userId, filter);
-
-    // Get matching video IDs
-    const matchingVideos = await db
-      .selectDistinct({ id: videosTable.id })
-      .from(videosTable)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(asc(videosTable.id));
-
-    const videoIds = matchingVideos.map((v) => v.id);
-
-    if (videoIds.length === 0) {
-      return {
-        matched: 0,
-        affected: 0,
-        errors: 0,
-        details: {
-          creators_added: 0,
-          creators_removed: 0,
-          tags_added: 0,
-          tags_removed: 0,
-          studios_added: 0,
-          studios_removed: 0,
-        },
-      };
-    }
-
-    let errors = 0;
-    let creatorsAdded = 0;
-    let creatorsRemoved = 0;
-    let tagsAdded = 0;
-    let tagsRemoved = 0;
-    let studiosAdded = 0;
-    let studiosRemoved = 0;
-
-    await db.transaction(async (tx) => {
-      try {
-        // Add creators
-        if (actions.addCreatorIds && actions.addCreatorIds.length > 0) {
-          const values = videoIds.flatMap((videoId) =>
-            actions.addCreatorIds!.map((creatorId) => ({
-              videoId,
-              creatorId,
-            }))
-          );
-
-          const result = await tx
-            .insert(videoCreatorsTable)
-            .values(values)
-            .onConflictDoNothing()
-            .returning({ videoId: videoCreatorsTable.videoId });
-
-          creatorsAdded = result.length;
-        }
-
-        // Remove creators
-        if (actions.removeCreatorIds && actions.removeCreatorIds.length > 0) {
-          const result = await tx
-            .delete(videoCreatorsTable)
-            .where(
-              and(
-                inArray(videoCreatorsTable.videoId, videoIds),
-                inArray(videoCreatorsTable.creatorId, actions.removeCreatorIds)
-              )
-            )
-            .returning({ videoId: videoCreatorsTable.videoId });
-
-          creatorsRemoved = result.length;
-        }
-
-        // Add tags
-        if (actions.addTagIds && actions.addTagIds.length > 0) {
-          const values = videoIds.flatMap((videoId) =>
-            actions.addTagIds!.map((tagId) => ({
-              videoId,
-              tagId,
-            }))
-          );
-
-          const result = await tx
-            .insert(videoTagsTable)
-            .values(values)
-            .onConflictDoNothing()
-            .returning({ videoId: videoTagsTable.videoId });
-
-          tagsAdded = result.length;
-        }
-
-        // Remove tags
-        if (actions.removeTagIds && actions.removeTagIds.length > 0) {
-          const result = await tx
-            .delete(videoTagsTable)
-            .where(
-              and(
-                inArray(videoTagsTable.videoId, videoIds),
-                inArray(videoTagsTable.tagId, actions.removeTagIds)
-              )
-            )
-            .returning({ videoId: videoTagsTable.videoId });
-
-          tagsRemoved = result.length;
-        }
-
-        // Add studios
-        if (actions.addStudioIds && actions.addStudioIds.length > 0) {
-          studiosAdded = await studioAssignmentService.linkMany(
-            videoIds,
-            actions.addStudioIds,
-            tx
-          );
-        }
-
-        // Remove studios
-        if (actions.removeStudioIds && actions.removeStudioIds.length > 0) {
-          studiosRemoved = await studioAssignmentService.unlinkMany(
-            videoIds,
-            actions.removeStudioIds,
-            tx
-          );
-        }
-      } catch (error) {
-        errors++;
-        logger.error({ error }, "Failed to apply bulk conditional actions");
-        throw error;
-      }
-    });
-
-    return {
-      matched: videoIds.length,
-      affected: videoIds.length - errors,
-      errors,
-      details: {
-        creators_added: creatorsAdded,
-        creators_removed: creatorsRemoved,
-        tags_added: tagsAdded,
-        tags_removed: tagsRemoved,
-        studios_added: studiosAdded,
-        studios_removed: studiosRemoved,
-      },
-    };
-  }
-
-  private countDemoRelationships(
-    kind: "creators" | "tags" | "studios",
-    videoIds: number[],
-    targetIds: number[]
-  ): number {
-    if (kind === "creators")
-      return getDemoDatabase()
-        .select()
-        .from(demoSchema.demoVideoCreatorsTable)
-        .where(
-          and(
-            inArray(demoSchema.demoVideoCreatorsTable.videoId, videoIds),
-            inArray(demoSchema.demoVideoCreatorsTable.creatorId, targetIds)
-          )
-        )
-        .all().length;
-    if (kind === "tags")
-      return getDemoDatabase()
-        .select()
-        .from(demoSchema.demoVideoTagsTable)
-        .where(
-          and(
-            inArray(demoSchema.demoVideoTagsTable.videoId, videoIds),
-            inArray(demoSchema.demoVideoTagsTable.tagId, targetIds)
-          )
-        )
-        .all().length;
-    return getDemoDatabase()
-      .select()
-      .from(demoSchema.demoVideoStudiosTable)
-      .where(
-        and(
-          inArray(demoSchema.demoVideoStudiosTable.videoId, videoIds),
-          inArray(demoSchema.demoVideoStudiosTable.studioId, targetIds)
-        )
-      )
-      .all().length;
+    const videoIds = env.DEMO_MODE
+      ? demoRepository
+          .getVideos({ ...filter, page: 1, limit: 10_000 })
+          .data.map((video: { id: number }) => video.id)
+      : (
+          await db
+            .selectDistinct({ id: videosTable.id })
+            .from(videosTable)
+            .where(conditions.length ? and(...conditions) : undefined)
+            .orderBy(asc(videosTable.id))
+        ).map((video) => video.id);
+    const { affected, details } = await videoRelationshipsService.apply(
+      videoIds,
+      actions
+    );
+    return { matched: videoIds.length, affected, errors: 0, details };
   }
 }
 

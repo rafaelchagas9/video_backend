@@ -199,6 +199,9 @@ limits are defined by [the edit schemas](src/modules/edits/edits.schemas.ts).
 
 ### First-Time Setup
 
+The first registration creates the library owner. Both registration endpoints
+close once an account exists; existing accounts can continue signing in.
+
 ```bash
 # Register first user
 curl -X POST http://localhost:3000/api/auth/register \

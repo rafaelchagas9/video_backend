@@ -1,5 +1,5 @@
-import { db } from "@/config/drizzle";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { db, type DrizzleTransaction } from "@/config/drizzle";
+import { eq, and, inArray, sql, asc, isNull } from "drizzle-orm";
 import {
   taggingRulesTable,
   taggingRuleConditionsTable,
@@ -7,8 +7,8 @@ import {
   videoTagsTable,
   videoCreatorsTable,
   creatorsTable,
+  tagsTable,
   studiosTable,
-  videosTable,
 } from "@/database/schema";
 import {
   NotFoundError,
@@ -27,6 +27,8 @@ import type {
   ApplyRulesResult,
 } from "./tagging-rules.types";
 import { env } from "@/config/env";
+import { compileConditions, type RuleVideo } from "./tagging-rules.matcher";
+import { videosRelatedService } from "@/modules/videos/videos.related.service";
 import { taggingRulesDemoService } from "./tagging-rules.demo.service";
 
 export class TaggingRulesService {
@@ -50,21 +52,31 @@ export class TaggingRulesService {
 
     const rules = (await db.execute(query)) as any[];
 
-    // Load conditions and actions for each rule
-    for (const rule of rules) {
-      const conditions = await db
+    if (!rules.length) return [];
+    const ids = rules.map((rule) => rule.id);
+    const [conditions, actions] = await Promise.all([
+      db
         .select()
         .from(taggingRuleConditionsTable)
-        .where(eq(taggingRuleConditionsTable.ruleId, rule.id));
-
-      const actions = await db
+        .where(inArray(taggingRuleConditionsTable.ruleId, ids))
+        .orderBy(asc(taggingRuleConditionsTable.id)),
+      db
         .select()
         .from(taggingRuleActionsTable)
-        .where(eq(taggingRuleActionsTable.ruleId, rule.id));
-
-      rule.conditions = conditions.map((c) => this.mapConditionToSnakeCase(c));
-      rule.actions = actions.map((a) => this.mapActionToSnakeCase(a));
+        .where(inArray(taggingRuleActionsTable.ruleId, ids))
+        .orderBy(asc(taggingRuleActionsTable.id)),
+    ]);
+    const byId = new Map(rules.map((rule) => [rule.id, rule]));
+    for (const rule of rules) {
+      rule.conditions = [];
+      rule.actions = [];
     }
+    for (const condition of conditions)
+      byId
+        .get(condition.ruleId)
+        ?.conditions.push(this.mapConditionToSnakeCase(condition));
+    for (const action of actions)
+      byId.get(action.ruleId)?.actions.push(this.mapActionToSnakeCase(action));
 
     return rules.map((r) => this.mapRuleToSnakeCase(r));
   }
@@ -90,7 +102,8 @@ export class TaggingRulesService {
     const actions = await db
       .select()
       .from(taggingRuleActionsTable)
-      .where(eq(taggingRuleActionsTable.ruleId, id));
+      .where(eq(taggingRuleActionsTable.ruleId, id))
+      .orderBy(asc(taggingRuleActionsTable.id));
 
     const mappedRule = this.mapRuleToSnakeCase(rule);
     mappedRule.conditions = conditions.map((c) =>
@@ -106,44 +119,47 @@ export class TaggingRulesService {
     const { conditions, actions, ...ruleData } = input;
 
     try {
-      const result = await db
-        .insert(taggingRulesTable)
-        .values({
-          name: ruleData.name,
-          description: ruleData.description || null,
-          ruleType: ruleData.rule_type,
-          isEnabled: ruleData.is_enabled ?? true,
-          priority: ruleData.priority ?? 0,
-        })
-        .returning({ id: taggingRulesTable.id });
+      const ruleId = await db.transaction(async (tx) => {
+        const result = await tx
+          .insert(taggingRulesTable)
+          .values({
+            name: ruleData.name,
+            description: ruleData.description || null,
+            ruleType: ruleData.rule_type,
+            isEnabled: ruleData.is_enabled ?? true,
+            priority: ruleData.priority ?? 0,
+          })
+          .returning({ id: taggingRulesTable.id });
 
-      const ruleId = result[0].id;
+        const ruleId = result[0].id;
 
-      // Insert conditions
-      if (conditions && conditions.length > 0) {
-        await db.insert(taggingRuleConditionsTable).values(
-          conditions.map((condition) => ({
-            ruleId,
-            conditionType: condition.condition_type,
-            operator: condition.operator,
-            value: condition.value,
-          }))
-        );
-      }
+        // Insert conditions
+        if (conditions && conditions.length > 0) {
+          await tx.insert(taggingRuleConditionsTable).values(
+            conditions.map((condition) => ({
+              ruleId,
+              conditionType: condition.condition_type,
+              operator: condition.operator,
+              value: condition.value,
+            }))
+          );
+        }
 
-      // Insert actions
-      if (actions && actions.length > 0) {
-        await db.insert(taggingRuleActionsTable).values(
-          actions.map((action) => ({
-            ruleId,
-            actionType: action.action_type,
-            targetId: action.target_id ?? null,
-            targetName: action.target_name ?? null,
-            dynamicValue: action.dynamic_value ?? null,
-          }))
-        );
-      }
+        // Insert actions
+        if (actions && actions.length > 0) {
+          await tx.insert(taggingRuleActionsTable).values(
+            actions.map((action) => ({
+              ruleId,
+              actionType: action.action_type,
+              targetId: action.target_id ?? null,
+              targetName: action.target_name ?? null,
+              dynamicValue: action.dynamic_value ?? null,
+            }))
+          );
+        }
 
+        return ruleId;
+      });
       return this.findById(ruleId);
     } catch (error: any) {
       if (isUniqueViolation(error)) {
@@ -188,49 +204,59 @@ export class TaggingRulesService {
     const replacingChildren =
       input.conditions !== undefined || input.actions !== undefined;
 
-    if (Object.keys(updates).length > 0 || replacingChildren) {
-      updates.updatedAt = new Date();
-      await db
-        .update(taggingRulesTable)
-        .set(updates)
-        .where(eq(taggingRulesTable.id, id));
-    }
+    try {
+      await db.transaction(async (tx) => {
+        if (Object.keys(updates).length > 0 || replacingChildren) {
+          updates.updatedAt = new Date();
+          await tx
+            .update(taggingRulesTable)
+            .set(updates)
+            .where(eq(taggingRulesTable.id, id));
+        }
 
-    // Replace child rows when the caller provides them. An empty array clears
-    // the existing rows; an omitted key leaves them untouched.
-    if (input.conditions !== undefined) {
-      await db
-        .delete(taggingRuleConditionsTable)
-        .where(eq(taggingRuleConditionsTable.ruleId, id));
+        // Replace child rows when the caller provides them. An empty array clears
+        // the existing rows; an omitted key leaves them untouched.
+        if (input.conditions !== undefined) {
+          await tx
+            .delete(taggingRuleConditionsTable)
+            .where(eq(taggingRuleConditionsTable.ruleId, id));
 
-      if (input.conditions.length > 0) {
-        await db.insert(taggingRuleConditionsTable).values(
-          input.conditions.map((condition) => ({
-            ruleId: id,
-            conditionType: condition.condition_type,
-            operator: condition.operator,
-            value: condition.value,
-          }))
+          if (input.conditions.length > 0) {
+            await tx.insert(taggingRuleConditionsTable).values(
+              input.conditions.map((condition) => ({
+                ruleId: id,
+                conditionType: condition.condition_type,
+                operator: condition.operator,
+                value: condition.value,
+              }))
+            );
+          }
+        }
+
+        if (input.actions !== undefined) {
+          await tx
+            .delete(taggingRuleActionsTable)
+            .where(eq(taggingRuleActionsTable.ruleId, id));
+
+          if (input.actions.length > 0) {
+            await tx.insert(taggingRuleActionsTable).values(
+              input.actions.map((action) => ({
+                ruleId: id,
+                actionType: action.action_type,
+                targetId: action.target_id ?? null,
+                targetName: action.target_name ?? null,
+                dynamicValue: action.dynamic_value ?? null,
+              }))
+            );
+          }
+        }
+      });
+    } catch (error) {
+      if (isUniqueViolation(error))
+        throw new ConflictError(
+          `Tagging rule with name "${input.name}" already exists`
         );
-      }
-    }
-
-    if (input.actions !== undefined) {
-      await db
-        .delete(taggingRuleActionsTable)
-        .where(eq(taggingRuleActionsTable.ruleId, id));
-
-      if (input.actions.length > 0) {
-        await db.insert(taggingRuleActionsTable).values(
-          input.actions.map((action) => ({
-            ruleId: id,
-            actionType: action.action_type,
-            targetId: action.target_id ?? null,
-            targetName: action.target_name ?? null,
-            dynamicValue: action.dynamic_value ?? null,
-          }))
-        );
-      }
+      throw error;
     }
 
     return this.findById(id);
@@ -248,11 +274,11 @@ export class TaggingRulesService {
       return { deleted: 0 };
     }
 
-    await db
+    const deleted = await db
       .delete(taggingRulesTable)
-      .where(inArray(taggingRulesTable.id, ids));
-    // We can't easily get rowCount, so we just return the count of IDs passed
-    return { deleted: ids.length };
+      .where(inArray(taggingRulesTable.id, ids))
+      .returning({ id: taggingRulesTable.id });
+    return { deleted: deleted.length };
   }
 
   async testRule(ruleId: number, limit: number = 10): Promise<TestRuleResult> {
@@ -260,22 +286,20 @@ export class TaggingRulesService {
     const rule = await this.findById(ruleId);
 
     const videosResult = await db.execute(sql`
-      SELECT id, file_path, file_name
+      SELECT id, file_path, file_name, duration_seconds, file_size_bytes, width, height, codec
       FROM videos
       WHERE is_available = true
       ORDER BY id ASC
       LIMIT ${limit}
     `);
-    const videos = videosResult as any[];
+    const videos = videosResult as unknown as RuleVideo[];
+    const evaluate = compileConditions(rule.conditions ?? []);
 
     let matched = 0;
     const sampleMatches: TestRuleResult["sample_matches"] = [];
 
     for (const video of videos) {
-      const matchedConditions = this.evaluateConditions(
-        video,
-        rule.conditions || []
-      );
+      const { matchedConditions } = evaluate(video);
 
       if (matchedConditions.length > 0) {
         matched++;
@@ -305,7 +329,7 @@ export class TaggingRulesService {
     const { video_ids, dry_run = false, limit = 100 } = input;
 
     const rules = await this.list(false);
-    if (rules.length === 0) {
+    if (rules.length === 0 || video_ids?.length === 0) {
       return {
         processed: 0,
         tagged: 0,
@@ -315,25 +339,22 @@ export class TaggingRulesService {
       };
     }
 
-    let videos: any[];
-    if (video_ids && video_ids.length > 0) {
-      videos = await db
-        .select({
-          id: videosTable.id,
-          file_path: videosTable.filePath,
-          file_name: videosTable.fileName,
-        })
-        .from(videosTable)
-        .where(inArray(videosTable.id, video_ids));
-    } else {
-      const videosResult = await db.execute(sql`
-        SELECT id, file_path, file_name FROM videos
-        WHERE is_available = true
-        ORDER BY id ASC
-        LIMIT ${limit}
-      `);
-      videos = videosResult as any[];
-    }
+    const videos = (await db.execute(sql`
+      SELECT id, file_path, file_name, duration_seconds, file_size_bytes, width, height, codec
+      FROM videos WHERE is_available = true
+      ${
+        video_ids
+          ? sql`AND id IN (${sql.join(
+              video_ids.map((id) => sql`${id}`),
+              sql`, `
+            )})`
+          : sql``
+      }
+      ORDER BY id ASC LIMIT ${limit}
+    `)) as unknown as RuleVideo[];
+    const evaluators = new Map(
+      rules.map((rule) => [rule.id, compileConditions(rule.conditions ?? [])])
+    );
 
     let processed = 0;
     let tagged = 0;
@@ -346,6 +367,7 @@ export class TaggingRulesService {
     for (const video of videos) {
       processed++;
 
+      let videoChanged = false;
       for (const rule of rules) {
         const conditions = rule.conditions || [];
         const actions = rule.actions || [];
@@ -354,11 +376,11 @@ export class TaggingRulesService {
           continue;
         }
 
-        const matchedConditions = this.evaluateConditions(video, conditions);
+        const { matchedConditions, captures } = evaluators.get(rule.id)!(video);
 
         if (matchedConditions.length > 0) {
           if (dry_run) {
-            tagged++;
+            videoChanged = true;
             log.push({
               video_id: video.id,
               rule_id: rule.id,
@@ -366,19 +388,32 @@ export class TaggingRulesService {
             });
           } else {
             try {
-              for (const action of actions) {
-                const result = await this.applyAction(
-                  video.id,
-                  action,
-                  video.file_path
-                );
-                if (result.success) {
-                  tagged++;
-                  if (action.action_type === "add_tag") tagsAdded++;
-                  if (action.action_type === "add_creator") creatorsAdded++;
-                  if (action.action_type === "add_studio") studiosAdded++;
+              const changes = await db.transaction(async (tx) => {
+                const counts = {
+                  changed: false,
+                  tags: 0,
+                  creators: 0,
+                  studios: 0,
+                };
+                for (const action of actions) {
+                  if (await this.applyAction(video.id, action, captures, tx)) {
+                    counts.changed = true;
+                    if (action.action_type === "add_tag") counts.tags++;
+                    if (action.action_type === "add_creator") counts.creators++;
+                    if (action.action_type === "add_studio") counts.studios++;
+                  }
                 }
-              }
+                if (counts.changed)
+                  await videosRelatedService.invalidateForVideos(
+                    [video.id],
+                    tx
+                  );
+                return counts;
+              });
+              videoChanged ||= changes.changed;
+              tagsAdded += changes.tags;
+              creatorsAdded += changes.creators;
+              studiosAdded += changes.studios;
               log.push({
                 video_id: video.id,
                 rule_id: rule.id,
@@ -400,6 +435,7 @@ export class TaggingRulesService {
           }
         }
       }
+      if (videoChanged) tagged++;
     }
 
     return {
@@ -415,288 +451,109 @@ export class TaggingRulesService {
     };
   }
 
-  private evaluateConditions(
-    video: { id: number; file_path: string; file_name: string },
-    conditions: TaggingRuleCondition[]
-  ): string[] {
-    const matched: string[] = [];
-
-    for (const condition of conditions) {
-      let matches = false;
-
-      switch (condition.condition_type) {
-        case "path_pattern":
-          matches = this.matchPattern(
-            video.file_path,
-            condition.operator,
-            condition.value
-          );
-          break;
-        case "file_pattern":
-          matches = this.matchPattern(
-            video.file_name,
-            condition.operator,
-            condition.value
-          );
-          break;
-        case "resolution":
-          matches = this.matchResolution(
-            video.file_path,
-            condition.operator,
-            condition.value
-          );
-          break;
-        case "codec":
-          matches = this.matchCodec(
-            video.file_path,
-            condition.operator,
-            condition.value
-          );
-          break;
-        case "duration_range":
-          matches = this.matchDuration(
-            video.file_path,
-            condition.operator,
-            condition.value
-          );
-          break;
-        case "file_size":
-          matches = this.matchFileSize(
-            video.file_path,
-            condition.operator,
-            condition.value
-          );
-          break;
-      }
-
-      if (matches) {
-        matched.push(
-          `${condition.condition_type} ${condition.operator} ${condition.value}`
-        );
-      }
-    }
-
-    return matched;
-  }
-
-  private matchPattern(
-    filePath: string,
-    operator: string,
-    value: string
-  ): boolean {
-    const normalizedPath = filePath.toLowerCase();
-    const normalizedValue = value.toLowerCase();
-
-    switch (operator) {
-      case "contains":
-        return normalizedPath.includes(normalizedValue);
-      case "equals":
-        return normalizedPath === normalizedValue;
-      case "matches":
-      case "regex":
-        try {
-          return new RegExp(value).test(filePath);
-        } catch {
-          return false;
-        }
-      default:
-        return false;
-    }
-  }
-
-  private matchResolution(
-    filePath: string,
-    operator: string,
-    value: string
-  ): boolean {
-    const match = filePath.match(/(\d{3,4})x(\d{3,4})/i);
-    if (!match) return false;
-
-    const width = parseInt(match[1]);
-    const height = parseInt(match[2]);
-
-    const targetResolutions: Record<string, { width: number; height: number }> =
-      {
-        "4K": { width: 3840, height: 2160 },
-        "1080p": { width: 1920, height: 1080 },
-        "720p": { width: 1280, height: 720 },
-        "480p": { width: 854, height: 480 },
-        "360p": { width: 640, height: 360 },
-      };
-
-    const target = targetResolutions[value.toUpperCase()];
-    if (!target) return false;
-
-    const resolutionMatch = width === target.width && height === target.height;
-    return operator === "equals" ? resolutionMatch : !resolutionMatch;
-  }
-
-  private matchCodec(
-    filePath: string,
-    operator: string,
-    value: string
-  ): boolean {
-    const lowerValue = value.toLowerCase();
-    const hasCodec = filePath.toLowerCase().includes(lowerValue);
-    return operator === "contains" ? hasCodec : !hasCodec;
-  }
-
-  private matchDuration(
-    _filePath: string,
-    _operator: string,
-    _value: string
-  ): boolean {
-    return false;
-  }
-
-  private matchFileSize(
-    _filePath: string,
-    _operator: string,
-    _value: string
-  ): boolean {
-    return false;
-  }
-
   private async applyAction(
     videoId: number,
     action: TaggingRuleAction,
-    filePath: string
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      switch (action.action_type) {
-        case "add_tag":
-          if (action.target_id) {
-            await db
-              .insert(videoTagsTable)
-              .values({ videoId, tagId: action.target_id })
-              .onConflictDoNothing();
-          }
-          break;
-
-        case "remove_tag":
-          if (action.target_id) {
-            await db
-              .delete(videoTagsTable)
-              .where(
-                and(
-                  eq(videoTagsTable.videoId, videoId),
-                  eq(videoTagsTable.tagId, action.target_id)
-                )
-              );
-          }
-          break;
-
-        case "add_creator":
-          if (action.dynamic_value && action.dynamic_value.startsWith("$")) {
-            const groupName = action.dynamic_value.slice(1);
-            const creatorName = this.extractCreatorFromPath(
-              filePath,
-              groupName
-            );
-            if (creatorName) {
-              const existingCreator = await db
-                .select()
-                .from(creatorsTable)
-                .where(eq(creatorsTable.name, creatorName));
-
-              let creatorId: number;
-              if (existingCreator.length === 0) {
-                const result = await db
-                  .insert(creatorsTable)
-                  .values({ name: creatorName })
-                  .returning({ id: creatorsTable.id });
-                creatorId = result[0].id;
-              } else {
-                creatorId = existingCreator[0].id;
-              }
-
-              await db
-                .insert(videoCreatorsTable)
-                .values({ videoId, creatorId })
-                .onConflictDoNothing();
-            }
-          } else if (action.target_id) {
-            await db
-              .insert(videoCreatorsTable)
-              .values({ videoId, creatorId: action.target_id })
-              .onConflictDoNothing();
-          }
-          break;
-
-        case "remove_creator":
-          if (action.target_id) {
-            await db
-              .delete(videoCreatorsTable)
-              .where(
-                and(
-                  eq(videoCreatorsTable.videoId, videoId),
-                  eq(videoCreatorsTable.creatorId, action.target_id)
-                )
-              );
-          }
-          break;
-
-        case "add_studio":
-          if (action.dynamic_value && action.dynamic_value.startsWith("$")) {
-            const groupName = action.dynamic_value.slice(1);
-            const studioName = this.extractStudioFromPath(filePath, groupName);
-            if (studioName) {
-              const existingStudio = await db
-                .select()
-                .from(studiosTable)
-                .where(eq(studiosTable.name, studioName));
-
-              let studioId: number;
-              if (existingStudio.length === 0) {
-                const result = await db
-                  .insert(studiosTable)
-                  .values({ name: studioName })
-                  .returning({ id: studiosTable.id });
-                studioId = result[0].id;
-              } else {
-                studioId = existingStudio[0].id;
-              }
-
-              await studioAssignmentService.linkMany([videoId], [studioId]);
-            }
-          } else if (action.target_id) {
-            await studioAssignmentService.linkMany([videoId], [action.target_id]);
-          }
-          break;
-
-        case "remove_studio":
-          if (action.target_id) {
-            await studioAssignmentService.unlinkMany([videoId], [action.target_id]);
-          }
-          break;
+    captures: Record<string, string>,
+    tx: DrizzleTransaction
+  ): Promise<boolean> {
+    const kind = action.action_type.endsWith("tag")
+      ? "tag"
+      : action.action_type.endsWith("creator")
+        ? "creator"
+        : "studio";
+    const add = action.action_type.startsWith("add_");
+    let targetId = action.target_id;
+    const name = action.dynamic_value
+      ? captures[action.dynamic_value.slice(1)]?.trim()
+      : action.target_name?.trim();
+    if (!targetId && name) {
+      if (kind === "tag") {
+        // Tags may repeat under different parents. A name-only action addresses
+        // the root tag, and serializes concurrent rule-created root tags.
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext(${"tagging-root-tag:" + name}))`
+        );
+        const [existing] = await tx
+          .select({ id: tagsTable.id })
+          .from(tagsTable)
+          .where(and(eq(tagsTable.name, name), isNull(tagsTable.parentId)))
+          .orderBy(asc(tagsTable.id))
+          .limit(1);
+        targetId = existing?.id ?? null;
+        if (!targetId && add) {
+          const [created] = await tx
+            .insert(tagsTable)
+            .values({ name })
+            .returning({ id: tagsTable.id });
+          targetId = created.id;
+        }
+      } else {
+        const table = kind === "creator" ? creatorsTable : studiosTable;
+        if (add) {
+          const [row] = await tx
+            .insert(table)
+            .values({ name })
+            .onConflictDoUpdate({ target: table.name, set: { name } })
+            .returning({ id: table.id });
+          targetId = row.id;
+        } else {
+          const [row] = await tx
+            .select({ id: table.id })
+            .from(table)
+            .where(eq(table.name, name));
+          targetId = row?.id ?? null;
+        }
       }
-
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
+      if (!targetId && !add) return false;
     }
-  }
-
-  private extractCreatorFromPath(
-    filePath: string,
-    groupName: string
-  ): string | null {
-    const match = filePath.match(new RegExp(`\\(\\?<${groupName}>[^)]+\\)`));
-    if (match) {
-      const regex = new RegExp(
-        match[0].replace(/\\?<\w+>/, "(?<creator>[^/]+)")
+    if (!targetId)
+      throw new Error(`No target resolved for ${action.action_type}`);
+    if (kind === "studio") {
+      return (
+        (add
+          ? await studioAssignmentService.linkMany([videoId], [targetId], tx)
+          : await studioAssignmentService.unlinkMany(
+              [videoId],
+              [targetId],
+              tx
+            )) > 0
       );
-      const actualMatch = regex.exec(filePath);
-      return actualMatch?.groups?.creator || null;
     }
-    return null;
-  }
-
-  private extractStudioFromPath(
-    filePath: string,
-    groupName: string
-  ): string | null {
-    return this.extractCreatorFromPath(filePath, groupName);
+    if (kind === "tag") {
+      const rows = add
+        ? await tx
+            .insert(videoTagsTable)
+            .values({ videoId, tagId: targetId })
+            .onConflictDoNothing()
+            .returning()
+        : await tx
+            .delete(videoTagsTable)
+            .where(
+              and(
+                eq(videoTagsTable.videoId, videoId),
+                eq(videoTagsTable.tagId, targetId)
+              )
+            )
+            .returning();
+      return rows.length > 0;
+    }
+    const rows = add
+      ? await tx
+          .insert(videoCreatorsTable)
+          .values({ videoId, creatorId: targetId })
+          .onConflictDoNothing()
+          .returning()
+      : await tx
+          .delete(videoCreatorsTable)
+          .where(
+            and(
+              eq(videoCreatorsTable.videoId, videoId),
+              eq(videoCreatorsTable.creatorId, targetId)
+            )
+          )
+          .returning();
+    return rows.length > 0;
   }
 
   private mapRuleToSnakeCase(rule: any): TaggingRule {

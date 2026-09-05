@@ -1,3 +1,4 @@
+import { AppError } from "@/utils/errors";
 import { fromNodeHeaders } from "better-auth/node";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -12,7 +13,10 @@ import {
   registerBodySchema,
 } from "./auth.schemas";
 
-function forwardSetCookieHeaders(reply: FastifyReply, response: Response): void {
+function forwardSetCookieHeaders(
+  reply: FastifyReply,
+  response: Response
+): void {
   const getSetCookie = response.headers.getSetCookie?.bind(response.headers);
   const cookies = getSetCookie ? getSetCookie() : [];
 
@@ -37,11 +41,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["auth"],
         summary: "Register a new user",
         description:
-          "Create a new Better Auth account using email and password.",
+          "Create the initial library owner. Registration closes after the first account.",
         body: registerBodySchema,
         response: {
           201: authSuccessResponseSchema,
           400: errorResponseSchema,
+          403: errorResponseSchema,
           409: errorResponseSchema,
         },
       },
@@ -49,7 +54,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { user, response } = await authService.register(
         request.body,
-        request.headers,
+        request.headers
       );
 
       forwardSetCookieHeaders(reply, response);
@@ -59,7 +64,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         data: user,
         message: "User created successfully",
       });
-    },
+    }
   );
 
   app.post(
@@ -81,7 +86,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { user, response } = await authService.login(
         request.body,
-        request.headers,
+        request.headers
       );
 
       forwardSetCookieHeaders(reply, response);
@@ -91,7 +96,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         data: user,
         message: "Logged in successfully",
       });
-    },
+    }
   );
 
   app.post("/logout", {
@@ -145,18 +150,33 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       hide: true,
     },
     async handler(request, reply) {
-      const { auth } = await import("@/lib/auth");
+      const { auth, withOwnerRegistration } = await import("@/lib/auth");
       const url = new URL(request.url, `http://${request.headers.host}`);
       const headers = fromNodeHeaders(request.headers);
-      const response = await auth.handler(
-        new Request(url.toString(), {
-          method: request.method,
-          headers,
-          ...(request.body === undefined
-            ? {}
-            : { body: JSON.stringify(request.body) }),
-        }),
-      );
+      const authRequest = new Request(url.toString(), {
+        method: request.method,
+        headers,
+        ...(request.body === undefined
+          ? {}
+          : { body: JSON.stringify(request.body) }),
+      });
+      const response =
+        request.method === "POST" && url.pathname === "/api/auth/sign-up/email"
+          ? await withOwnerRegistration(async (registrationAuth) => {
+              const result = await registrationAuth.handler(authRequest);
+              if (!result.ok) {
+                const payload = (await result
+                  .clone()
+                  .json()
+                  .catch(() => null)) as { message?: string } | null;
+                throw new AppError(
+                  result.status,
+                  payload?.message || "Registration failed"
+                );
+              }
+              return result;
+            })
+          : await auth.handler(authRequest);
 
       reply.status(response.status);
       response.headers.forEach((value, key) => {

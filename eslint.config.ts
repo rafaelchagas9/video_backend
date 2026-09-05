@@ -10,7 +10,6 @@ export default defineConfig([
       "node_modules/**",
       "vision-service/.venv/**",
       "demo_mode/**",
-      "scripts/**",
     ],
   },
   {
