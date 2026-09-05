@@ -15,6 +15,13 @@ function list(key: string): string[] {
 const redis = {
   send: mock(async (command: string, args: string[]) => {
     const normalized = command.toUpperCase();
+    if (normalized === "EVAL") {
+      const values = list(args[2]!);
+      const index = values.indexOf(args[4]!);
+      if (index < 0) return 0;
+      values.splice(index, 1);
+      return list(args[3]!).push(args[4]!);
+    }
     if (normalized === "LPUSH") {
       return list(args[0]!).unshift(args[1]!);
     }
@@ -43,7 +50,7 @@ const redis = {
       const count = Number(args[1]);
       const target = args[2];
       let removed = 0;
-      for (let index = 0; index < values.length; ) {
+      for (let index = 0; index < values.length;) {
         if (values[index] === target && (count === 0 || removed < count)) {
           values.splice(index, 1);
           removed++;
@@ -108,6 +115,241 @@ describe("conversion queue cancellation and recovery", () => {
     redis.send.mockClear();
     redis.del.mockClear();
     captureTelemetryException.mockClear();
+  });
+
+  it("serializes delayed claims when simultaneous enqueues compete for one slot", async () => {
+    const { ConversionQueue } =
+      await import("@/modules/conversion/conversion.queue");
+    let releaseClaim!: () => void;
+    const claimGate = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    let pendingClaims = 0;
+    const base = redis;
+    const queue = new ConversionQueue({
+      ...base,
+      send: async (command, args) => {
+        const result = await base.send(command, args);
+        if (
+          command === "RPOPLPUSH" &&
+          args[0] === "conversion:jobs" &&
+          result
+        ) {
+          pendingClaims++;
+          await claimGate;
+        }
+        return result;
+      },
+    });
+    let active = 0;
+    let maximumActive = 0;
+    const started: number[] = [];
+    const releases: Array<() => void> = [];
+    queue.setProcessor(async (job) => {
+      started.push(job.jobId);
+      maximumActive = Math.max(maximumActive, ++active);
+      await new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+      active--;
+    });
+    await queue.start();
+    await queue.enqueue(payload(71));
+    await waitUntil(() => pendingClaims > 0);
+    await queue.enqueue(payload(72));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releaseClaim();
+    await waitUntil(() => started.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const observedMaximum = maximumActive;
+    releases.shift()?.();
+    await waitUntil(() => started.length === 2);
+    for (const release of releases) release();
+    await queue.stop();
+    expect(observedMaximum).toBe(1);
+    expect(maximumActive).toBe(1);
+    expect(started).toEqual([71, 72]);
+    expect(list("conversion:processing")).toHaveLength(0);
+  });
+
+  it("waits for a delayed claim at shutdown and requeues it without starting a renderer", async () => {
+    const { ConversionQueue } =
+      await import("@/modules/conversion/conversion.queue");
+    let releaseClaim!: () => void;
+    const claimGate = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    let claimed = false;
+    const base = redis;
+    const queue = new ConversionQueue({
+      ...base,
+      send: async (command, args) => {
+        const result = await base.send(command, args);
+        if (
+          command === "RPOPLPUSH" &&
+          args[0] === "conversion:jobs" &&
+          result &&
+          !claimed
+        ) {
+          claimed = true;
+          await claimGate;
+        }
+        return result;
+      },
+    });
+    const processor = mock(async () => undefined);
+    queue.setProcessor(processor);
+    await queue.enqueue(payload(73));
+    await queue.start();
+    await waitUntil(() => claimed);
+    let stopped = false;
+    const stopping = queue.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const stoppedBeforeClaim = stopped;
+    releaseClaim();
+    await stopping;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stoppedBeforeClaim).toBe(false);
+    expect(processor).not.toHaveBeenCalled();
+    expect(list("conversion:processing")).toHaveLength(0);
+    expect(list("conversion:jobs")).toHaveLength(1);
+    await queue.start();
+    await waitUntil(() => processor.mock.calls.length === 1);
+    await queue.stop();
+    expect(list("conversion:jobs")).toHaveLength(0);
+    expect(list("conversion:processing")).toHaveLength(0);
+  });
+
+  it("does not restart rendering when shutdown races with recovery", async () => {
+    const { ConversionQueue } =
+      await import("@/modules/conversion/conversion.queue");
+    const queue = new ConversionQueue(redis);
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    let recovering = false;
+    queue.setRecoveryProvider(async () => {
+      recovering = true;
+      await recoveryGate;
+      return [payload(74)];
+    });
+    const processor = mock(async () => undefined);
+    queue.setProcessor(processor);
+    const starting = queue.start();
+    await waitUntil(() => recovering);
+    let stopped = false;
+    const stopping = queue.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    releaseRecovery();
+    await Promise.all([starting, stopping]);
+    expect(processor).not.toHaveBeenCalled();
+    expect(await queue.getStatus()).toMatchObject({
+      isProcessing: false,
+      activeJobs: 0,
+      queueLength: 1,
+    });
+    await queue.start();
+    await waitUntil(() => processor.mock.calls.length === 1);
+    await queue.stop();
+  });
+
+  it("returns only the pending claim while another conversion is still draining", async () => {
+    const { ConversionQueue } =
+      await import("@/modules/conversion/conversion.queue");
+    const { env } = await import("@/config/env");
+    const oldConcurrency = env.CONVERSION_MAX_CONCURRENT;
+    let releaseClaim!: () => void;
+    const claimGate = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    let pending = false;
+    env.CONVERSION_MAX_CONCURRENT = 2;
+    const queue = new ConversionQueue({
+      ...redis,
+      send: async (command, args) => {
+        const result = await redis.send(command, args);
+        if (
+          command === "RPOPLPUSH" &&
+          args[0] === "conversion:jobs" &&
+          typeof result === "string" &&
+          JSON.parse(result).jobId === 76
+        ) {
+          pending = true;
+          await claimGate;
+        }
+        return result;
+      },
+    });
+    env.CONVERSION_MAX_CONCURRENT = oldConcurrency;
+    let releaseRenderer!: () => void;
+    const rendererGate = new Promise<void>((resolve) => {
+      releaseRenderer = resolve;
+    });
+    const started: number[] = [];
+    queue.setProcessor(async (job) => {
+      started.push(job.jobId);
+      await rendererGate;
+    });
+    await queue.enqueue(payload(75));
+    await queue.enqueue(payload(76));
+    await queue.start();
+    await waitUntil(() => pending && started.length === 1);
+    const stopping = queue.stop();
+    releaseClaim();
+    await waitUntil(() => list("conversion:jobs").length === 1);
+    expect(
+      list("conversion:jobs").map((value) => JSON.parse(value).jobId)
+    ).toEqual([76]);
+    expect(
+      list("conversion:processing").map((value) => JSON.parse(value).jobId)
+    ).toEqual([75]);
+    releaseRenderer();
+    await stopping;
+    expect(started).toEqual([75]);
+    expect(list("conversion:processing")).toHaveLength(0);
+  });
+
+  it("does not resurrect a pending conversion cancelled before its claim response", async () => {
+    const { ConversionQueue } =
+      await import("@/modules/conversion/conversion.queue");
+    let releaseClaim!: () => void;
+    const claimGate = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    let pending = false;
+    const queue = new ConversionQueue({
+      ...redis,
+      send: async (command, args) => {
+        const result = await redis.send(command, args);
+        if (
+          command === "RPOPLPUSH" &&
+          args[0] === "conversion:jobs" &&
+          result
+        ) {
+          pending = true;
+          await claimGate;
+        }
+        return result;
+      },
+    });
+    const processor = mock(async () => undefined);
+    queue.setProcessor(processor);
+    await queue.enqueue(payload(77));
+    await queue.start();
+    await waitUntil(() => pending);
+    await queue.cancel(77);
+    const stopping = queue.stop();
+    releaseClaim();
+    await stopping;
+    expect(processor).not.toHaveBeenCalled();
+    expect(list("conversion:jobs")).toHaveLength(0);
+    expect(list("conversion:processing")).toHaveLength(0);
   });
 
   it("removes a cancelled queued payload before it can be claimed", async () => {

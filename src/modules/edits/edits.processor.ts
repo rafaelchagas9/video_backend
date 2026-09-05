@@ -162,6 +162,7 @@ export function buildEditFilterComplex(
   const canvasHeight = evenDimension(options.sourceHeight, 1080);
 
   segments.forEach((segment, index) => {
+    const videoInput = includeAudio ? index * 2 : index;
     const speed = segment.speed ?? 1;
     const sourceDuration = segment.end - segment.start;
     const setpts =
@@ -169,7 +170,7 @@ export function buildEditFilterComplex(
         ? "setpts=PTS-STARTPTS"
         : `setpts=(PTS-STARTPTS)/${formatNumber(speed)}`;
     filters.push(
-      `[${index}:v]trim=duration=${formatNumber(sourceDuration)},${setpts}[v${index}]`
+      `[${videoInput}:v]trim=duration=${formatNumber(sourceDuration)},${setpts}[v${index}]`
     );
 
     let videoLabel = `[v${index}]`;
@@ -198,7 +199,7 @@ export function buildEditFilterComplex(
     if (includeAudio) {
       const segmentDuration = sourceDuration / speed;
       const audioFilters = [
-        `[${index}:a]atrim=duration=${formatNumber(sourceDuration)}`,
+        `[${videoInput + 1}:a]atrim=duration=${formatNumber(sourceDuration)}`,
         "asetpts=PTS-STARTPTS",
         ...buildAtempoChain(speed),
         `apad=whole_dur=${formatNumber(segmentDuration)}`,
@@ -340,9 +341,23 @@ export function buildEditFfmpegArgs(
       formatNumber(segment.start),
       "-t",
       formatNumber(segment.end - segment.start),
+      "-an",
       "-i",
       options.inputPath
     );
+    if (graph.audioOutputLabel) {
+      // Separate demuxers keep fast audio reads from filling the video decoder's
+      // overflow queue. FFmpeg 9.0.1 can silently turn that overflow into EOF.
+      args.push(
+        "-ss",
+        formatNumber(segment.start),
+        "-t",
+        formatNumber(segment.end - segment.start),
+        "-vn",
+        "-i",
+        options.inputPath
+      );
+    }
   }
   args.push(
     "-filter_hw_device",
@@ -517,7 +532,8 @@ export class EditsProcessor {
         calculateExpectedDuration(timelineConfig),
         sourceVideo.audio_codec !== null &&
           timelineConfig.audio?.muted !== true,
-        signal
+        signal,
+        { path: sourceVideo.file_path, timeline: timelineConfig }
       );
       await recordStageSafely(
         { scenario: "editing", videoId, jobId, mode: "process_job" },

@@ -156,8 +156,9 @@ export class FfmpegService {
 
     let inputDuration = 0;
     try {
-      inputDuration = await this.getVideoDuration(inputPath);
+      inputDuration = await this.getVideoDuration(inputPath, signal);
     } catch {
+      if (signal.aborted) throw new ConversionCancelledError();
       // If we can't get duration, progress updates won't work but conversion continues
     }
 
@@ -719,7 +720,11 @@ export class FfmpegService {
   /**
    * Get video duration in seconds using FFprobe
    */
-  private getVideoDuration(inputPath: string): Promise<number> {
+  private getVideoDuration(
+    inputPath: string,
+    signal?: AbortSignal
+  ): Promise<number> {
+    if (signal?.aborted) return Promise.reject(new ConversionCancelledError());
     return new Promise((resolve, reject) => {
       const args = [
         "-v",
@@ -731,17 +736,43 @@ export class FfmpegService {
         inputPath,
       ];
 
-      const ffprobe = spawn(env.FFPROBE_PATH, args);
+      const ffprobe = spawn(env.FFPROBE_PATH, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let output = "";
+      let failure: Error | undefined;
+      const stop = (error: Error) => {
+        failure ??= error;
+        if (ffprobe.exitCode === null && !ffprobe.killed)
+          ffprobe.kill("SIGKILL");
+      };
+      const abort = () => stop(new ConversionCancelledError());
+      const timeout = setTimeout(
+        () => stop(new Error("Duration probe timed out")),
+        30_000
+      );
+      timeout.unref();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      ffprobe.stderr.resume();
 
       ffprobe.stdout.on("data", (data: Buffer) => {
+        if (failure) return;
         output += data.toString();
+        if (output.length > 65_536)
+          stop(new Error("Invalid duration probe output"));
       });
 
       ffprobe.on("close", (code) => {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
+        if (failure) {
+          reject(failure);
+          return;
+        }
         if (code === 0) {
           const duration = parseFloat(output.trim());
-          if (!isNaN(duration)) {
+          if (Number.isFinite(duration) && duration > 0) {
             resolve(duration);
           } else {
             reject(new Error("Failed to parse duration"));
@@ -751,7 +782,9 @@ export class FfmpegService {
         }
       });
 
-      ffprobe.on("error", reject);
+      ffprobe.on("error", () => {
+        failure ??= new Error("Duration probe could not start");
+      });
     });
   }
 

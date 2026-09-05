@@ -35,6 +35,11 @@ function parsePayload(value: string): EditQueuePayload | null {
 
 export class EditsQueue {
   private isProcessing = false;
+  private pendingClaim: Promise<void> | null = null;
+  private refillRequested = false;
+  private startPromise: Promise<void> | null = null;
+  private stopPromise: Promise<void> | null = null;
+  private lifecycleVersion = 0;
   private readonly concurrency = 1;
   private activeJobs = 0;
   private processor: EditProcessor | null = null;
@@ -61,25 +66,48 @@ export class EditsQueue {
     this.recoveryProvider = provider;
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise.then(() => this.start());
+    if (this.startPromise) return this.startPromise;
     if (this.isProcessing) {
       logger.warn("Edits queue is already processing");
-      return;
+      return Promise.resolve();
     }
 
-    await this.recoverInterruptedJobs();
-    this.isProcessing = true;
-    logger.info({ concurrency: this.concurrency }, "Edits queue started");
-    void this.processNext();
+    const version = this.lifecycleVersion;
+    const start = this.recoverInterruptedJobs()
+      .then(() => {
+        if (version !== this.lifecycleVersion) return;
+        this.isProcessing = true;
+        logger.info({ concurrency: this.concurrency }, "Edits queue started");
+        this.processNext();
+      })
+      .finally(() => {
+        this.startPromise = null;
+      });
+    this.startPromise = start;
+    return start;
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    this.lifecycleVersion++;
     this.isProcessing = false;
     for (const controller of this.activeControllers.values()) {
       controller.abort();
     }
-    await Promise.allSettled([...this.activeRuns]);
-    logger.info("Edits queue stopped");
+    const stop = (async () => {
+      // Recovery and Redis claims may already be in flight. They must finish
+      // without starting another renderer before shutdown can complete.
+      if (this.startPromise) await Promise.allSettled([this.startPromise]);
+      await this.pendingClaim;
+      await Promise.allSettled([...this.activeRuns]);
+      logger.info("Edits queue stopped");
+    })().finally(() => {
+      this.stopPromise = null;
+    });
+    this.stopPromise = stop;
+    return stop;
   }
 
   /**
@@ -159,10 +187,21 @@ export class EditsQueue {
     }
   }
 
-  private async processNext(): Promise<void> {
+  private processNext(): void {
     if (!this.isProcessing || !this.processor) return;
-    if (this.activeJobs >= this.concurrency) return;
+    this.refillRequested = true;
+    // Only one claim can cross Redis at a time. Its eventual renderer owns the
+    // next free slot, even while the RPOPLPUSH response is pending.
+    if (this.pendingClaim || this.activeJobs >= this.concurrency) return;
+    this.refillRequested = false;
+    const claim = this.claimNext().finally(() => {
+      this.pendingClaim = null;
+      if (this.refillRequested) this.processNext();
+    });
+    this.pendingClaim = claim;
+  }
 
+  private async claimNext(): Promise<void> {
     try {
       // RPOPLPUSH is the acknowledgement boundary: a claimed payload remains in
       // the processing list until its processor settles, so a crash can replay it.
@@ -171,12 +210,24 @@ export class EditsQueue {
         PROCESSING_KEY,
       ])) as string | null;
       if (!jobData) return;
+      if (!this.isProcessing) {
+        // Return exactly this claim atomically, preserving both concurrent
+        // cancellation and other running jobs' processing entries.
+        await this.redisClient.send("EVAL", [
+          "if redis.call('LREM', KEYS[1], 1, ARGV[1]) > 0 then return redis.call('RPUSH', KEYS[2], ARGV[1]) end return 0",
+          "2",
+          PROCESSING_KEY,
+          QUEUE_KEY,
+          jobData,
+        ]);
+        return;
+      }
 
       const payload = parsePayload(jobData);
       if (!payload) {
         logger.error("Discarding invalid edit queue payload");
         await this.redisClient.send("LREM", [PROCESSING_KEY, "1", jobData]);
-        void this.processNext();
+        this.refillRequested = true;
         return;
       }
 
@@ -199,6 +250,7 @@ export class EditsQueue {
         });
       this.activeRuns.add(run);
       void run.finally(() => this.activeRuns.delete(run));
+      this.refillRequested = true;
     } catch (error) {
       logger.error({ error }, "Failed to get next edit job from queue");
     }

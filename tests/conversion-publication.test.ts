@@ -9,6 +9,7 @@ let output: string;
 let outputDuration = 60;
 let sourceDuration: number | null = 60;
 let sourceProbeFails = false;
+const metadataSignals: (AbortSignal | undefined)[] = [];
 let controller: AbortController;
 const video = {
   id: 1,
@@ -27,6 +28,14 @@ const replaceFile = mock(async (_id: number, _path: string) => video);
 const completed = mock(async () => true);
 const failed = mock(async () => true);
 const batch = mock(async (_id: string) => {});
+const packetInspection = mock(
+  async (
+    _outputPath: string,
+    _sourcePath: string,
+    _timeline: { segments: { start: number; end: number }[] },
+    _signal: AbortSignal
+  ) => false
+);
 const encode = mock(
   async (_job: number, _video: unknown, _input: string, path: string) => {
     await writeFile(path, "converted fixture");
@@ -41,9 +50,13 @@ const encode = mock(
 mock.module("@/modules/videos/videos.service", () => ({
   videosService: { findById: async () => video, replaceFile },
 }));
+mock.module("@/modules/edits/edits.packet-validation", () => ({
+  hasUnexpectedEditVideoGap: packetInspection,
+}));
 mock.module("@/modules/videos/metadata.service", () => ({
   metadataService: {
-    extractMetadata: async (path: string) => {
+    extractMetadata: async (path: string, signal?: AbortSignal) => {
+      metadataSignals.push(signal);
       if (path === input && sourceProbeFails)
         throw new Error("source probe unavailable");
       return {
@@ -90,11 +103,20 @@ beforeEach(async () => {
   outputDuration = 60;
   sourceDuration = 60;
   sourceProbeFails = false;
+  metadataSignals.length = 0;
   controller = new AbortController();
-  for (const fn of [replaceFile, completed, failed, batch, encode])
+  for (const fn of [
+    replaceFile,
+    completed,
+    failed,
+    batch,
+    encode,
+    packetInspection,
+  ])
     fn.mockClear();
   replaceFile.mockImplementation(async () => video);
   batch.mockImplementation(async () => {});
+  packetInspection.mockImplementation(async () => false);
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -136,6 +158,7 @@ it("keeps the source available until replacement succeeds", async () => {
   });
   await processor.processJob(payload(true), controller.signal);
   expect(sourceAtPublication).toBe("original fixture");
+  expect(metadataSignals).toEqual([controller.signal, controller.signal]);
   expect(await readFile(output, "utf8")).toBe("converted fixture");
 });
 
@@ -158,6 +181,77 @@ it("rejects truncated conversion before completion or source replacement", async
   expect(completed).not.toHaveBeenCalled();
   expect(replaceFile).not.toHaveBeenCalled();
   expect(await readFile(input, "utf8")).toBe("original fixture");
+});
+
+it("rejects missing video frames even when container duration and audio match", async () => {
+  packetInspection.mockImplementation(async () => true);
+  await expect(
+    processor.processJob(payload(true), controller.signal)
+  ).rejects.toThrow("missing video frames");
+  expect(packetInspection).toHaveBeenCalledWith(
+    expect.any(String),
+    input,
+    { segments: [{ start: 0, end: 60 }] },
+    controller.signal
+  );
+  expect(completed).not.toHaveBeenCalled();
+  expect(replaceFile).not.toHaveBeenCalled();
+  expect(await readFile(input, "utf8")).toBe("original fixture");
+  await expect(readFile(output)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("waits for packet inspection before publishing or replacing the source", async () => {
+  let releaseInspection!: () => void;
+  let markInspectionStarted!: () => void;
+  const inspected = new Promise<boolean>((resolve) => {
+    releaseInspection = () => resolve(false);
+  });
+  const inspectionStarted = new Promise<void>((resolve) => {
+    markInspectionStarted = resolve;
+  });
+  packetInspection.mockImplementation(async () => {
+    markInspectionStarted();
+    return inspected;
+  });
+  const running = processor.processJob(payload(true), controller.signal);
+  await inspectionStarted;
+  try {
+    expect(completed).not.toHaveBeenCalled();
+    expect(replaceFile).not.toHaveBeenCalled();
+    expect(await readFile(input, "utf8")).toBe("original fixture");
+    await expect(readFile(output)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    releaseInspection();
+    await running;
+  }
+  expect(completed).toHaveBeenCalledTimes(1);
+  expect(await readFile(output, "utf8")).toBe("converted fixture");
+});
+
+it("preserves the source and fails closed when packet inspection fails", async () => {
+  packetInspection.mockImplementation(async () => {
+    throw new Error("probe failed");
+  });
+  await expect(
+    processor.processJob(payload(true), controller.signal)
+  ).rejects.toThrow("packet inspection failed");
+  expect(completed).not.toHaveBeenCalled();
+  expect(replaceFile).not.toHaveBeenCalled();
+  expect(await readFile(input, "utf8")).toBe("original fixture");
+  await expect(readFile(output)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("does not publish or delete the source when cancelled during packet inspection", async () => {
+  packetInspection.mockImplementation(async () => {
+    controller.abort();
+    throw new Error("probe cancelled");
+  });
+  await processor.processJob(payload(true), controller.signal);
+  expect(completed).not.toHaveBeenCalled();
+  expect(failed).not.toHaveBeenCalled();
+  expect(replaceFile).not.toHaveBeenCalled();
+  expect(await readFile(input, "utf8")).toBe("original fixture");
+  await expect(readFile(output)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("preserves a source path replaced by another file during catalog publication", async () => {

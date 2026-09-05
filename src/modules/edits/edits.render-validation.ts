@@ -1,5 +1,7 @@
 import { spawn } from "child_process";
 import { env } from "@/config/env";
+import type { EditTimelineConfig } from "./edits.types";
+import { hasUnexpectedEditVideoGap } from "./edits.packet-validation";
 
 const RENDER_DURATION_TOLERANCE_SECONDS = 0.5;
 const MAX_FFPROBE_OUTPUT_BYTES = 1_000_000;
@@ -41,6 +43,7 @@ export class RenderedEditValidationError extends Error {
       | "unexpected_audio"
       | "video_duration_mismatch"
       | "audio_duration_mismatch"
+      | "video_frame_gap"
   ) {
     super(message);
     Object.setPrototypeOf(this, RenderedEditValidationError.prototype);
@@ -187,7 +190,8 @@ export function probeRenderedEditOutput(
   outputPath: string,
   expectedDuration: number,
   expectsAudio: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  source?: { path: string; timeline: EditTimelineConfig }
 ): Promise<RenderedEditDurations> {
   const args = [
     "-v",
@@ -199,7 +203,7 @@ export function probeRenderedEditOutput(
     outputPath,
   ];
 
-  return new Promise((resolve, reject) => {
+  return new Promise<RenderedEditDurations>((resolve, reject) => {
     const child = spawn(env.FFPROBE_PATH, args, {
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -306,5 +310,28 @@ export function probeRenderedEditOutput(
         });
       }
     });
+  }).then(async (durations) => {
+    if (source) {
+      let missing: boolean;
+      try {
+        missing = await hasUnexpectedEditVideoGap(
+          outputPath,
+          source.path,
+          source.timeline,
+          signal
+        );
+      } catch {
+        throw new RenderedEditValidationError(
+          "Rendered edit packet inspection failed",
+          "probe_failed"
+        );
+      }
+      if (missing)
+        throw new RenderedEditValidationError(
+          "Rendered edit is missing video frames present in the selected source",
+          "video_frame_gap"
+        );
+    }
+    return durations;
   });
 }

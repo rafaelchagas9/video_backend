@@ -76,7 +76,7 @@ describe("edit processor helpers", () => {
       "[0:v]trim=duration=10,setpts=(PTS-STARTPTS)/2[v0]"
     );
     expect(graph.filterComplex).toContain(
-      "[1:v]trim=duration=5,setpts=(PTS-STARTPTS)/0.5[v1]"
+      "[2:v]trim=duration=5,setpts=(PTS-STARTPTS)/0.5[v1]"
     );
     expect(graph.filterComplex).toContain(
       "atempo=2,apad=whole_dur=5,atrim=duration=5,asetpts=PTS-STARTPTS[asegment0]"
@@ -241,6 +241,18 @@ describe("edit processor helpers", () => {
       hasSourceAudio: false,
     });
     expect(silent).not.toContain("-c:a");
+    expect(silent.filter((arg) => arg === "-i")).toHaveLength(2);
+    expect(silent).not.toContain("-vn");
+    expect(silent[silent.indexOf("-filter_complex") + 1]).toContain(
+      "[1:v]trim="
+    );
+    const muted = buildEditFfmpegArgs({
+      ...common,
+      output: request().output,
+      timeline: { ...timeline, audio: { muted: true } },
+    });
+    expect(muted.filter((arg) => arg === "-i")).toHaveLength(2);
+    expect(muted).not.toContain("-c:a");
   });
 
   it("seeks a job-4996-shaped late segment before opening the input", () => {
@@ -269,6 +281,7 @@ describe("edit processor helpers", () => {
       "10903.296536",
       "-t",
       "361.865448",
+      "-an",
       "-i",
       "/input/video-4996.mkv",
     ]);
@@ -301,8 +314,8 @@ describe("edit processor helpers", () => {
       argument === "-i" ? [index] : []
     );
 
-    expect(inputIndices).toHaveLength(2);
-    expect(args.slice(inputIndices[0] - 10, inputIndices[0] + 2)).toEqual([
+    expect(inputIndices).toHaveLength(4);
+    expect(args.slice(inputIndices[0] - 11, inputIndices[0] + 2)).toEqual([
       "-hwaccel",
       "vaapi",
       "-hwaccel_device",
@@ -313,10 +326,11 @@ describe("edit processor helpers", () => {
       "10800",
       "-t",
       "7",
+      "-an",
       "-i",
       inputPath,
     ]);
-    expect(args.slice(inputIndices[1] - 10, inputIndices[1] + 2)).toEqual([
+    expect(args.slice(inputIndices[2] - 11, inputIndices[2] + 2)).toEqual([
       "-hwaccel",
       "vaapi",
       "-hwaccel_device",
@@ -327,13 +341,24 @@ describe("edit processor helpers", () => {
       "12",
       "-t",
       "3",
+      "-an",
       "-i",
       inputPath,
     ]);
 
+    for (const [index, start, duration] of [
+      [1, "10800", "7"],
+      [3, "12", "3"],
+    ] as const) {
+      expect(
+        args.slice(inputIndices[index] - 5, inputIndices[index] + 2)
+      ).toEqual(["-ss", start, "-t", duration, "-vn", "-i", inputPath]);
+    }
     const graph = args[args.indexOf("-filter_complex") + 1];
+    expect(graph).toContain("[1:a]atrim=duration=7");
+    expect(graph).toContain("[3:a]atrim=duration=3");
     expect(graph).toContain("[0:v]trim=duration=7,setpts=PTS-STARTPTS[v0]");
-    expect(graph).toContain("[1:v]trim=duration=3,setpts=(PTS-STARTPTS)/2[v1]");
+    expect(graph).toContain("[2:v]trim=duration=3,setpts=(PTS-STARTPTS)/2[v1]");
     expect(graph).toContain(
       "[v0][asegment0][v1][asegment1]concat=n=2:v=1:a=1[vconcat][aconcat]"
     );
@@ -518,6 +543,7 @@ describe("edit processor helpers", () => {
       "3600",
       "-t",
       "7",
+      "-an",
       "-i",
       "/input/source.mkv",
     ]);

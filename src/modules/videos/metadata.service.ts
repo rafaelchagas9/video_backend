@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import ffmpeg from "fluent-ffmpeg";
 import { env } from "@/config/env";
 import { logger } from "@/utils/logger";
@@ -14,32 +15,79 @@ const parseNullableNumber = (value: unknown): number | null => {
   return null;
 };
 
-// Set ffmpeg and ffprobe paths
+// Other media services still use fluent-ffmpeg's shared executable configuration.
 ffmpeg.setFfmpegPath(env.FFMPEG_PATH);
 ffmpeg.setFfprobePath(env.FFPROBE_PATH);
 
 export class MetadataService {
-  async extractMetadata(filePath: string): Promise<VideoMetadata> {
+  constructor(private readonly probeTimeoutMs = 30_000) {}
+
+  async extractMetadata(
+    filePath: string,
+    signal?: AbortSignal
+  ): Promise<VideoMetadata> {
+    if (signal?.aborted) throw new Error("Metadata inspection cancelled");
     const startTime = Date.now();
 
     return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(filePath, (err, metadata) => {
+      const child = spawn(
+        env.FFPROBE_PATH,
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "stream=codec_type,width,height,codec_name,r_frame_rate,avg_frame_rate:format=duration,bit_rate",
+          "-of",
+          "json",
+          filePath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] }
+      );
+      let output = "";
+      let failure: Error | undefined;
+      const stop = (message: string) => {
+        failure ??= new Error(message);
+        if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+      };
+      const abort = () => stop("Metadata inspection cancelled");
+      const timeout = setTimeout(
+        () => stop("Metadata inspection timed out"),
+        this.probeTimeoutMs
+      );
+      timeout.unref();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      child.stdout.on("data", (chunk: Buffer) => {
+        if (failure) return;
+        output += chunk.toString();
+        if (output.length > 1_048_576)
+          stop("Metadata inspection output is too large");
+      });
+      child.stderr.resume();
+      child.on("error", () => {
+        failure ??= new Error("Metadata inspection could not start");
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
         const duration = Date.now() - startTime;
 
-        if (err) {
+        if (failure || code !== 0) {
+          const error = failure ?? new Error("Metadata inspection failed");
           logger.error(
-            { filePath, error: err, durationMs: duration },
-            `ffprobe failed after ${duration}ms`,
+            { filePath, error, durationMs: duration },
+            `ffprobe failed after ${duration}ms`
           );
-          return reject(err);
+          return reject(error);
         }
 
         try {
+          const metadata = JSON.parse(output);
           const videoStream = metadata.streams.find(
-            (s: any) => s.codec_type === "video",
+            (s: any) => s.codec_type === "video"
           );
           const audioStream = metadata.streams.find(
-            (s: any) => s.codec_type === "audio",
+            (s: any) => s.codec_type === "audio"
           );
 
           const result: VideoMetadata = {
@@ -64,14 +112,14 @@ export class MetadataService {
                 codec: result.codec,
               },
             },
-            `ffprobe completed in ${duration}ms`,
+            `ffprobe completed in ${duration}ms`
           );
 
           resolve(result);
         } catch (error) {
           logger.error(
             { filePath, error, durationMs: duration },
-            `Metadata parsing failed after ${duration}ms`,
+            `Metadata parsing failed after ${duration}ms`
           );
           reject(error);
         }

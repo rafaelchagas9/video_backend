@@ -14,6 +14,7 @@ import { basename, dirname, join } from "path";
 import { getPreset } from "@/config/presets";
 import { metadataService } from "@/modules/videos/metadata.service";
 import { videosService } from "@/modules/videos/videos.service";
+import { hasUnexpectedEditVideoGap } from "@/modules/edits/edits.packet-validation";
 import {
   ConversionCancelledError,
   ffmpegService,
@@ -106,7 +107,7 @@ export class ConversionProcessorService {
       // Probe the source before it is (possibly) replaced, so history keeps a
       // record of what was actually fed to the encoder.
       const sourceMetadata = this.withDerivedBitrate(
-        await this.probeMedia(inputPath),
+        await this.probeMedia(inputPath, signal),
         originalSizeBytes
       );
 
@@ -172,11 +173,33 @@ export class ConversionProcessorService {
 
       const stats = statSync(temporaryOutput);
       const outputMetadata = this.withDerivedBitrate(
-        await this.probeMedia(temporaryOutput),
+        await this.probeMedia(temporaryOutput, signal),
         stats.size
       );
       this.validateOutput(sourceMetadata, outputMetadata, stats.size);
       if (signal.aborted) throw new ConversionCancelledError();
+
+      // A full-length audio track can hide a truncated or frozen video stream
+      // in format.duration. Validate video coverage before publication or any
+      // source replacement, allowing pauses that already exist in the source.
+      let missingVideoFrames: boolean;
+      try {
+        missingVideoFrames = await hasUnexpectedEditVideoGap(
+          temporaryOutput,
+          inputPath,
+          { segments: [{ start: 0, end: sourceMetadata.durationSeconds }] },
+          signal
+        );
+      } catch {
+        if (signal.aborted) throw new ConversionCancelledError();
+        throw new Error("Converted video packet inspection failed");
+      }
+      if (signal.aborted) throw new ConversionCancelledError();
+      if (missingVideoFrames) {
+        throw new Error(
+          "Converted video is missing video frames present in the source"
+        );
+      }
 
       // link is atomic, cannot overwrite an existing path, and uses the same
       // filesystem as the output. A collision preserves both files.
@@ -403,10 +426,11 @@ export class ConversionProcessorService {
    * publication when required source or output metadata is unavailable.
    */
   private async probeMedia(
-    filePath: string
+    filePath: string,
+    signal?: AbortSignal
   ): Promise<ConversionMediaMetadata | null> {
     try {
-      const metadata = await metadataService.extractMetadata(filePath);
+      const metadata = await metadataService.extractMetadata(filePath, signal);
 
       return {
         width: metadata.width,
