@@ -95,8 +95,8 @@ export class VideosSearchService {
     options: ListVideosOptions = {},
   ): Promise<PaginatedVideos> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const result = demoMockService.getVideos(options) as PaginatedVideos;
+      const { demoRepository } = await import("@/database/demo/repository");
+      const result = demoRepository.getVideos(options) as PaginatedVideos;
       result.data = await this.attachIncludes(
         result.data,
         options.include ?? [],
@@ -616,8 +616,8 @@ export class VideosSearchService {
     options: NextVideoOptions,
   ): Promise<NextVideoResult> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const result = demoMockService.getVideos({ ...options, limit: 10_000 });
+      const { demoRepository } = await import("@/database/demo/repository");
+      const result = demoRepository.getVideos({ ...options, limit: 10_000 });
       const currentIndex = result.data.findIndex(
         (video: Video) => video.id === options.currentId,
       );
@@ -897,10 +897,10 @@ export class VideosSearchService {
     options: TriageQueueOptions,
   ): Promise<TriageQueueResult> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
+      const { demoRepository } = await import("@/database/demo/repository");
       const queueOffset = options.queueOffset ?? 0;
       const queueLimit = options.queueLimit ?? 100;
-      const result = demoMockService.getVideos({
+      const result = demoRepository.getVideos({
         ...options,
         page: 1,
         limit: 10_000,

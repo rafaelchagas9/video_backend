@@ -486,8 +486,8 @@ export class StudiosService {
 
   async autocomplete(query: string, limit: number = 10): Promise<Studio[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const list = demoMockService.getStudios({ search: query, limit }).data;
+      const { demoRepository } = await import("@/database/demo/repository");
+      const list = demoRepository.getStudios({ search: query, limit }).data;
       return list as Studio[];
     }
 
@@ -509,8 +509,8 @@ export class StudiosService {
 
   async getRecent(limit: number = 10): Promise<Studio[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const list = demoMockService.getStudios({ limit }).data;
+      const { demoRepository } = await import("@/database/demo/repository");
+      const list = demoRepository.getStudios({ limit }).data;
       return list as Studio[];
     }
 

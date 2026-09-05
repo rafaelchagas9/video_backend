@@ -143,9 +143,3 @@ export function getPreset(presetId: string): ConversionPreset | undefined {
 export function listPresets(): ConversionPreset[] {
   return Object.values(CONVERSION_PRESETS);
 }
-
-/**
- * Minimum height threshold for 720p target
- * Videos with height below this will keep original resolution
- */
-export const MIN_HEIGHT_FOR_720P = 720;

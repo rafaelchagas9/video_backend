@@ -516,10 +516,3 @@ export function getFrameExtractionService(): FrameExtractionService {
   }
   return serviceInstance;
 }
-
-/**
- * For testing - reset singleton
- */
-export function resetFrameExtractionService(): void {
-  serviceInstance = null;
-}

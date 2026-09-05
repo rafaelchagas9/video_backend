@@ -70,7 +70,6 @@ describe("demo artwork generation commit", () => {
     writeFileSync(join(stagingRoot, "new.txt"), "new artwork");
 
     let databaseState = "old database";
-    const baselineState = "old baseline";
 
     await expect(
       commitStagedDemoArtwork({
@@ -91,11 +90,55 @@ describe("demo artwork generation commit", () => {
     ).rejects.toThrow("forced baseline failure");
 
     expect(databaseState).toBe("old database");
-    expect(baselineState).toBe("old baseline");
     expect(readFileSync(join(outputRoot, "old.txt"), "utf8")).toBe(
       "old artwork"
     );
     expect(existsSync(join(outputRoot, "new.txt"))).toBe(false);
+    expect(existsSync(stagingRoot)).toBe(false);
+    expect(existsSync(backupRoot)).toBe(false);
+  });
+
+  it("refreshes the baseline only after installing artwork and database rows", async () => {
+    const outputRoot = join(root, "artwork-success");
+    const stagingRoot = join(root, ".artwork-staging-success");
+    const backupRoot = join(root, ".artwork-backup-success");
+    const baselinePath = join(root, "success.baseline");
+    mkdirSync(outputRoot);
+    mkdirSync(stagingRoot);
+    writeFileSync(join(outputRoot, "old.txt"), "old artwork");
+    writeFileSync(join(stagingRoot, "new.txt"), "new artwork");
+
+    let databaseState = "old database";
+    const committed = await commitStagedDemoArtwork({
+      outputRoot,
+      stagingRoot,
+      backupRoot,
+      captureDatabaseSnapshot: () => databaseState,
+      replaceDatabase: () => {
+        databaseState = "new database";
+      },
+      restoreDatabaseSnapshot: (snapshot) => {
+        databaseState = snapshot;
+      },
+      createBaselineSnapshot: () => {
+        writeFileSync(
+          baselinePath,
+          JSON.stringify({
+            database: databaseState,
+            artwork: readFileSync(join(outputRoot, "new.txt"), "utf8"),
+          })
+        );
+        return baselinePath;
+      },
+    });
+
+    expect(committed).toBe(baselinePath);
+    expect(JSON.parse(readFileSync(baselinePath, "utf8"))).toEqual({
+      database: "new database",
+      artwork: "new artwork",
+    });
+    expect(databaseState).toBe("new database");
+    expect(existsSync(join(outputRoot, "old.txt"))).toBe(false);
     expect(existsSync(stagingRoot)).toBe(false);
     expect(existsSync(backupRoot)).toBe(false);
   });

@@ -3,7 +3,9 @@ import { db } from "@/config/drizzle";
 import { studiosTable, studioSocialLinksTable } from "@/database/schema";
 import { NotFoundError } from "@/utils/errors";
 import { env } from "@/config/env";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
+import { mkdir, open, unlink } from "fs/promises";
+import { randomUUID } from "crypto";
+import { logger } from "@/utils/logger";
 import { join } from "path";
 import { processProfilePicture } from "@/utils/image-processing";
 import { imageDownloadRateLimiter } from "@/utils/async-rate-limiter";
@@ -29,72 +31,91 @@ export class StudiosSocialService {
       return demoMediaAssetsService.uploadStudioPicture(id, fileBuffer);
     const studio = await this.findStudioById(id);
 
-    // Ensure directory exists
-    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
-      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
-    }
-
-    // Delete old picture if exists
-    if (
-      studio.profile_picture_path &&
-      existsSync(studio.profile_picture_path)
-    ) {
-      unlinkSync(studio.profile_picture_path);
-    }
-
-    const format = env.PROFILE_PICTURE_FORMAT;
-    const quality = env.PROFILE_PICTURE_QUALITY;
-    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
-    const newFilename = `studio_${id}_${Date.now()}.${format}`;
-    const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
-
     const processedBuffer = await processProfilePicture({
       input: fileBuffer,
-      format,
-      maxSize,
-      quality,
+      format: env.PROFILE_PICTURE_FORMAT,
+      maxSize: env.PROFILE_PICTURE_MAX_SIZE,
+      quality: env.PROFILE_PICTURE_QUALITY,
     });
+    await mkdir(env.PROFILE_PICTURES_DIR, { recursive: true });
+    const filePath = join(
+      env.PROFILE_PICTURES_DIR,
+      `studio_${id}_${randomUUID()}.${env.PROFILE_PICTURE_FORMAT}`
+    );
 
-    writeFileSync(filePath, processedBuffer);
+    // Own a new file before writing so failure cleanup cannot remove an existing asset.
+    const candidate = await open(filePath, "wx");
+    let updatedStudio;
+    try {
+      try {
+        await candidate.writeFile(processedBuffer);
+      } finally {
+        await candidate.close();
+      }
+      [updatedStudio] = await db
+        .update(studiosTable)
+        .set({ profilePicturePath: filePath, updatedAt: new Date() })
+        .where(eq(studiosTable.id, id))
+        .returning();
+      if (!updatedStudio) {
+        throw new NotFoundError(`Studio not found with id: ${id}`);
+      }
+    } catch (error) {
+      await this.cleanupPicture(filePath, id);
+      throw error;
+    }
 
-    // Update database
-    await db
-      .update(studiosTable)
-      .set({
-        profilePicturePath: filePath,
-        updatedAt: new Date(),
-      })
-      .where(eq(studiosTable.id, id));
+    // The database now points to the replacement; old-file cleanup is best effort.
+    if (studio.profile_picture_path) {
+      await this.cleanupPicture(studio.profile_picture_path, id);
+    }
+    return this.mapStudioToSnakeCase(updatedStudio);
+  }
 
-    return this.findStudioById(id);
+  private async cleanupPicture(
+    filePath: string,
+    studioId: number
+  ): Promise<void> {
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return;
+      }
+      logger.warn(
+        { err: error, studioId },
+        "Failed to clean up studio picture"
+      );
+    }
   }
 
   async deleteProfilePicture(id: number): Promise<Studio> {
     if (env.DEMO_MODE) return demoMediaAssetsService.deleteStudioPicture(id);
     const studio = await this.findStudioById(id);
 
-    if (
-      studio.profile_picture_path &&
-      existsSync(studio.profile_picture_path)
-    ) {
-      unlinkSync(studio.profile_picture_path);
+    const [updatedStudio] = await db
+      .update(studiosTable)
+      .set({ profilePicturePath: null, updatedAt: new Date() })
+      .where(eq(studiosTable.id, id))
+      .returning();
+    if (!updatedStudio) {
+      throw new NotFoundError(`Studio not found with id: ${id}`);
     }
 
-    await db
-      .update(studiosTable)
-      .set({
-        profilePicturePath: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(studiosTable.id, id));
-
-    return this.findStudioById(id);
+    if (studio.profile_picture_path) {
+      await this.cleanupPicture(studio.profile_picture_path, id);
+    }
+    return this.mapStudioToSnakeCase(updatedStudio);
   }
 
   async setPictureFromUrl(studioId: number, url: string): Promise<Studio> {
     if (env.DEMO_MODE)
       return demoMediaAssetsService.setStudioPictureFromUrl(studioId, url);
-    const studio = await this.findStudioById(studioId);
+    await this.findStudioById(studioId);
 
     // Download image from URL
     const buffer = await imageDownloadRateLimiter.schedule(async () => {
@@ -118,43 +139,7 @@ export class StudiosSocialService {
       throw new Error("Downloaded image is too small");
     }
 
-    const format = env.PROFILE_PICTURE_FORMAT;
-    const quality = env.PROFILE_PICTURE_QUALITY;
-    const maxSize = env.PROFILE_PICTURE_MAX_SIZE;
-
-    if (!existsSync(env.PROFILE_PICTURES_DIR)) {
-      mkdirSync(env.PROFILE_PICTURES_DIR, { recursive: true });
-    }
-
-    if (
-      studio.profile_picture_path &&
-      existsSync(studio.profile_picture_path)
-    ) {
-      unlinkSync(studio.profile_picture_path);
-    }
-
-    const newFilename = `studio_${studioId}_${Date.now()}.${format}`;
-    const filePath = join(env.PROFILE_PICTURES_DIR, newFilename);
-
-    const processedBuffer = await processProfilePicture({
-      input: buffer,
-      format,
-      maxSize,
-      quality,
-    });
-
-    writeFileSync(filePath, processedBuffer);
-
-    // Update database
-    await db
-      .update(studiosTable)
-      .set({
-        profilePicturePath: filePath,
-        updatedAt: new Date(),
-      })
-      .where(eq(studiosTable.id, studioId));
-
-    return this.findStudioById(studioId);
+    return this.uploadProfilePicture(studioId, buffer, "download");
   }
 
   // Social Links Methods

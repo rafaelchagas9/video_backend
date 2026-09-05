@@ -1,5 +1,16 @@
-import { existsSync, mkdirSync, unlinkSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import {
+  mkdirSync,
+  unlinkSync,
+  readdirSync,
+  statSync,
+  lstatSync,
+  renameSync,
+  rmSync,
+} from "fs";
+import { basename, join, resolve } from "path";
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import { db } from "@/config/drizzle";
 import {
   usersTable,
@@ -20,15 +31,44 @@ import type { BackupInfo, ExportData } from "./backup.types";
 import { backupDemoService } from "./backup.demo.service";
 
 const BACKUP_DIR = resolve(process.cwd(), "./data/backups");
+const execFileAsync = promisify(execFile);
 
 export class BackupService {
-  /**
-   * Ensure backup directory exists
-   */
-  private ensureBackupDir(): void {
-    if (!existsSync(BACKUP_DIR)) {
-      mkdirSync(BACKUP_DIR, { recursive: true });
+  constructor(private readonly backupDirectory = BACKUP_DIR) {}
+
+  private existingBackupPath(filename: string): string {
+    if (
+      !filename ||
+      filename === "." ||
+      filename === ".." ||
+      filename !== basename(filename) ||
+      filename.includes("\\") ||
+      filename.includes("\0")
+    ) {
+      throw new ValidationError("Invalid backup filename");
     }
+
+    const backupPath = join(this.backupDirectory, filename);
+    const stats = lstatSync(backupPath, { throwIfNoEntry: false });
+    if (!stats) throw new NotFoundError(`Backup not found: ${filename}`);
+    if (!stats.isFile())
+      throw new ValidationError("Backup must be a regular file");
+    return backupPath;
+  }
+
+  private async runPostgresTool(command: "pg_dump" | "psql", args: string[]) {
+    // libpq reads connection settings from the child environment. Credentials
+    // never become shell text or appear in the command's argument list.
+    await execFileAsync(command, args, {
+      env: {
+        ...process.env,
+        PGHOST: env.POSTGRES_HOST,
+        PGPORT: String(env.POSTGRES_PORT),
+        PGUSER: env.POSTGRES_USER,
+        PGDATABASE: env.POSTGRES_DB,
+        PGPASSWORD: env.POSTGRES_PASSWORD,
+      },
+    });
   }
 
   /**
@@ -36,20 +76,16 @@ export class BackupService {
    */
   async createBackup(): Promise<BackupInfo> {
     if (env.DEMO_MODE) return backupDemoService.createBackup();
-    this.ensureBackupDir();
+    mkdirSync(this.backupDirectory, { recursive: true });
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `backup-${timestamp}.sql`;
-    const backupPath = join(BACKUP_DIR, filename);
+    const filename = `backup-${timestamp}-${randomUUID()}.sql`;
+    const backupPath = join(this.backupDirectory, filename);
+    const temporaryPath = `${backupPath}.partial`;
 
     try {
-      const { execSync } = await import("child_process");
-
-      // Build pg_dump command using POSTGRES_* env vars
-      // Use PGPASSWORD to avoid exposing password in process list
-      const pgDumpCommand = `PGPASSWORD='${env.POSTGRES_PASSWORD}' pg_dump -h ${env.POSTGRES_HOST} -p ${env.POSTGRES_PORT} -U ${env.POSTGRES_USER} -F p -d ${env.POSTGRES_DB} -f "${backupPath}"`;
-
-      execSync(pgDumpCommand, { stdio: "pipe" });
+      await this.runPostgresTool("pg_dump", ["-F", "p", "-f", temporaryPath]);
+      renameSync(temporaryPath, backupPath);
 
       const stats = statSync(backupPath);
 
@@ -65,6 +101,14 @@ export class BackupService {
         createdAt: new Date().toISOString(),
       };
     } catch (error) {
+      try {
+        rmSync(temporaryPath, { force: true });
+      } catch (cleanupError) {
+        logger.warn(
+          { error: cleanupError, filename },
+          "Failed to remove partial backup"
+        );
+      }
       logger.error({ error }, "Failed to create backup");
       throw new ValidationError(
         "Failed to create database backup. Ensure pg_dump is available."
@@ -77,15 +121,19 @@ export class BackupService {
    */
   listBackups(): BackupInfo[] {
     if (env.DEMO_MODE) return backupDemoService.listBackups();
-    this.ensureBackupDir();
+    mkdirSync(this.backupDirectory, { recursive: true });
 
-    const files = readdirSync(BACKUP_DIR).filter(
-      (f) => f.endsWith(".sql") || f.endsWith(".db")
+    const files = readdirSync(this.backupDirectory, {
+      withFileTypes: true,
+    }).filter(
+      (file) =>
+        file.isFile() &&
+        (file.name.endsWith(".sql") || file.name.endsWith(".db"))
     );
 
     return files
-      .map((filename) => {
-        const fullPath = join(BACKUP_DIR, filename);
+      .map(({ name: filename }) => {
+        const fullPath = join(this.backupDirectory, filename);
         const stats = statSync(fullPath);
 
         return {
@@ -106,20 +154,16 @@ export class BackupService {
    */
   async restoreBackup(filename: string): Promise<void> {
     if (env.DEMO_MODE) return backupDemoService.restoreBackup(filename);
-    const backupPath = join(BACKUP_DIR, filename);
-
-    if (!existsSync(backupPath)) {
-      throw new NotFoundError(`Backup not found: ${filename}`);
-    }
+    const backupPath = this.existingBackupPath(filename);
 
     try {
-      const { execSync } = await import("child_process");
-
-      // Build psql command using POSTGRES_* env vars
-      // Use PGPASSWORD to avoid exposing password in process list
-      const psqlCommand = `PGPASSWORD='${env.POSTGRES_PASSWORD}' psql -h ${env.POSTGRES_HOST} -p ${env.POSTGRES_PORT} -U ${env.POSTGRES_USER} -d ${env.POSTGRES_DB} -f "${backupPath}"`;
-
-      execSync(psqlCommand, { stdio: "pipe" });
+      await this.runPostgresTool("psql", [
+        "--no-psqlrc",
+        "--quiet",
+        "--set=ON_ERROR_STOP=1",
+        "-f",
+        backupPath,
+      ]);
 
       logger.info({ filename }, "Database restored from backup");
     } catch (error) {
@@ -135,11 +179,7 @@ export class BackupService {
    */
   deleteBackup(filename: string): void {
     if (env.DEMO_MODE) return backupDemoService.deleteBackup(filename);
-    const backupPath = join(BACKUP_DIR, filename);
-
-    if (!existsSync(backupPath)) {
-      throw new NotFoundError(`Backup not found: ${filename}`);
-    }
+    const backupPath = this.existingBackupPath(filename);
 
     unlinkSync(backupPath);
     logger.info({ filename }, "Backup deleted");

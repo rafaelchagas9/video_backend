@@ -60,8 +60,8 @@ export class VideosSuggestionsService {
     const offset = options.offset ?? 0;
 
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const videosObj = demoMockService.getVideos({ limit: 100 });
+      const { demoRepository } = await import("@/database/demo/repository");
+      const videosObj = demoRepository.getVideos({ limit: 100 });
       const candidates = (videosObj.data as Video[]).filter(
         (v) => !v.codec?.toLowerCase().includes("av1"),
       );

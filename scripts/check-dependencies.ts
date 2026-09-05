@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync } from "fs";
 import { access, constants } from "node:fs/promises";
-import { execSync } from "child_process";
+import { createConnection } from "node:net";
 
 interface CheckResult {
   name: string;
@@ -13,7 +13,7 @@ const checks: CheckResult[] = [];
 
 async function checkFileExists(
   path: string,
-  name: string,
+  name: string
 ): Promise<CheckResult> {
   try {
     await access(path, constants.F_OK | constants.X_OK);
@@ -36,13 +36,17 @@ async function checkPostgres(): Promise<CheckResult> {
     const host = process.env.POSTGRES_HOST || "localhost";
     const port = process.env.POSTGRES_PORT || "5432";
 
-    execSync(
-      `timeout 5 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null`,
-      {
-        stdio: "ignore",
-        timeout: 6000,
-      },
-    );
+    await new Promise<void>((resolve, reject) => {
+      const socket = createConnection({ host, port: Number(port) });
+      const finish = (error?: Error) => {
+        socket.destroy();
+        if (error) reject(error);
+        else resolve();
+      };
+      socket.setTimeout(5000, () => finish(new Error("Connection timed out")));
+      socket.once("connect", () => finish());
+      socket.once("error", finish);
+    });
 
     return {
       name: "PostgreSQL",
@@ -116,7 +120,7 @@ async function main() {
     process.exit(0);
   } else {
     console.error(
-      "⚠️  Some dependencies are missing. Please fix the issues above.",
+      "⚠️  Some dependencies are missing. Please fix the issues above."
     );
     process.exit(1);
   }

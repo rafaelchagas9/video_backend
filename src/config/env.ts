@@ -20,9 +20,6 @@ const envSchema = z.object({
   BASE_URL: z.string().default("http://localhost:3000"),
   CORS_ORIGINS: z.string().default(""),
 
-  // Database (SQLite - deprecated, keeping for backward compatibility)
-  DATABASE_PATH: z.string().default("./data/database.db"),
-
   // PostgreSQL Database
   POSTGRES_HOST: z.string().default("localhost"),
   POSTGRES_PORT: z.string().default("5432").transform(Number),

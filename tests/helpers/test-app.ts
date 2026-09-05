@@ -1,6 +1,8 @@
 import type { LightMyRequestResponse } from "fastify";
 import { mock } from "bun:test";
-import { writeFile } from "fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   applyTestDatabaseEnv,
   assertTestDatabaseEnvironment,
@@ -20,8 +22,12 @@ type InjectOptions = {
 };
 
 const TEST_NOW = "2026-05-31T12:00:00.000Z";
-export const TEST_THUMBNAIL_PATH = "/tmp/conversor-video-test-thumbnail.jpg";
-const TEST_CONVERSION_OUTPUT_PATH = "/tmp/conversor-video-test-converted.mkv";
+const fixtureRoot = join(
+  tmpdir(),
+  `conversor-video-test-${crypto.randomUUID()}`
+);
+export const TEST_THUMBNAIL_PATH = join(fixtureRoot, "thumbnail.jpg");
+const TEST_CONVERSION_OUTPUT_PATH = join(fixtureRoot, "converted.mkv");
 
 const createConversionJob = (overrides: Record<string, unknown> = {}) => ({
   id: 1,
@@ -57,7 +63,7 @@ const createStoryboard = (videoId = 1) => ({
   id: 1,
   video_id: videoId,
   sprite_path: TEST_THUMBNAIL_PATH,
-  vtt_path: "/tmp/conversor-video-test-storyboard.vtt",
+  vtt_path: join(fixtureRoot, "storyboard.vtt"),
   tile_width: 160,
   tile_height: 90,
   tile_count: 4,
@@ -631,12 +637,11 @@ function installExternalServiceMocks(): void {
       processFacesOnly: mock(async () => undefined),
       confirmFaceMatch: mock(async () => undefined),
       rejectFaceMatch: mock(async () => undefined),
-      findVideosWithCreator: mock(async (creatorId: number) => [
+      findVideosWithCreator: mock(async () => [
         {
-          video_id: 1,
-          creator_id: creatorId,
-          detection_count: 1,
-          max_confidence: 0.92,
+          videoId: 1,
+          detectionCount: 1,
+          avgConfidence: 0.92,
         },
       ]),
       findSimilarCreators: mock(async () => [
@@ -652,7 +657,13 @@ function installExternalServiceMocks(): void {
         videoId,
         status: "completed",
         progress: 100,
+        totalFrames: 1,
+        processedFrames: 1,
+        facesDetected: 1,
+        retryCount: 0,
         errorMessage: null,
+        startedAt: new Date(TEST_NOW),
+        completedAt: new Date(TEST_NOW),
         createdAt: new Date(TEST_NOW),
         updatedAt: new Date(TEST_NOW),
       })),
@@ -661,12 +672,10 @@ function installExternalServiceMocks(): void {
   }));
 
   mock.module("@/utils/telemetry", () => ({
-    isTelemetryEnabled: mock(() => false),
     captureTelemetryEvent: mock(() => undefined),
     captureTelemetryException: mock(() => undefined),
     captureTelemetryExceptionImmediate: mock(async () => undefined),
     captureTelemetryLog: mock(() => undefined),
-    flushTelemetry: mock(async () => undefined),
     getTelemetryDistinctId: mock(() => "test-user"),
     sanitizeTelemetryProperties: mock(
       (properties: Record<string, unknown>) => properties
@@ -691,8 +700,22 @@ function getCookieHeader(response: LightMyRequestResponse): string {
 
 export async function createTestApp(): Promise<TestApp> {
   const database = await startTestDatabase();
+  let app: AppInstance | undefined;
+
+  const close = async () => {
+    try {
+      await app?.close();
+    } finally {
+      try {
+        await database.stop();
+      } finally {
+        await rm(fixtureRoot, { recursive: true, force: true });
+      }
+    }
+  };
 
   try {
+    await mkdir(fixtureRoot, { recursive: true });
     await Promise.all([
       writeFile(TEST_THUMBNAIL_PATH, Buffer.from("jpg")),
       writeFile(TEST_CONVERSION_OUTPUT_PATH, Buffer.from("mkv")),
@@ -704,7 +727,7 @@ export async function createTestApp(): Promise<TestApp> {
     await migrateTestDatabase();
 
     const { buildServer } = await import("@/server");
-    const app = await buildServer();
+    app = await buildServer();
     await app.ready();
 
     const email = `integration-${Date.now()}@example.test`;
@@ -750,20 +773,17 @@ export async function createTestApp(): Promise<TestApp> {
       userId: body.data.id,
       inject: app.inject.bind(app),
       authInject: (options) =>
-        app.inject({
+        app!.inject({
           ...options,
           headers: {
             ...(options.headers ?? {}),
             cookie: authCookie,
           },
         }),
-      close: async () => {
-        await app.close();
-        await database.stop();
-      },
+      close,
     };
   } catch (error) {
-    await database.stop();
+    await close();
     throw error;
   }
 }

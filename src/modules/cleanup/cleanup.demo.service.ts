@@ -1,4 +1,4 @@
-import { demoMockService } from "@/utils/demo-mock";
+import { demoRepository } from "@/database/demo/repository";
 import { ConflictError } from "@/utils/errors";
 import type {
   CleanupCandidate,
@@ -20,7 +20,7 @@ class CleanupDemoService {
     userId: number,
     options: { disposition: CleanupDisposition; limit: number; offset: number }
   ) {
-    const videos = demoMockService.getVideos({ limit: 100 }).data;
+    const videos = demoRepository.getVideos({ limit: 100 }).data;
     const mapped: CleanupCandidate[] = videos
       .map((video) => {
         const review = reviews.get(key(userId, video.id));
@@ -76,7 +76,7 @@ class CleanupDemoService {
       limit: 100,
       offset: 0,
     });
-    const videos = demoMockService.getVideos({ limit: 100 }).data;
+    const videos = demoRepository.getVideos({ limit: 100 }).data;
     const videoBytes = new Map(
       videos.map((video) => [video.id, video.file_size_bytes])
     );

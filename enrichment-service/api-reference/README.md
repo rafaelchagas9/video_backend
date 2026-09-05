@@ -1,7 +1,8 @@
 # Metadata API Reference (ThePornDB + StashDB)
 
-Captured from live introspection + sample queries on 2026-06-02. This folder is the
-source of truth for designing the source plugins **and** the DB schema expansion.
+Captured from live introspection + sample queries on 2026-06-02. These are historical provider observations,
+not a live contract. Recheck the provider before relying on an old field. Current
+local mapping lives in [the adapter](../src/enrichment_service/sources/stashbox.py).
 
 - `schemas/<endpoint>/<Type>.schema.json` — raw GraphQL introspection per type.
 - `samples/*.json` — real response bodies for the query "Riley Reid".
@@ -12,16 +13,16 @@ source of truth for designing the source plugins **and** the DB schema expansion
   uv run python scripts/explore_apis.py "Riley Reid" --introspect --save
   ```
 
-## Headline finding: both are the same schema (StashBox)
+## Captured schema family: StashBox
 
 ThePornDB's GraphQL (`https://theporndb.net/graphql`) and StashDB
 (`https://stashdb.org/graphql`) both implement the **StashBox** schema — same root
 queries (`searchPerformer`, `findStudio`, `queryScenes`, `findSite`, …), same core
 types (`Performer`, `Studio`, `Scene`, `Tag`, `Site`, `Image`, `URL`).
 
-**Implication:** we can write **one** GraphQL source plugin, parameterised by
-endpoint + auth, and reuse it for both. Differences are minor (nullability, a couple
-of TPDB-only convenience fields, enums vs free strings — see below).
+The current shared adapter is parameterized by endpoint, authentication, and
+dialect. The captured differences include nullability, TPDB convenience fields,
+and enums versus free strings, as listed below.
 
 ### Auth
 
@@ -34,7 +35,7 @@ of TPDB-only convenience fields, enums vs free strings — see below).
 ### Image download notes
 
 - TPDB CDN images download directly (`image/png|webp`, 200).
-- StashDB images **reject `HEAD` (405)** but `GET` works (`image/jpeg`, 200). The
+- StashDB images rejected `HEAD` (405) while `GET` worked (`image/jpeg`, 200).
 
 ## Performer — field comparison
 
@@ -98,7 +99,7 @@ The REST `/performers?q=` response (`samples/theporndb_search.json`) adds:
 |---|---|---|---|
 | `id` | `ID!` | `ID!` | external id |
 | `name` | `String!` | `String!` | |
-| `aliases` | `[String!]!` | `[String!]` | we don't store studio aliases yet |
+| `aliases` | `[String!]!` | `[String!]` | |
 | `urls` | `[URL!]!` | `[URL]` | studio socials/site |
 | `parent` | `Studio` | `Studio` | **hierarchy (network → studio)** |
 | `sub_studios` / `child_studios` | `QueryStudiosResultType!` | `[Studio]` | children |
@@ -125,46 +126,14 @@ The REST `/performers?q=` response (`samples/theporndb_search.json`) adds:
 
 ---
 
-## Gap analysis vs our current DB
+## Local implementation
 
-Our `creators` table today: `name, description, profile/main/face picture paths,
-timestamps`. The APIs expose far more. Proposed additions (to be detailed in the
-schema-expansion plan, not yet implemented):
+The former schema-expansion proposal is implemented in the backend's
+[organization schema](../../src/database/schema/organization.schema.ts) and
+[enrichment module](../../src/modules/enrichment). Keep field mappings there.
+The [creator module](../../src/modules/creators) owns local merge behavior.
 
-### `creators` — new optional columns
-`gender, birth_date, death_date, ethnicity, country, birthplace, eye_color,
-hair_color, height_cm, cup_size, band_size, waist_size, hip_size, breast_type,
-career_start_year, career_end_year`. (All nullable; enrichment fills them, user
-confirms.)
-
-### New child tables
-- `creator_body_modifications` — `{ creator_id, type: tattoo|piercing, location,
-  description }`.
-- `creator_external_ids` — `{ creator_id, source: theporndb|stashdb, external_id,
-  external_url, last_synced_at }`. **Critical**: lets us re-fetch, dedup, and skip
-  re-querying. Unique on `(source, external_id)`.
-
-### Studios
-- `studios.parent_studio_id` (self-ref) for network → studio hierarchy.
-- `studio_aliases`, `studio_external_ids` (mirror creators).
-
-### Tags
-- Optional `tag_categories` + `tags.category_id` if we want their taxonomy later.
-
-## Merge handling (needed before bulk-applying enrichment)
-
-Two pressures create duplicates:
-1. **Upstream merges** — StashBox exposes `merged_ids` / `merged_into_id`; a performer
-   we linked may be merged upstream. On re-sync, follow `merged_into_id` and update our
-   `creator_external_ids`.
-2. **Our own duplicates** — enrichment may reveal two of our creators are the same
-   person (shared external id, or alias overlap).
-
-Proposed approach:
-- A **`creator_merges`** audit table `{ from_id, into_id, merged_at, reason }`.
-- A `mergeCreators(fromId, intoId)` service that reassigns `video_creators`,
-  `creator_platforms`, `social_links`, `aliases` (the old name becomes an alias),
-  `gallery_media`, `external_ids`, face embeddings → `into`, then soft-deletes `from`.
-- Enrichment **never auto-merges**; it raises a "possible duplicate" suggestion
-  (same external id / strong face match / alias collision) for manual confirmation —
-  consistent with the manual-review principle.
+Provider `merged_ids`/`merged_into_id` remain relevant when reconciling upstream
+identities; a dated introspection snapshot is not proof that every upstream merge
+case is handled. Fingerprint production work remains
+[blocked](../../plans/006-fingerprint-scene-matching-spike.md).

@@ -37,6 +37,7 @@ describe("bookmark migration 0038 on its pre-migration contract", () => {
   let sql: ReturnType<typeof postgres>;
 
   async function expectConstraintViolation(
+    code: string,
     run: (isolatedSql: ReturnType<typeof postgres>) => Promise<unknown>
   ): Promise<void> {
     const isolatedSql = postgres(database.connectionString, { max: 1 });
@@ -48,7 +49,8 @@ describe("bookmark migration 0038 on its pre-migration contract", () => {
     } finally {
       await isolatedSql.end({ timeout: 5 });
     }
-    expect(caught).toBeDefined();
+    expect(caught).toBeInstanceOf(postgres.PostgresError);
+    expect(caught).toMatchObject({ code });
   }
 
   async function stageBookmarkMigration(): Promise<void> {
@@ -187,12 +189,14 @@ describe("bookmark migration 0038 on its pre-migration contract", () => {
 
   it("enforces provenance, interval, timestamp, ownership, and reserved keys", async () => {
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO bookmark_categories (key, name, kind, user_id)
         VALUES ('BUTTOCKS_EXPOSED', 'Collision', 'custom', ${ownerId})
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO bookmarks (
           video_id, user_id, timestamp_seconds, origin, analysis_run_id, name
@@ -201,6 +205,7 @@ describe("bookmark migration 0038 on its pre-migration contract", () => {
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO bookmarks (
           video_id, user_id, timestamp_seconds,
@@ -210,12 +215,14 @@ describe("bookmark migration 0038 on its pre-migration contract", () => {
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO bookmarks (video_id, user_id, timestamp_seconds, name)
         VALUES (1, ${ownerId}, -1, 'Invalid timestamp')
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO bookmark_categories (key, name, kind, user_id)
         VALUES ('invalid-owner', 'Invalid owner', 'custom', NULL)

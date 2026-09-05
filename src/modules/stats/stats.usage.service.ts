@@ -1,3 +1,4 @@
+import { snapshotHistoryQuery, snapshotDateToISOString } from "./stats.snapshots";
 import { sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { statsUsageSnapshotsTable } from "@/database/schema";
@@ -189,35 +190,11 @@ export class UsageStatsService {
     days: number = 30,
     limit: number = 100,
   ): Promise<UsageSnapshot[]> {
-    // For multi-day ranges, collapse to one snapshot per day (the latest of
-    // each day) so a long range isn't truncated by intraday snapshot volume.
-    // Single-day ranges keep full intraday granularity. Rows are always
-    // returned in ascending chronological order for charting.
-    const query =
-      days <= 1
-        ? sql`
-            SELECT * FROM (
-              SELECT * FROM stats_usage_snapshots
-              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-              ORDER BY created_at DESC
-              LIMIT ${limit}
-            ) t
-            ORDER BY created_at ASC
-          `
-        : sql`
-            SELECT * FROM (
-              SELECT DISTINCT ON (date_trunc('day', created_at)) *
-              FROM stats_usage_snapshots
-              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-              ORDER BY date_trunc('day', created_at) DESC, created_at DESC
-              LIMIT ${limit}
-            ) t
-            ORDER BY created_at ASC
-          `;
+    const query = snapshotHistoryQuery("stats_usage_snapshots", days, limit);
 
     const rows = await db.execute(query);
 
-    return (rows as any[]).map((row) => this.mapToApiFormat(row));
+    return rows.map((row) => this.mapToApiFormat(row));
   }
 
   /**
@@ -243,13 +220,6 @@ export class UsageStatsService {
    * Map Drizzle result to API format
    */
   private mapToApiFormat(row: any): UsageSnapshot {
-    // Helper to convert date to ISO string
-    const toISOString = (val: unknown): string => {
-      if (val instanceof Date) return val.toISOString();
-      if (typeof val === "string") return val;
-      return new Date().toISOString();
-    };
-
     // Parse top watched JSON and ensure numbers
     const parseTopWatched = (rawData: unknown): TopWatched[] | null => {
       if (!rawData) return null;
@@ -296,7 +266,7 @@ export class UsageStatsService {
       activity_by_hour: parseActivityByHour(
         row.activity_by_hour ?? row.activityByHour,
       ),
-      created_at: toISOString(row.created_at ?? row.createdAt),
+      created_at: snapshotDateToISOString(row.created_at ?? row.createdAt),
     };
   }
 }

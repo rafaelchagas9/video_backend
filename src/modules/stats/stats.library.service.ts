@@ -1,3 +1,4 @@
+import { snapshotHistoryQuery, snapshotDateToISOString } from "./stats.snapshots";
 import { sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { statsLibrarySnapshotsTable } from "@/database/schema";
@@ -171,35 +172,11 @@ export class LibraryStatsService {
     days: number = 30,
     limit: number = 100,
   ): Promise<LibrarySnapshot[]> {
-    // For multi-day ranges, collapse to one snapshot per day (the latest of
-    // each day) so a long range isn't truncated by intraday snapshot volume.
-    // Single-day ranges keep full intraday granularity. Rows are always
-    // returned in ascending chronological order for charting.
-    const query =
-      days <= 1
-        ? sql`
-            SELECT * FROM (
-              SELECT * FROM stats_library_snapshots
-              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-              ORDER BY created_at DESC
-              LIMIT ${limit}
-            ) t
-            ORDER BY created_at ASC
-          `
-        : sql`
-            SELECT * FROM (
-              SELECT DISTINCT ON (date_trunc('day', created_at)) *
-              FROM stats_library_snapshots
-              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-              ORDER BY date_trunc('day', created_at) DESC, created_at DESC
-              LIMIT ${limit}
-            ) t
-            ORDER BY created_at ASC
-          `;
+    const query = snapshotHistoryQuery("stats_library_snapshots", days, limit);
 
     const rows = await db.execute(query);
 
-    return (rows as any[]).map((row) => this.mapToApiFormat(row));
+    return rows.map((row) => this.mapToApiFormat(row));
   }
 
   /**
@@ -225,13 +202,6 @@ export class LibraryStatsService {
    * Map Drizzle result to API format
    */
   private mapToApiFormat(row: any): LibrarySnapshot {
-    // Helper to convert date to ISO string
-    const toISOString = (val: unknown): string => {
-      if (val instanceof Date) return val.toISOString();
-      if (typeof val === "string") return val;
-      return new Date().toISOString();
-    };
-
     // Parse JSON fields and ensure numbers
     const parseBreakdown = (rawData: unknown): any[] | null => {
       if (!rawData) return null;
@@ -273,7 +243,7 @@ export class LibraryStatsService {
       codec_breakdown: parseBreakdown(
         row.codec_breakdown ?? row.codecBreakdown,
       ),
-      created_at: toISOString(row.created_at ?? row.createdAt),
+      created_at: snapshotDateToISOString(row.created_at ?? row.createdAt),
     };
   }
 }

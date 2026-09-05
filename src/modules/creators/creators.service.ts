@@ -29,8 +29,8 @@ export class CreatorsService {
     userId?: number
   ): Promise<PaginatedCreators> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getCreators(options) as PaginatedCreators;
+      const { demoRepository } = await import("@/database/demo/repository");
+      return demoRepository.getCreators(options) as PaginatedCreators;
     }
     const {
       page = 1,
@@ -453,8 +453,8 @@ export class CreatorsService {
     userId?: number
   ): Promise<EnhancedCreator[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const listObj = demoMockService.getCreators({
+      const { demoRepository } = await import("@/database/demo/repository");
+      const listObj = demoRepository.getCreators({
         search: query,
         limit: limitParam,
       });
@@ -537,8 +537,8 @@ export class CreatorsService {
     userId?: number
   ): Promise<EnhancedCreator[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const listObj = demoMockService.getCreators({ limit: limitParam });
+      const { demoRepository } = await import("@/database/demo/repository");
+      const listObj = demoRepository.getCreators({ limit: limitParam });
       return listObj.data as EnhancedCreator[];
     }
 

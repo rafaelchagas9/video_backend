@@ -12,7 +12,7 @@ export class StatsCleanupService {
    */
   async cleanupOldSnapshots(
     storageRetentionDays: number = 90,
-    otherRetentionDays: number = 365,
+    otherRetentionDays: number = 365
   ): Promise<{
     storageDeleted: number;
     libraryDeleted: number;
@@ -47,12 +47,13 @@ export class StatsCleanupService {
     `;
     const usageResult = await db.execute(usageQuery);
 
-    // Count deleted rows (estimating from array length if rowCount unavailable)
+    // postgres-js exposes affected rows through count, including DELETEs
+    // without RETURNING (whose result arrays are empty).
     const result = {
-      storageDeleted: (storageResult as any).rowCount || 0,
-      libraryDeleted: (libraryResult as any).rowCount || 0,
-      contentDeleted: (contentResult as any).rowCount || 0,
-      usageDeleted: (usageResult as any).rowCount || 0,
+      storageDeleted: storageResult.count,
+      libraryDeleted: libraryResult.count,
+      contentDeleted: contentResult.count,
+      usageDeleted: usageResult.count,
     };
 
     if (

@@ -23,6 +23,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
   let videoId: number;
 
   async function expectConstraintViolation(
+    code: string,
     run: (isolatedSql: ReturnType<typeof postgres>) => Promise<unknown>
   ): Promise<void> {
     const isolatedSql = postgres(database.connectionString, { max: 1 });
@@ -34,7 +35,8 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
     } finally {
       await isolatedSql.end({ timeout: 5 });
     }
-    expect(caught).toBeDefined();
+    expect(caught).toBeInstanceOf(postgres.PostgresError);
+    expect(caught).toMatchObject({ code });
   }
 
   beforeAll(async () => {
@@ -141,6 +143,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
     `;
 
     await expectConstraintViolation(
+      "23505",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_runs (
           durable_job_id, video_id, user_id, profile, requested_categories,
@@ -185,6 +188,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
     `;
 
     await expectConstraintViolation(
+      "23505",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_runs (
           durable_job_id, video_id, user_id, profile, requested_categories,
@@ -212,6 +216,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
     `;
 
     await expectConstraintViolation(
+      "23505",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_runs (
           durable_job_id, video_id, user_id, profile, requested_categories,
@@ -234,6 +239,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
       INSERT INTO durable_jobs DEFAULT VALUES RETURNING id
     `;
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_runs (
           durable_job_id, video_id, user_id, profile, requested_categories,
@@ -249,6 +255,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_events (
           run_id, generation_key, start_seconds, peak_seconds, end_seconds,
@@ -260,6 +267,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_events (
           run_id, generation_key, start_seconds, peak_seconds, end_seconds,
@@ -272,6 +280,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
       `
     );
     await expectConstraintViolation(
+      "23503",
       (isolatedSql) => isolatedSql`
         INSERT INTO bookmarks (analysis_run_id) VALUES (999999)
       `
@@ -336,9 +345,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
 
     await sql`DELETE FROM videos WHERE id = ${cascadingVideoId}`;
 
-    const [remaining] = await sql<
-      Array<{ runs: number; bookmarks: number }>
-    >`
+    const [remaining] = await sql<Array<{ runs: number; bookmarks: number }>>`
       SELECT
         (SELECT count(*)::int FROM content_analysis_runs WHERE id = ${runId}) AS runs,
         (SELECT count(*)::int FROM bookmarks WHERE id = ${bookmarkId}) AS bookmarks
@@ -370,6 +377,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
     expect(payload?.findings[0]).not.toHaveProperty("box");
 
     await expectConstraintViolation(
+      "23505",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_observation_chunks (
           run_id, phase, chunk_index, start_seconds, end_seconds,
@@ -378,6 +386,7 @@ describe("content-analysis schema migrations 0039 through 0042", () => {
       `
     );
     await expectConstraintViolation(
+      "23514",
       (isolatedSql) => isolatedSql`
         INSERT INTO content_analysis_observation_chunks (
           run_id, phase, chunk_index, start_seconds, end_seconds,

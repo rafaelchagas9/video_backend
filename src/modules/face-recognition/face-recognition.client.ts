@@ -212,7 +212,3 @@ export function getFaceRecognitionClient(): FaceRecognitionClient {
   }
   return clientInstance;
 }
-
-export function resetFaceRecognitionClient(): void {
-  clientInstance = null;
-}

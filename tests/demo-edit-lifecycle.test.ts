@@ -1,11 +1,37 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { readFileSync, rmSync } from "fs";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+} from "bun:test";
+import { rmSync } from "fs";
 
 process.env.NODE_ENV = "test";
 process.env.POSTGRES_USER ||= "demo-edit-test";
 process.env.POSTGRES_PASSWORD ||= "demo-edit-test";
 process.env.SESSION_SECRET ||=
   "demo-edit-test-session-secret-at-least-32-characters";
+
+// Fail every lifecycle scenario if it accesses production dependencies.
+// This also catches indirect calls that a source-file string search misses.
+const productionAccess = mock(() => {
+  throw new Error("Demo edits must not invoke production infrastructure");
+});
+const forbiddenService = new Proxy({}, { get: productionAccess });
+mock.module("@/config/drizzle", () => ({ db: forbiddenService }));
+mock.module("@/modules/edits/edits.queue", () => ({
+  editsQueue: forbiddenService,
+  EditsQueue: productionAccess,
+}));
+mock.module("@/modules/edits/edits.processor", () => ({
+  editsProcessor: forbiddenService,
+  EditsProcessor: productionAccess,
+}));
+mock.module("fluent-ffmpeg", () => ({ default: productionAccess }));
 
 const databasePath = `/tmp/conversor-video-demo-edits-${process.pid}.sqlite`;
 let closeDemoDatabase: () => void;
@@ -105,6 +131,17 @@ afterAll(async () => {
   removeDatabase();
   const { env } = await import("@/config/env");
   env.DEMO_MODE = originalDemoMode;
+});
+
+beforeEach(async () => {
+  const { getDemoSqlite } = await import("@/database/demo");
+  getDemoSqlite().run(
+    "DELETE FROM demo_resources WHERE kind IN ('edit-job', 'edit-job-simulation')"
+  );
+});
+
+afterEach(() => {
+  expect(productionAccess).not.toHaveBeenCalled();
 });
 
 describe("SQLite demo edit simulation", () => {
@@ -410,21 +447,5 @@ describe("SQLite demo edit simulation", () => {
     await expect(
       service.clone(999_999, { output: output("clone-missing-target") })
     ).rejects.toMatchObject({ statusCode: 404 });
-  });
-
-  it("has no production database, queue, Redis, or FFmpeg dependency", () => {
-    const source = readFileSync(
-      new URL("../src/modules/edits/edits.demo.service.ts", import.meta.url),
-      "utf8"
-    );
-    for (const forbidden of [
-      "config/drizzle",
-      "edits.queue",
-      "edits.processor",
-      "fluent-ffmpeg",
-      "redis",
-    ]) {
-      expect(source).not.toContain(forbidden);
-    }
   });
 });

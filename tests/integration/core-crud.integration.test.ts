@@ -1005,7 +1005,7 @@ describe("Fastify app integration", () => {
       url: "/api/faces/health",
     });
     expect(health.statusCode).toBe(200);
-    expect(health.json().data.status).toBe("ok");
+    expect(health.json().data.status).toBe("healthy");
 
     const uploadBase64 = await ctx!.authInject({
       method: "POST",
@@ -1039,7 +1039,7 @@ describe("Fastify app integration", () => {
       })
       .returning({ id: creatorFaceEmbeddingsTable.id });
 
-    const thumbnail = await ctx!.inject({
+    const thumbnail = await ctx!.authInject({
       method: "GET",
       url: `/api/creators/${creator.id}/face-embeddings/${storedEmbedding.id}/thumbnail`,
     });
@@ -1065,7 +1065,7 @@ describe("Fastify app integration", () => {
       matchStatus: "confirmed",
     });
 
-    const faceImage = await ctx!.inject({
+    const faceImage = await ctx!.authInject({
       method: "GET",
       url: "/api/faces/1/image",
     });
@@ -1104,7 +1104,11 @@ describe("Fastify app integration", () => {
       url: `/api/creators/${creator.id}/videos-by-face?min_confidence=0.5`,
     });
     expect(videosByFace.statusCode).toBe(200);
-    expect(videosByFace.json().data[0].creator_id).toBe(creator.id);
+    expect(videosByFace.json().data[0]).toEqual({
+      videoId: 1,
+      detectionCount: 1,
+      avgConfidence: 0.92,
+    });
 
     const missingSearchFile = await ctx!.authInject({
       method: "POST",

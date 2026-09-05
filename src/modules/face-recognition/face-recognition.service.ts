@@ -840,10 +840,3 @@ export function getFaceRecognitionService(): FaceRecognitionService {
   }
   return serviceInstance;
 }
-
-/**
- * For testing - reset singleton
- */
-export function resetFaceRecognitionService(): void {
-  serviceInstance = null;
-}

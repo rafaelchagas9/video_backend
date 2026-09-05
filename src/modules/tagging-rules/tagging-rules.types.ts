@@ -1,4 +1,10 @@
-import { z } from "zod";
+import type { z } from "zod";
+import type {
+  createTaggingRuleSchema,
+  updateTaggingRuleSchema,
+  testRuleSchema,
+  applyRulesSchema,
+} from "./tagging-rules.schemas";
 
 export interface TaggingRule {
   id: number;
@@ -98,125 +104,6 @@ export interface ApplyRulesResult {
     error?: string;
   }>;
 }
-
-export const createTaggingRuleSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(2000).optional(),
-  rule_type: z.enum(["path_match", "metadata_match", "manual"]),
-  is_enabled: z.boolean().default(true),
-  priority: z.number().int().default(0),
-  conditions: z
-    .array(
-      z.object({
-        condition_type: z.enum([
-          "path_pattern",
-          "file_pattern",
-          "duration_range",
-          "resolution",
-          "codec",
-          "file_size",
-        ]),
-        operator: z.enum([
-          "matches",
-          "equals",
-          "contains",
-          "gt",
-          "lt",
-          "gte",
-          "lte",
-          "regex",
-        ]),
-        value: z.string().min(1).max(1000),
-      }),
-    )
-    .optional(),
-  actions: z
-    .array(
-      z.object({
-        action_type: z.enum([
-          "add_tag",
-          "remove_tag",
-          "add_creator",
-          "remove_creator",
-          "add_studio",
-          "remove_studio",
-        ]),
-        target_id: z.number().int().positive().optional(),
-        target_name: z.string().optional(),
-        dynamic_value: z.string().optional(),
-      }),
-    )
-    .min(1)
-    .optional(),
-});
-
-export const updateTaggingRuleSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().max(2000).nullable().optional(),
-  rule_type: z.enum(["path_match", "metadata_match", "manual"]).optional(),
-  is_enabled: z.boolean().optional(),
-  priority: z.number().int().optional(),
-  conditions: z
-    .array(
-      z.object({
-        condition_type: z.enum([
-          "path_pattern",
-          "file_pattern",
-          "duration_range",
-          "resolution",
-          "codec",
-          "file_size",
-        ]),
-        operator: z.enum([
-          "matches",
-          "equals",
-          "contains",
-          "gt",
-          "lt",
-          "gte",
-          "lte",
-          "regex",
-        ]),
-        value: z.string().min(1).max(1000),
-      }),
-    )
-    .optional(),
-  actions: z
-    .array(
-      z.object({
-        action_type: z.enum([
-          "add_tag",
-          "remove_tag",
-          "add_creator",
-          "remove_creator",
-          "add_studio",
-          "remove_studio",
-        ]),
-        target_id: z.number().int().positive().optional(),
-        target_name: z.string().optional(),
-        dynamic_value: z.string().optional(),
-      }),
-    )
-    .optional(),
-});
-
-export const idParamSchema = z.object({
-  id: z.coerce.number().int().positive(),
-});
-
-export const testRuleSchema = z.object({
-  limit: z.coerce.number().int().positive().max(100).default(10),
-});
-
-export const applyRulesSchema = z.object({
-  video_ids: z.array(z.number().int().positive()).optional(),
-  dry_run: z.coerce.boolean().default(false),
-  limit: z.coerce.number().int().positive().max(1000).default(100),
-});
-
-export const bulkDeleteSchema = z.object({
-  ids: z.array(z.number().int().positive()).min(1),
-});
 
 export type CreateTaggingRuleInput = z.infer<typeof createTaggingRuleSchema>;
 export type UpdateTaggingRuleInput = z.infer<typeof updateTaggingRuleSchema>;

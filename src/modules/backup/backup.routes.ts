@@ -23,9 +23,10 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
       schema: {
         tags: ["backup"],
         summary: "Create a database backup",
-        description: "Creates a new backup of the SQLite database.",
+        description: "Creates a new database backup.",
         response: {
           201: backupCreatedResponseSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
           500: errorResponseSchema,
         },
@@ -100,6 +101,7 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
         params: filenameParamSchema,
         response: {
           200: messageResponseSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },
@@ -126,6 +128,7 @@ export async function backupRoutes(fastify: FastifyInstance): Promise<void> {
         params: filenameParamSchema,
         response: {
           200: messageResponseSchema,
+          400: errorResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
         },

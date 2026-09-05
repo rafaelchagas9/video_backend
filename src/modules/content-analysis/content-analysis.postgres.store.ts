@@ -727,8 +727,3 @@ export class PostgresContentAnalysisRunStore implements ContentAnalysisRunStore 
     });
   }
 }
-
-export async function createPostgresContentAnalysisRunStore(): Promise<PostgresContentAnalysisRunStore> {
-  const { db } = await import("@/config/drizzle");
-  return new PostgresContentAnalysisRunStore(db);
-}

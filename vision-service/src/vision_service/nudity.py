@@ -238,32 +238,6 @@ class NudeNetOnnxBackend:
         self._session = None
 
 
-class NudeNet320Backend(NudeNetOnnxBackend):
-    """Compatibility constructor for the bundled pinned 320n model."""
-
-    def __init__(
-        self,
-        *,
-        model_path: Path,
-        session_factory: OnnxSessionFactory,
-        read_image: Callable[..., tuple],
-        postprocess: Callable[..., list[dict[str, object]]],
-        providers: Sequence[str] = DEFAULT_NUDITY_PROVIDERS,
-        require_gpu: bool = True,
-        batch_size: int = DEFAULT_NUDITY_BATCH_SIZE,
-    ) -> None:
-        super().__init__(
-            model_spec=NUDENET_320N_SPEC,
-            model_path=model_path,
-            session_factory=session_factory,
-            read_image=read_image,
-            postprocess=postprocess,
-            providers=providers,
-            require_gpu=require_gpu,
-            batch_size=batch_size,
-        )
-
-
 def resolve_nudenet_model_path(model_spec: NudeNetModelSpec, model_cache_dir: Path) -> Path:
     """Resolve a pinned artifact without downloading it during service operation."""
     if model_spec.name == "320n":
@@ -450,32 +424,6 @@ class NudeNetDetectorAdapter:
             backend.close()
         self.providers = ()
         self.runtime_state = "stopped"
-
-
-def create_nudenet_320_backend(
-    providers: Sequence[str] = DEFAULT_NUDITY_PROVIDERS,
-    require_gpu: bool = True,
-) -> NudeNet320Backend:
-    """Load only the pinned bundled model and helpers when nudity is first requested."""
-    try:
-        installed_version = version("nudenet")
-    except PackageNotFoundError as error:
-        raise RuntimeError("Pinned NudeNet package is not installed") from error
-    if installed_version != NUDENET_VERSION:
-        raise RuntimeError("Installed NudeNet package does not match the pinned version")
-
-    import onnxruntime
-    from nudenet.nudenet import _postprocess, _read_image
-
-    model_path = Path(str(files("nudenet").joinpath("320n.onnx")))
-    return NudeNet320Backend(
-        model_path=model_path,
-        session_factory=onnxruntime.InferenceSession,
-        read_image=_read_image,
-        postprocess=_postprocess,
-        providers=providers,
-        require_gpu=require_gpu,
-    )
 
 
 def create_nudenet_backend(

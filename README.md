@@ -1,6 +1,6 @@
 # Video Streaming Backend
 
-A self-hosted video library manager and streaming server. Indexes local video files, extracts metadata, generates thumbnails and storyboards, transcodes videos, and streams them over HTTP with full range-request support. Includes hierarchical tagging, creator/studio management, playlists, ratings, bookmarks, auto-tagging rules, and face recognition via a Python/InsightFace microservice.
+A self-hosted video library manager and streaming server. Indexes local video files, extracts metadata, generates thumbnails and storyboards, transcodes videos, and streams them over HTTP with full range-request support. Includes hierarchical tagging, creator/studio management, playlists, ratings, bookmarks, auto-tagging rules, face recognition and on-demand content analysis via a Python vision service.
 
 Built with Bun + Fastify + PostgreSQL.
 
@@ -12,12 +12,12 @@ Built with Bun + Fastify + PostgreSQL.
 - **Media Processing** — Thumbnails (configurable timestamp/position), Vidstack-compatible sprite storyboards (VTT), unified frame extraction, video transcoding (VAAPI GPU acceleration, job queue)
 - **Auto-Tagging** — Rule engine with conditions (path pattern, duration, resolution, codec, file size) and actions (add/remove tags, creators, studios)
 - **Face Recognition** — Python/InsightFace microservice for face detection, 512-dim embedding extraction, auto-matching to known creators, similarity search
-- **Video Editing** — Single-source trim/split/reorder, per-segment speed, crop/rotation, global audio controls, and asynchronous MKV/AV1 export jobs
+- **Video Editing** — Single-source trim/split/reorder, per-segment speed, crop/rotation, per-segment and global audio controls, and asynchronous MKV/AV1 export jobs
 - **Streaming** — HTTP range-request support, chunked delivery
 - **Real-Time** — WebSocket multiplayer remote control system (pairing, sessions, display/remote devices), SSE event stream
 - **Multiplayer Remote** — Pairing codes, display device management, remote control commands (playback, audio, layout, filters)
 - **Analytics** — Watch statistics (plays, watch time, position tracking), library stats snapshots (storage, library composition, content coverage, usage patterns)
-- **Authentication** — Better Auth with Drizzle-backed sessions, email/password, single-user with auto-disabled registration
+- **Authentication** — Better Auth with Drizzle-backed sessions and email/password login
 - **Backup** — Full database export/import to JSON
 - **Scheduling** — Cron-based directory rescanning, configurable intervals
 
@@ -27,7 +27,7 @@ Built with Bun + Fastify + PostgreSQL.
 - PostgreSQL 14+
 - FFmpeg + FFprobe
 - Redis (optional, for job queue)
-- Python 3.12+ (optional, for face recognition service)
+- Python 3.11+ and uv (optional, for the vision/enrichment services)
 - Linux, macOS, or WSL2
 
 ## Quick Start
@@ -38,7 +38,6 @@ cd conversor-video
 bun install
 cp .env.example .env
 # Edit .env with your PostgreSQL credentials and SESSION_SECRET
-bun db:generate
 bun db:migrate
 bun dev
 ```
@@ -84,7 +83,6 @@ See `.env.example` for all options. Key variables:
 | `bun db:push`               | Direct schema sync (dev only)                                    |
 | `bun db:studio`             | Drizzle Studio GUI                                               |
 | `bun db:introspect`         | Introspect DB to schema                                          |
-| `bun db:apply-migration`    | Run custom migration script                                      |
 | `bunx eslint .`             | Lint                                                             |
 | `bunx tsc --noEmit`         | Type check                                                       |
 
@@ -160,75 +158,19 @@ a deterministic `RENDER_FAILED` error. Cancellation is available while a job
 is queued or running, and jobs can be rediscovered after a frontend reload with
 `GET /api/edits/jobs`.
 
-## Project Structure
+## Code and documentation
 
-```
-src/
-├── index.ts                     # Entry point
-├── server.ts                    # Fastify server setup + route registration
-├── config/
-│   ├── database.ts              # DB connection pool
-│   ├── drizzle.ts               # Drizzle ORM setup
-│   └── env.ts                   # Env validation
-├── database/
-│   ├── demo/                    # Isolated SQLite schema, migrations, seed, repository
-│   ├── schema/                  # 18 schema files, 40 tables
-│   │   ├── users.schema.ts      # Auth (users, sessions, accounts)
-│   │   ├── videos.schema.ts     # Core video records + stats + metadata
-│   │   ├── organization.schema.ts # Creators, tags, studios, platforms
-│   │   ├── content.schema.ts    # Playlists, favorites, bookmarks, ratings
-│   │   ├── video-collections.schema.ts # Series/episodic grouping
-│   │   ├── media.schema.ts      # Thumbnails, storyboards
-│   │   ├── conversion.schema.ts # Transcoding jobs
-│   │   ├── edits.schema.ts      # Video editing jobs
-│   │   ├── stats.schema.ts      # Analytics snapshots
-│   │   ├── tagging.schema.ts    # Auto-tagging rules
-│   │   ├── face-recognition.schema.ts # Face embeddings, detections
-│   │   ├── multiplayer-remote.schema.ts # Remote control sessions
-│   │   ├── app-settings.schema.ts
-│   │   └── triage.schema.ts
-│   └── drizzle-migrations/      # Generated SQL migrations
-├── modules/
-│   ├── auth/                    # Authentication (Better Auth)
-│   ├── videos/                  # Video CRUD, search, streaming, metadata
-│   ├── directories/             # Watched directory management + scanning
-│   ├── creators/                # Creator/performer management
-│   ├── studios/                 # Studio management
-│   ├── platforms/               # Platform reference data
-│   ├── tags/                    # Hierarchical tags
-│   ├── auto-tagging/            # Auto-tagging logic
-│   ├── tagging-rules/           # Rule engine (conditions + actions)
-│   ├── ratings/                 # 1-5 star ratings
-│   ├── favorites/               # Video + creator favorites
-│   ├── bookmarks/               # Timestamp bookmarks
-│   ├── playlists/               # Playlist management
-│   ├── video-collections/       # Series/episodic collections
-│   ├── thumbnails/              # Thumbnail generation
-│   ├── storyboards/             # Sprite storyboards (Vidstack)
-│   ├── frame-extraction/        # Unified frame extraction
-│   ├── face-recognition/        # Face detection + matching
-│   ├── conversion/              # Video transcoding queue
-│   ├── edits/                   # Video trimming/editing jobs
-│   ├── video-stats/             # Watch statistics
-│   ├── stats/                   # Library analytics snapshots
-│   ├── scheduler/               # Cron-based scanning
-│   ├── events/                  # SSE event stream
-│   ├── multiplayer-remote/      # WebSocket remote control
-│   ├── settings/                # App configuration
-│   └── backup/                  # Database backup/restore
-├── utils/
-│   ├── errors.ts                # AppError base class
-│   ├── validation.ts            # validateSchema helper
-│   ├── logger.ts                # Pino logger
-│   └── file-utils.ts            # File operations
-├── scripts/
-│   ├── validate-env.ts
-│   └── check-dependencies.ts
-└── demo_mode/                   # Demo data generation
-```
+Application modules live in [src/modules](src/modules), PostgreSQL schemas and
+migrations in [src/database](src/database), and the isolated demo repository in
+[src/database/demo](src/database/demo). Request/response schemas alongside each
+module generate the API documentation at `/docs`.
 
-Visual inference runs in the separate Python microservice at `vision-service/`
-(currently InsightFace, FastAPI port 8100). See `vision-service/README.md`.
+- [Vision service](vision-service/README.md): face and nudity inference setup.
+- [Enrichment service](enrichment-service/README.md): external metadata candidates.
+- [Editing workflow](docs/video-editing-api.md): job lifecycle and effect semantics.
+- [Artwork](docs/artwork-api-contract.md): client rendering and regeneration.
+- [Performance](docs/performance.md): scheduling, tuning, and measured limits.
+- [Remaining work](plans/README.md): unresolved product decisions and acceptance gates.
 
 ## Testing
 
@@ -251,61 +193,9 @@ All application routes are prefixed with `/api` and documented via Swagger at
 
 Health check: `GET /health`
 
-### Video editing API
-
-The basic editor operates on one source video. It supports trimming, splitting
-and reordering source ranges; speed from 0.1× to 10× per segment; one normalized
-crop and 0/90/180/270-degree rotation applied after the timeline; plus global
-mute, volume (0–4), and audio fades. It intentionally does not advertise
-multi-source timelines, transitions, text overlays, subtitle editing, or audio
-mixing.
-
-The current output contract is explicit: Matroska (`mkv`) with AV1 video and
-either Opus (default) or AAC audio. A filename is a safe basename; `.mkv` is
-added when omitted. Existing destinations cause a conflict instead of being
-overwritten.
-
-1. Read `GET /api/videos/:id/editing-metadata` for source properties,
-   storyboard URL, audio presence/codec, and the machine-readable capability
-   declaration.
-2. Submit `POST /api/videos/:id/edits`. A valid request returns `202 Accepted`
-   and a `Location: /api/edits/jobs/:jobId` header.
-3. Poll the Location or recover jobs with the paginated
-   `GET /api/edits/jobs?page=1&limit=20`. Recovery can be filtered by
-   `video_id` and/or `status`.
-4. Cancel queued or running work with
-   `POST /api/edits/jobs/:jobId/cancel`. Completed results expose the canonical
-   `/api/videos/:videoId/stream` URL.
-
-Example request:
-
-```json
-{
-  "output": {
-    "directory_id": 1,
-    "file_name": "edited-highlight",
-    "format": "mkv",
-    "video_codec": "av1",
-    "audio_codec": "opus"
-  },
-  "timeline": {
-    "segments": [
-      { "start": 12.5, "end": 24, "speed": 1 },
-      { "start": 40, "end": 46, "speed": 0.5 }
-    ],
-    "transform": {
-      "crop": { "x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8 },
-      "rotate": 90
-    },
-    "audio": {
-      "muted": false,
-      "volume": 1,
-      "fade_in_seconds": 0.5,
-      "fade_out_seconds": 1
-    }
-  }
-}
-```
+See the [editing workflow](docs/video-editing-api.md) for asynchronous edits,
+per-segment effects, recipe reuse, and the demo lifecycle. Request fields and
+limits are defined by [the edit schemas](src/modules/edits/edits.schemas.ts).
 
 ### First-Time Setup
 
@@ -336,4 +226,4 @@ MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V, MPEG, MPV, OGM, RMVB
 
 - **Thumbnails/Storyboards**: FFmpeg with configurable quality, format, size
 - **Conversion**: VAAPI hardware acceleration (Linux/Intel GPU), fallback software
-- **Face Recognition**: InsightFace via Python microservice (CUDA/ROCm supported)
+- **Vision**: InsightFace and NudeNet via the native Python/ONNX Runtime service; see its setup guide for the pinned runtime.

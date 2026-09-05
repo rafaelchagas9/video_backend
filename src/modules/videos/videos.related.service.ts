@@ -105,9 +105,9 @@ export class VideosRelatedService {
     await videosService.findById(sourceVideoId, userId);
 
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const videosObj = demoMockService.getVideos({ limit: 100 });
-      const sourceVideo = demoMockService.getVideoById(sourceVideoId) as Video;
+      const { demoRepository } = await import("@/database/demo/repository");
+      const videosObj = demoRepository.getVideos({ limit: 100 });
+      const sourceVideo = demoRepository.getVideoById(sourceVideoId) as Video;
       
       const candidates = (videosObj.data as Video[]).filter((v) => v.id !== sourceVideoId);
       

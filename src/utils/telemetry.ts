@@ -289,10 +289,6 @@ function buildProperties(
   };
 }
 
-export function isTelemetryEnabled(): boolean {
-  return analyticsClient !== null || exceptionClient !== null || otel !== null;
-}
-
 export function getTelemetryDistinctId(
   userId?: string | number | null,
 ): string {
@@ -454,22 +450,6 @@ export function shouldTrackRequestMetrics(request: FastifyRequest): boolean {
   return !["/health", "/docs", "/docs/", "/ws", "/api/events/stream"].some(
     (path) => request.url === path || request.url.startsWith(`${path}/`),
   );
-}
-
-export async function flushTelemetry(): Promise<void> {
-  const results = await Promise.allSettled([
-    analyticsClient?.flush(),
-    exceptionClient?.flush(),
-    otel?.provider.forceFlush({ timeoutMillis: 5_000 }),
-  ]);
-  results.forEach((result, index) => {
-    if (result.status === "rejected") {
-      reportTelemetryTransportError(
-        ["events-flush", "exceptions-flush", "logs-flush"][index]!,
-        result.reason,
-      );
-    }
-  });
 }
 
 let shutdownPromise: Promise<void> | null = null;

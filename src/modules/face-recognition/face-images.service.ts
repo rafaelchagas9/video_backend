@@ -307,10 +307,3 @@ export function getFaceImagesService(): FaceImagesService {
   }
   return serviceInstance;
 }
-
-/**
- * For testing - reset singleton
- */
-export function resetFaceImagesService(): void {
-  serviceInstance = null;
-}

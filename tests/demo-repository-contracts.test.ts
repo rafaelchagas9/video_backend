@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { demoMockService, isDemoAssetPath } from "@/utils/demo-mock";
+import { demoRepository } from "@/database/demo/repository";
+import { isDemoAssetPath } from "@/database/demo/assets";
+import { useSeededDemoDatabase } from "./helpers/demo-database";
 import {
   creatorListResponseSchema,
   creatorResponseSchema,
@@ -19,21 +21,23 @@ import {
 } from "@/modules/video-collections/video-collections.schemas";
 import { favoritesListResponseSchema } from "@/modules/favorites/favorites.schemas";
 
-describe("Demo Mock Service Zod Schema Validation", () => {
+useSeededDemoDatabase();
+
+describe("Demo repository response contracts", () => {
   it("rejects asset paths outside demo_mode", () => {
     expect(isDemoAssetPath("demo_mode/video/trailer.webm", "/srv/app")).toBe(
-      true,
+      true
     );
     expect(isDemoAssetPath("demo_mode/../private/video.mp4", "/srv/app")).toBe(
-      false,
+      false
     );
     expect(isDemoAssetPath("/personal/videos/private.mp4", "/srv/app")).toBe(
-      false,
+      false
     );
   });
 
   it("validates all getVideos() list elements", () => {
-    const list = demoMockService.getVideos({ limit: 100 });
+    const list = demoRepository.getVideos({ limit: 100 });
     const parsed = videoListResponseSchema.safeParse({
       success: true,
       data: list.data,
@@ -42,31 +46,31 @@ describe("Demo Mock Service Zod Schema Validation", () => {
     if (!parsed.success) {
       console.error(
         "Video list parsing failure detail:",
-        JSON.stringify(parsed.error.format(), null, 2),
+        JSON.stringify(parsed.error.format(), null, 2)
       );
     }
     expect(parsed.success).toBe(true);
   });
 
   it("filters queue video metadata by ID", () => {
-    const allVideos = demoMockService.getVideos({ limit: 100 }).data;
+    const allVideos = demoRepository.getVideos({ limit: 100 }).data;
     const requestedIds = [allVideos[1]?.id, allVideos[4]?.id].filter(
-      (id): id is number => id !== undefined,
+      (id): id is number => id !== undefined
     );
-    const filtered = demoMockService.getVideos({
+    const filtered = demoRepository.getVideos({
       ids: requestedIds,
       limit: requestedIds.length,
     });
 
-    expect(filtered.data.map((video) => video.id).sort((a, b) => a - b)).toEqual(
-      [...requestedIds].sort((a, b) => a - b),
-    );
+    expect(
+      filtered.data.map((video) => video.id).sort((a, b) => a - b)
+    ).toEqual([...requestedIds].sort((a, b) => a - b));
     expect(filtered.pagination.total).toBe(requestedIds.length);
   });
 
   it("provides enough paginated videos for queue regression testing", () => {
-    const firstPage = demoMockService.getVideos({ page: 1, limit: 24 });
-    const lastPage = demoMockService.getVideos({ page: 6, limit: 24 });
+    const firstPage = demoRepository.getVideos({ page: 1, limit: 24 });
+    const lastPage = demoRepository.getVideos({ page: 6, limit: 24 });
 
     expect(firstPage.pagination.total).toBeGreaterThanOrEqual(120);
     expect(firstPage.pagination.totalPages).toBeGreaterThanOrEqual(5);
@@ -74,15 +78,15 @@ describe("Demo Mock Service Zod Schema Validation", () => {
     expect(lastPage.data.length).toBeGreaterThan(0);
     expect(
       new Set(
-        demoMockService.getVideos({ limit: 200 }).data.map((video) => video.id),
-      ).size,
+        demoRepository.getVideos({ limit: 200 }).data.map((video) => video.id)
+      ).size
     ).toBe(firstPage.pagination.total);
   });
 
   it("validates all getVideos() individual items", () => {
-    const list = demoMockService.getVideos({ limit: 100 });
+    const list = demoRepository.getVideos({ limit: 100 });
     for (const item of list.data) {
-      const detail = demoMockService.getVideoById(item.id);
+      const detail = demoRepository.getVideoById(item.id);
       const parsed = videoResponseSchema.safeParse({
         success: true,
         data: detail,
@@ -90,7 +94,7 @@ describe("Demo Mock Service Zod Schema Validation", () => {
       if (!parsed.success) {
         console.error(
           `Failed on video ID ${item.id}:`,
-          JSON.stringify(parsed.error.format(), null, 2),
+          JSON.stringify(parsed.error.format(), null, 2)
         );
       }
       expect(parsed.success).toBe(true);
@@ -98,7 +102,7 @@ describe("Demo Mock Service Zod Schema Validation", () => {
   });
 
   it("validates all getCreators() list elements", () => {
-    const list = demoMockService.getCreators({ limit: 100 });
+    const list = demoRepository.getCreators({ limit: 100 });
     const parsed = creatorListResponseSchema.safeParse({
       success: true,
       data: list.data,
@@ -107,16 +111,16 @@ describe("Demo Mock Service Zod Schema Validation", () => {
     if (!parsed.success) {
       console.error(
         "Creator list parsing failure detail:",
-        JSON.stringify(parsed.error.format(), null, 2),
+        JSON.stringify(parsed.error.format(), null, 2)
       );
     }
     expect(parsed.success).toBe(true);
   });
 
   it("validates all getCreators() individual items", () => {
-    const list = demoMockService.getCreators({ limit: 100 });
+    const list = demoRepository.getCreators({ limit: 100 });
     for (const item of list.data) {
-      const detail = demoMockService.getCreatorById(item.id);
+      const detail = demoRepository.getCreatorById(item.id);
       const parsed = creatorResponseSchema.safeParse({
         success: true,
         data: detail,
@@ -124,7 +128,7 @@ describe("Demo Mock Service Zod Schema Validation", () => {
       if (!parsed.success) {
         console.error(
           `Failed on creator ID ${item.id}:`,
-          JSON.stringify(parsed.error.format(), null, 2),
+          JSON.stringify(parsed.error.format(), null, 2)
         );
       }
       expect(parsed.success).toBe(true);
@@ -132,7 +136,7 @@ describe("Demo Mock Service Zod Schema Validation", () => {
   });
 
   it("provides rich demo metadata, nested tags, and storyboards", () => {
-    const creators = demoMockService.getCreators({ limit: 100 }).data;
+    const creators = demoRepository.getCreators({ limit: 100 }).data;
     expect(
       creators.every(
         (creator) =>
@@ -140,175 +144,174 @@ describe("Demo Mock Service Zod Schema Validation", () => {
           creator.main_picture_path &&
           creator.platforms.length > 0 &&
           creator.social_links.length > 0 &&
-          creator.gallery_media.length >= 2,
-      ),
+          creator.gallery_media.length >= 2
+      )
     ).toBe(true);
 
-    const studios = demoMockService.getStudios({ limit: 100 }).data;
+    const studios = demoRepository.getStudios({ limit: 100 }).data;
     expect(
       studios.every(
         (studio) =>
-          studio.profile_picture_path && studio.social_links.length >= 2,
-      ),
+          studio.profile_picture_path && studio.social_links.length >= 2
+      )
     ).toBe(true);
 
-    const tags = demoMockService.getTags();
+    const tags = demoRepository.getTags();
     const liveSession = tags.find((tag) => tag.name === "Live Session");
     const tinyDesk = tags.find((tag) => tag.name === "Tiny Desk");
     expect(liveSession?.parent_id).not.toBeNull();
     expect(tinyDesk?.parent_id).toBe(liveSession?.id);
 
-    const videos = demoMockService.getVideos({ limit: 100 }).data;
+    const videos = demoRepository.getVideos({ limit: 100 }).data;
     expect(
       videos.every(
-        (video) => video.storyboard?.sprite_path && video.storyboard?.vtt_path,
-      ),
+        (video) => video.storyboard?.sprite_path && video.storyboard?.vtt_path
+      )
     ).toBe(true);
   });
 
-  // --- Favorites In-Memory Tests ---
-  describe("In-Memory Favorites", () => {
+  // --- Favorites SQLite Tests ---
+  describe("SQLite Favorites", () => {
     it("handles favoriting and unfavoriting of videos correctly", () => {
       // Initially not favorited
       const videoId = 1;
-      expect(demoMockService.isFavoriteVideo(videoId)).toBe(false);
+      expect(demoRepository.isFavoriteVideo(videoId)).toBe(false);
 
       // Favorite
-      demoMockService.addFavoriteVideo(videoId);
-      expect(demoMockService.isFavoriteVideo(videoId)).toBe(true);
+      demoRepository.addFavoriteVideo(videoId);
+      expect(demoRepository.isFavoriteVideo(videoId)).toBe(true);
 
       // Validate video detail reflects favorite state
-      const detail = demoMockService.getVideoById(videoId);
+      const detail = demoRepository.getVideoById(videoId);
       expect(detail.is_favorite).toBe(true);
       expect(
-        videoResponseSchema.safeParse({ success: true, data: detail }).success,
+        videoResponseSchema.safeParse({ success: true, data: detail }).success
       ).toBe(true);
 
       // Validate favorites list
-      const favList = demoMockService.getFavoriteVideos();
+      const favList = demoRepository.getFavoriteVideos();
       expect(favList.some((video) => video.id === videoId)).toBe(true);
       expect(
         favoritesListResponseSchema.safeParse({ success: true, data: favList })
-          .success,
+          .success
       ).toBe(true);
 
       // Unfavorite
-      demoMockService.removeFavoriteVideo(videoId);
-      expect(demoMockService.isFavoriteVideo(videoId)).toBe(false);
-      expect(demoMockService.getVideoById(videoId).is_favorite).toBe(false);
+      demoRepository.removeFavoriteVideo(videoId);
+      expect(demoRepository.isFavoriteVideo(videoId)).toBe(false);
+      expect(demoRepository.getVideoById(videoId).is_favorite).toBe(false);
     });
 
     it("handles favoriting and unfavoriting of creators correctly", () => {
       const creatorId = 1;
-      expect(demoMockService.isFavoriteCreator(creatorId)).toBe(false);
+      expect(demoRepository.isFavoriteCreator(creatorId)).toBe(false);
 
-      demoMockService.addFavoriteCreator(creatorId);
-      expect(demoMockService.isFavoriteCreator(creatorId)).toBe(true);
+      demoRepository.addFavoriteCreator(creatorId);
+      expect(demoRepository.isFavoriteCreator(creatorId)).toBe(true);
 
-      const detail = demoMockService.getCreatorById(creatorId);
+      const detail = demoRepository.getCreatorById(creatorId);
       expect(detail.is_favorite).toBe(true);
       expect(
-        creatorResponseSchema.safeParse({ success: true, data: detail })
-          .success,
+        creatorResponseSchema.safeParse({ success: true, data: detail }).success
       ).toBe(true);
 
-      demoMockService.removeFavoriteCreator(creatorId);
-      expect(demoMockService.isFavoriteCreator(creatorId)).toBe(false);
+      demoRepository.removeFavoriteCreator(creatorId);
+      expect(demoRepository.isFavoriteCreator(creatorId)).toBe(false);
     });
   });
 
-  describe("In-Memory Ratings", () => {
-    it("manages ratings without persistent storage", () => {
-      const rating = demoMockService.addRating(2, {
+  describe("SQLite Ratings", () => {
+    it("manages ratings in the isolated database", () => {
+      const rating = demoRepository.addRating(2, {
         rating: 4,
         comment: "Demo-only rating",
       });
 
-      expect(demoMockService.findRatingById(rating.id)?.rating).toBe(4);
+      expect(demoRepository.findRatingById(rating.id)?.rating).toBe(4);
       expect(
-        demoMockService
+        demoRepository
           .getRatingsForVideo(2)
-          .some((candidate: any) => candidate.id === rating.id),
+          .some((candidate: any) => candidate.id === rating.id)
       ).toBe(true);
 
-      const updated = demoMockService.updateRating(rating.id, {
+      const updated = demoRepository.updateRating(rating.id, {
         rating: 5,
-        comment: "Updated in memory",
+        comment: "Updated rating",
       });
       expect(updated?.rating).toBe(5);
-      expect(updated?.comment).toBe("Updated in memory");
+      expect(updated?.comment).toBe("Updated rating");
 
-      expect(demoMockService.deleteRating(rating.id)).toBe(true);
-      expect(demoMockService.findRatingById(rating.id)).toBeNull();
+      expect(demoRepository.deleteRating(rating.id)).toBe(true);
+      expect(demoRepository.findRatingById(rating.id)).toBeNull();
     });
   });
 
-  // --- Playlists In-Memory Tests ---
-  describe("In-Memory Playlists", () => {
+  // --- Playlists SQLite Tests ---
+  describe("SQLite Playlists", () => {
     it("manages playlists lifecycle and validates structures", () => {
       const userId = 42;
       const playlistName = "Epic Cinematics";
 
       // 1. Create playlist
-      const playlist = demoMockService.createPlaylist(userId, {
+      const playlist = demoRepository.createPlaylist(userId, {
         name: playlistName,
         description: "The best CGI game cinematics",
       });
       expect(playlist.name).toBe(playlistName);
       expect(
         playlistResponseSchema.safeParse({ success: true, data: playlist })
-          .success,
+          .success
       ).toBe(true);
 
       // 2. Add video
       const videoId1 = 1;
       const videoId2 = 3;
-      demoMockService.addVideoToPlaylist(playlist.id, userId, videoId1);
-      demoMockService.addVideoToPlaylist(playlist.id, userId, videoId2);
+      demoRepository.addVideoToPlaylist(playlist.id, userId, videoId1);
+      demoRepository.addVideoToPlaylist(playlist.id, userId, videoId2);
 
       // 3. Get playlist videos
-      const playlistVideos = demoMockService.getPlaylistVideos(
+      const playlistVideos = demoRepository.getPlaylistVideos(
         playlist.id,
-        userId,
+        userId
       );
       expect(playlistVideos.length).toBe(2);
       expect(
         playlistVideosResponseSchema.safeParse({
           success: true,
           data: playlistVideos,
-        }).success,
+        }).success
       ).toBe(true);
 
       // 4. Update and list playlists
-      const updated = demoMockService.updatePlaylist(playlist.id, userId, {
+      const updated = demoRepository.updatePlaylist(playlist.id, userId, {
         name: "Updated Name",
       });
       expect(updated.name).toBe("Updated Name");
 
-      const list = demoMockService.listPlaylists(userId);
+      const list = demoRepository.listPlaylists(userId);
       expect(list.length).toBe(1);
       expect(
         playlistListResponseSchema.safeParse({ success: true, data: list })
-          .success,
+          .success
       ).toBe(true);
 
       // 5. Remove video
-      demoMockService.removeVideoFromPlaylist(playlist.id, userId, videoId1);
-      const remainingVideos = demoMockService.getPlaylistVideos(
+      demoRepository.removeVideoFromPlaylist(playlist.id, userId, videoId1);
+      const remainingVideos = demoRepository.getPlaylistVideos(
         playlist.id,
-        userId,
+        userId
       );
       expect(remainingVideos.length).toBe(1);
       expect(remainingVideos[0].id).toBe(videoId2);
 
       // 6. Delete playlist
-      demoMockService.deletePlaylist(playlist.id, userId);
-      expect(() => demoMockService.getPlaylistById(playlist.id)).toThrow();
+      demoRepository.deletePlaylist(playlist.id, userId);
+      expect(() => demoRepository.getPlaylistById(playlist.id)).toThrow();
     });
   });
 
-  // --- Video Collections In-Memory Tests ---
-  describe("In-Memory Video Collections", () => {
+  // --- Video Collections SQLite Tests ---
+  describe("SQLite Video Collections", () => {
     it("manages video collections lifecycle and validates structures", () => {
       const input = {
         title: "Avatar Collection",
@@ -317,24 +320,24 @@ describe("Demo Mock Service Zod Schema Validation", () => {
       };
 
       // 1. Create collection
-      const collection = demoMockService.createCollection(input);
+      const collection = demoRepository.createCollection(input);
       expect(collection.title).toBe(input.title);
       expect(
         videoCollectionResponseSchema.safeParse({
           success: true,
           data: collection,
-        }).success,
+        }).success
       ).toBe(true);
 
       // 2. Add entry
-      const entry1 = demoMockService.addCollectionEntry(collection.id, {
+      const entry1 = demoRepository.addCollectionEntry(collection.id, {
         video_id: 1,
         entry_kind: "episode",
         sequence_number: 1,
         season_number: 1,
         episode_number: 1,
       });
-      demoMockService.addCollectionEntry(collection.id, {
+      demoRepository.addCollectionEntry(collection.id, {
         video_id: 3,
         entry_kind: "episode",
         sequence_number: 2,
@@ -344,34 +347,34 @@ describe("Demo Mock Service Zod Schema Validation", () => {
       expect(entry1.video_id).toBe(1);
 
       // 3. List entries
-      const entries = demoMockService.listCollectionEntries(collection.id);
+      const entries = demoRepository.listCollectionEntries(collection.id);
       expect(entries.length).toBe(2);
       expect(
         videoCollectionEntriesResponseSchema.safeParse({
           success: true,
           data: entries,
-        }).success,
+        }).success
       ).toBe(true);
 
       // 4. Neighbors and Contexts
-      const neighbors = demoMockService.getNeighborsByVideoId(3);
+      const neighbors = demoRepository.getNeighborsByVideoId(3);
       expect(neighbors).not.toBeNull();
       expect(neighbors!.previous).not.toBeNull();
       expect(neighbors!.previous!.video_id).toBe(1);
       expect(neighbors!.next).toBeNull();
 
-      const context = demoMockService.getCollectionContextByVideoId(1);
+      const context = demoRepository.getCollectionContextByVideoId(1);
       expect(context).not.toBeNull();
       expect(context!.collection_id).toBe(collection.id);
 
       // 5. Clean up entries and delete collection
-      demoMockService.removeCollectionEntry(collection.id, 1);
-      expect(demoMockService.listCollectionEntries(collection.id).length).toBe(
-        1,
+      demoRepository.removeCollectionEntry(collection.id, 1);
+      expect(demoRepository.listCollectionEntries(collection.id).length).toBe(
+        1
       );
 
-      demoMockService.deleteCollection(collection.id);
-      expect(() => demoMockService.getCollectionById(collection.id)).toThrow();
+      demoRepository.deleteCollection(collection.id);
+      expect(() => demoRepository.getCollectionById(collection.id)).toThrow();
     });
   });
 });

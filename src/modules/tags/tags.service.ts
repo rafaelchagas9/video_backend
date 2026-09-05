@@ -696,8 +696,8 @@ export class TagsService {
     if (env.DEMO_MODE) {
       const descendants = await this.getDescendants(tagId);
       const tagIds = [tagId, ...descendants.map((d) => d.id)];
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const videosObj = demoMockService.getVideos({ tagIds, limit: 100 });
+      const { demoRepository } = await import("@/database/demo/repository");
+      const videosObj = demoRepository.getVideos({ tagIds, limit: 100 });
       return videosObj.data as Video[];
     }
 
@@ -799,8 +799,8 @@ export class TagsService {
 
   async getTagsForVideo(videoId: number): Promise<Tag[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(videoId);
+      const { demoRepository } = await import("@/database/demo/repository");
+      const video = demoRepository.getVideoById(videoId);
       return video.tags || [];
     }
     const tags = await db.execute<{
@@ -833,10 +833,10 @@ export class TagsService {
   async getTagsForVideos(videoIds: number[]): Promise<Map<number, Tag[]>> {
     const grouped = new Map<number, Tag[]>();
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
+      const { demoRepository } = await import("@/database/demo/repository");
       for (const id of videoIds) {
         try {
-          const video = demoMockService.getVideoById(id);
+          const video = demoRepository.getVideoById(id);
           grouped.set(id, video.tags || []);
         } catch {
           // ignore

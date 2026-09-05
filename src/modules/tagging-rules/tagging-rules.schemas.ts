@@ -43,7 +43,7 @@ const taggingRuleSchema = z.object({
           "regex",
         ]),
         value: z.string(),
-      }),
+      })
     )
     .optional(),
   actions: z
@@ -62,7 +62,7 @@ const taggingRuleSchema = z.object({
         target_id: z.number().nullable(),
         target_name: z.string().nullable(),
         dynamic_value: z.string().nullable(),
-      }),
+      })
     )
     .optional(),
 });
@@ -86,55 +86,50 @@ export const listQuerySchema = z.object({
   include_disabled: z.coerce.boolean().optional().default(false),
 });
 
+const ruleConditionInputSchema = z.object({
+  condition_type: z.enum([
+    "path_pattern",
+    "file_pattern",
+    "duration_range",
+    "resolution",
+    "codec",
+    "file_size",
+  ]),
+  operator: z.enum([
+    "matches",
+    "equals",
+    "contains",
+    "gt",
+    "lt",
+    "gte",
+    "lte",
+    "regex",
+  ]),
+  value: z.string().min(1).max(1000),
+});
+
+const ruleActionInputSchema = z.object({
+  action_type: z.enum([
+    "add_tag",
+    "remove_tag",
+    "add_creator",
+    "remove_creator",
+    "add_studio",
+    "remove_studio",
+  ]),
+  target_id: z.number().int().positive().optional(),
+  target_name: z.string().optional(),
+  dynamic_value: z.string().optional(),
+});
+
 export const createTaggingRuleSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
   rule_type: z.enum(["path_match", "metadata_match", "manual"]),
   is_enabled: z.boolean().default(true),
   priority: z.number().int().default(0),
-  conditions: z
-    .array(
-      z.object({
-        condition_type: z.enum([
-          "path_pattern",
-          "file_pattern",
-          "duration_range",
-          "resolution",
-          "codec",
-          "file_size",
-        ]),
-        operator: z.enum([
-          "matches",
-          "equals",
-          "contains",
-          "gt",
-          "lt",
-          "gte",
-          "lte",
-          "regex",
-        ]),
-        value: z.string().min(1).max(1000),
-      }),
-    )
-    .optional(),
-  actions: z
-    .array(
-      z.object({
-        action_type: z.enum([
-          "add_tag",
-          "remove_tag",
-          "add_creator",
-          "remove_creator",
-          "add_studio",
-          "remove_studio",
-        ]),
-        target_id: z.number().int().positive().optional(),
-        target_name: z.string().optional(),
-        dynamic_value: z.string().optional(),
-      }),
-    )
-    .min(1)
-    .optional(),
+  conditions: z.array(ruleConditionInputSchema).optional(),
+  actions: z.array(ruleActionInputSchema).min(1).optional(),
 });
 
 export const updateTaggingRuleSchema = z.object({
@@ -143,48 +138,8 @@ export const updateTaggingRuleSchema = z.object({
   rule_type: z.enum(["path_match", "metadata_match", "manual"]).optional(),
   is_enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
-  conditions: z
-    .array(
-      z.object({
-        condition_type: z.enum([
-          "path_pattern",
-          "file_pattern",
-          "duration_range",
-          "resolution",
-          "codec",
-          "file_size",
-        ]),
-        operator: z.enum([
-          "matches",
-          "equals",
-          "contains",
-          "gt",
-          "lt",
-          "gte",
-          "lte",
-          "regex",
-        ]),
-        value: z.string().min(1).max(1000),
-      }),
-    )
-    .optional(),
-  actions: z
-    .array(
-      z.object({
-        action_type: z.enum([
-          "add_tag",
-          "remove_tag",
-          "add_creator",
-          "remove_creator",
-          "add_studio",
-          "remove_studio",
-        ]),
-        target_id: z.number().int().positive().optional(),
-        target_name: z.string().optional(),
-        dynamic_value: z.string().optional(),
-      }),
-    )
-    .optional(),
+  conditions: z.array(ruleConditionInputSchema).optional(),
+  actions: z.array(ruleActionInputSchema).optional(),
 });
 
 export const bulkDeleteSchema = z.object({
@@ -213,7 +168,7 @@ export const testRuleResponseSchema = z.object({
         file_path: z.string(),
         file_name: z.string(),
         matched_conditions: z.array(z.string()),
-      }),
+      })
     ),
   }),
 });

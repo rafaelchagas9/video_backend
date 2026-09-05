@@ -19,7 +19,6 @@ from vision_service.nudity import (
     NUDENET_640M_SHA256,
     NUDENET_640M_URL,
     SELECTED_NUDITY_LABELS,
-    NudeNet320Backend,
     NudeNetDetectorAdapter,
     NudeNetModelSpec,
     NudeNetOnnxBackend,
@@ -402,15 +401,15 @@ class NudeNetBackendTests(unittest.TestCase):
                 sha256=expected_hash,
                 source_url=None,
             )
-            with patch("vision_service.nudity.NUDENET_320N_SPEC", synthetic_spec):
-                backend = NudeNet320Backend(
-                    model_path=model_path,
-                    session_factory=session_factory,
-                    read_image=read_image,
-                    postprocess=postprocess,
-                    providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
-                )
-                results = backend.detect_batch([image(marker=1), image(marker=2)])
+            backend = NudeNetOnnxBackend(
+                model_spec=synthetic_spec,
+                model_path=model_path,
+                session_factory=session_factory,
+                read_image=read_image,
+                postprocess=postprocess,
+                providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
+            )
+            results = backend.detect_batch([image(marker=1), image(marker=2)])
 
         self.assertEqual(results, [[], []])
         self.assertEqual(
@@ -476,29 +475,29 @@ class NudeNetBackendTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             model_path = Path(directory) / "320n.onnx"
             model_path.write_bytes(model_contents)
-            with patch("vision_service.nudity.NUDENET_320N_SPEC", synthetic_spec):
-                backend = NudeNet320Backend(
-                    model_path=model_path,
-                    session_factory=lambda *_a, **_k: FakeSession(),
-                    read_image=read_image,
-                    postprocess=postprocess,
-                    providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
-                    batch_size=16,
-                )
-                for count in (1, 3, 16):
-                    run_batches.clear()
-                    seen_predictions.clear()
-                    results = backend.detect_batch([image() for _ in range(count)])
-                    self.assertEqual(len(results), count)
-                    self.assertEqual(run_batches, [16])
-                    # Each item is postprocessed with its own row, padding discarded.
-                    self.assertEqual(seen_predictions, [float(i) for i in range(count)])
-
-                # A batch larger than the fixed size splits into fixed-size runs.
+            backend = NudeNetOnnxBackend(
+                model_spec=synthetic_spec,
+                model_path=model_path,
+                session_factory=lambda *_a, **_k: FakeSession(),
+                read_image=read_image,
+                postprocess=postprocess,
+                providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
+                batch_size=16,
+            )
+            for count in (1, 3, 16):
                 run_batches.clear()
-                results = backend.detect_batch([image() for _ in range(17)])
-                self.assertEqual(len(results), 17)
-                self.assertEqual(run_batches, [16, 16])
+                seen_predictions.clear()
+                results = backend.detect_batch([image() for _ in range(count)])
+                self.assertEqual(len(results), count)
+                self.assertEqual(run_batches, [16])
+                # Each item is postprocessed with its own row, padding discarded.
+                self.assertEqual(seen_predictions, [float(i) for i in range(count)])
+
+            # A batch larger than the fixed size splits into fixed-size runs.
+            run_batches.clear()
+            results = backend.detect_batch([image() for _ in range(17)])
+            self.assertEqual(len(results), 17)
+            self.assertEqual(run_batches, [16, 16])
 
     def test_backend_falls_back_to_cpu_only_when_gpu_is_optional(self) -> None:
         model_contents = b"synthetic-model-placeholder"
@@ -530,14 +529,14 @@ class NudeNetBackendTests(unittest.TestCase):
                 sha256=expected_hash,
                 source_url=None,
             )
-            with patch("vision_service.nudity.NUDENET_320N_SPEC", synthetic_spec):
-                backend = NudeNet320Backend(
-                    model_path=model_path,
-                    session_factory=session_factory,
-                    read_image=lambda *_args: (),
-                    postprocess=lambda *_args: [],
-                    require_gpu=False,
-                )
+            backend = NudeNetOnnxBackend(
+                model_spec=synthetic_spec,
+                model_path=model_path,
+                session_factory=session_factory,
+                read_image=lambda *_args: (),
+                postprocess=lambda *_args: [],
+                require_gpu=False,
+            )
 
         self.assertEqual(
             requested,
@@ -566,15 +565,15 @@ class NudeNetBackendTests(unittest.TestCase):
                 sha256=expected_hash,
                 source_url=None,
             )
-            with patch("vision_service.nudity.NUDENET_320N_SPEC", synthetic_spec):
-                with self.assertRaisesRegex(RuntimeError, "GPU unavailable"):
-                    NudeNet320Backend(
-                        model_path=model_path,
-                        session_factory=session_factory,
-                        read_image=lambda *_args: (),
-                        postprocess=lambda *_args: [],
-                        require_gpu=True,
-                    )
+            with self.assertRaisesRegex(RuntimeError, "GPU unavailable"):
+                NudeNetOnnxBackend(
+                    model_spec=synthetic_spec,
+                    model_path=model_path,
+                    session_factory=session_factory,
+                    read_image=lambda *_args: (),
+                    postprocess=lambda *_args: [],
+                    require_gpu=True,
+                )
 
         self.assertEqual(
             requested,
@@ -608,15 +607,15 @@ class NudeNetBackendTests(unittest.TestCase):
                 sha256=expected_hash,
                 source_url=None,
             )
-            with patch("vision_service.nudity.NUDENET_320N_SPEC", synthetic_spec):
-                with self.assertRaisesRegex(RuntimeError, "MIGraphXExecutionProvider"):
-                    NudeNet320Backend(
-                        model_path=model_path,
-                        session_factory=session_factory,
-                        read_image=lambda *_args: (),
-                        postprocess=lambda *_args: [],
-                        require_gpu=True,
-                    )
+            with self.assertRaisesRegex(RuntimeError, "MIGraphXExecutionProvider"):
+                NudeNetOnnxBackend(
+                    model_spec=synthetic_spec,
+                    model_path=model_path,
+                    session_factory=session_factory,
+                    read_image=lambda *_args: (),
+                    postprocess=lambda *_args: [],
+                    require_gpu=True,
+                )
 
 
 class NuditySettingsTests(unittest.TestCase):

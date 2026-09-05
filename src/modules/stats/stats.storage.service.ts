@@ -1,3 +1,4 @@
+import { snapshotHistoryQuery, snapshotDateToISOString } from "./stats.snapshots";
 import { existsSync } from "fs";
 import { readdir, stat as statAsync } from "fs/promises";
 import { resolve, join } from "path";
@@ -180,35 +181,11 @@ export class StorageStatsService {
     days: number = 30,
     limit: number = 100,
   ): Promise<StorageSnapshot[]> {
-    // For multi-day ranges, collapse to one snapshot per day (the latest of
-    // each day) so a long range isn't truncated by intraday snapshot volume.
-    // Single-day ranges keep full intraday granularity. Rows are always
-    // returned in ascending chronological order for charting.
-    const query =
-      days <= 1
-        ? sql`
-            SELECT * FROM (
-              SELECT * FROM stats_storage_snapshots
-              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-              ORDER BY created_at DESC
-              LIMIT ${limit}
-            ) t
-            ORDER BY created_at ASC
-          `
-        : sql`
-            SELECT * FROM (
-              SELECT DISTINCT ON (date_trunc('day', created_at)) *
-              FROM stats_storage_snapshots
-              WHERE created_at >= NOW() - INTERVAL '1 day' * ${days}
-              ORDER BY date_trunc('day', created_at) DESC, created_at DESC
-              LIMIT ${limit}
-            ) t
-            ORDER BY created_at ASC
-          `;
+    const query = snapshotHistoryQuery("stats_storage_snapshots", days, limit);
 
     const rows = await db.execute(query);
 
-    return (rows as any[]).map((row) => this.mapToApiFormat(row));
+    return rows.map((row) => this.mapToApiFormat(row));
   }
 
   /**
@@ -234,13 +211,6 @@ export class StorageStatsService {
    * Map Drizzle result to API format
    */
   private mapToApiFormat(row: any): StorageSnapshot {
-    // Helper to convert date to ISO string
-    const toISOString = (val: unknown): string => {
-      if (val instanceof Date) return val.toISOString();
-      if (typeof val === "string") return val;
-      return new Date().toISOString();
-    };
-
     // Parse directory breakdown JSON if it's a string
     let directoryBreakdown = null;
     const rawBreakdown = row.directory_breakdown ?? row.directoryBreakdown;
@@ -286,7 +256,7 @@ export class StorageStatsService {
         row.database_size_bytes ?? row.databaseSizeBytes ?? 0,
       ),
       directory_breakdown: directoryBreakdown,
-      created_at: toISOString(row.created_at ?? row.createdAt),
+      created_at: snapshotDateToISOString(row.created_at ?? row.createdAt),
     };
   }
 }

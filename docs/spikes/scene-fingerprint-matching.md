@@ -165,8 +165,8 @@ An exact fingerprint result ranks above text candidates but creates ordinary
 enrichment suggestions. Zero matches fall back to text. Multiple matches remain
 separate candidates with duration differences and provider provenance visible.
 Nothing is applied automatically. Accepted studio relationships must go through
-the canonical assignment invariant delivered by Plan 005 rather than writing a
-legacy scalar independently.
+the canonical [studio assignment service](../../src/modules/studios/studio-assignment.service.ts)
+rather than writing a legacy scalar independently.
 
 ### Demo behavior
 

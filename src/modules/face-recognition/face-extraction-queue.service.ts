@@ -530,10 +530,3 @@ export function getFaceExtractionQueue(): FaceExtractionQueueService {
   }
   return queueInstance;
 }
-
-/**
- * For testing - reset singleton
- */
-export function resetFaceExtractionQueue(): void {
-  queueInstance = null;
-}

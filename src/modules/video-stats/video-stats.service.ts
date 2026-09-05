@@ -32,8 +32,8 @@ interface RecordWatchResult {
 
 export class VideoStatsService {
   private async getDemoVideo(videoId: number) {
-    const { demoMockService } = await import("@/utils/demo-mock");
-    return demoMockService.getVideoById(videoId);
+    const { demoRepository } = await import("@/database/demo/repository");
+    return demoRepository.getVideoById(videoId);
   }
 
   private mapDemoStats(userId: number, video: any): VideoStats {
@@ -414,8 +414,8 @@ export class VideoStatsService {
 
     // Demo mode is an isolation boundary: never join real watch or video rows.
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const videos = demoMockService.getVideos({ limit: 100 }).data;
+      const { demoRepository } = await import("@/database/demo/repository");
+      const videos = demoRepository.getVideos({ limit: 100 }).data;
       const entries = videos
         .map((video: any): WatchHistoryEntry | null => {
           const stats = this.mapDemoStats(userId, video);

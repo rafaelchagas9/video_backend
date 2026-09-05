@@ -76,8 +76,7 @@ export class VideosService {
     id: number
   ): Promise<{ file_path: string; is_available: boolean }> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(id);
+      const video = demoRepository.getVideoById(id);
       return {
         file_path: video.file_path,
         is_available: video.is_available,
@@ -124,8 +123,7 @@ export class VideosService {
     include: VideoInclude[] = []
   ): Promise<Video> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const video = demoMockService.getVideoById(id);
+      const video = demoRepository.getVideoById(id);
       const response = { ...video } as Video;
       if (include.includes("artwork")) {
         const { artworkService } =
@@ -304,8 +302,7 @@ export class VideosService {
     options: RandomVideoOptions = {}
   ): Promise<Video | Video[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      const videosObj = demoMockService.getVideos({
+      const videosObj = demoRepository.getVideos({
         ...options,
         limit: 100,
       });

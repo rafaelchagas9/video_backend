@@ -143,8 +143,7 @@ export class CreatorsRelationshipsService {
 
   async getCreatorsForVideo(videoId: number): Promise<Creator[]> {
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
-      return demoMockService.getVideoById(videoId).creators as Creator[];
+      return demoRepository.getVideoById(videoId).creators as Creator[];
     }
 
     const creators = await db
@@ -184,12 +183,11 @@ export class CreatorsRelationshipsService {
   ): Promise<Map<number, Creator[]>> {
     const grouped = new Map<number, Creator[]>();
     if (env.DEMO_MODE) {
-      const { demoMockService } = await import("@/utils/demo-mock");
       for (const videoId of videoIds) {
         try {
           grouped.set(
             videoId,
-            demoMockService.getVideoById(videoId).creators as Creator[]
+            demoRepository.getVideoById(videoId).creators as Creator[]
           );
         } catch {
           // Missing demo videos simply do not contribute a relationship.

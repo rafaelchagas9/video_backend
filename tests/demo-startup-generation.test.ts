@@ -6,8 +6,8 @@ import {
   expect,
   it,
 } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { join } from "path";
 
 process.env.NODE_ENV = "test";
 process.env.POSTGRES_USER ||= "demo-startup-test";
@@ -138,28 +138,5 @@ describe("demo startup and generation contracts", () => {
 
     expect(() => demo.importDemoJsonFile()).toThrow(expectedJson);
     expect(() => demo.importDemoArtworkManifestFile()).toThrow(expectedArtwork);
-  });
-
-  it("keeps fresh generation independent from JSON and refreshes its baseline", () => {
-    const downloader = readFileSync(
-      resolve(process.cwd(), "scripts/download-demo-media.ts"),
-      "utf8"
-    );
-    const artwork = readFileSync(
-      resolve(process.cwd(), "scripts/generate-demo-artwork.ts"),
-      "utf8"
-    );
-
-    expect(downloader).toContain("process.env.DEMO_ASSETS_DIR");
-    expect(downloader).toContain("hasDemoSeed()");
-    expect(downloader).toContain("createDemoBaselineSnapshot()");
-    expect(downloader).not.toContain("importDemoJsonFile");
-    expect(artwork).toContain("process.env.DEMO_ASSETS_DIR");
-    expect(artwork).toContain(
-      "createBaselineSnapshot: createDemoBaselineSnapshot"
-    );
-    expect(artwork).toContain(".artwork-staging-");
-    expect(artwork).toContain("commitStagedDemoArtwork");
-    expect(artwork).not.toContain("rm(OUTPUT_ROOT");
   });
 });
