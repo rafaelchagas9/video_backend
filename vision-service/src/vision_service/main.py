@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from .body_limit import VisionAnalyzeBodyLimitMiddleware
 from .config import get_settings
+from .compiled_cache import configure_compiled_cache
 from .routes import detect_router, health_router, v1_router
 from .runtime import VisionRuntime
 
@@ -57,6 +58,8 @@ def create_app(runtime: VisionRuntime | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     setup_logging()
     settings = runtime.settings if runtime is not None else get_settings()
+    if runtime is None:
+        configure_compiled_cache(settings)
 
     app = FastAPI(
         title="Vision Inference Service",

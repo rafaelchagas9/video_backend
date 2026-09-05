@@ -110,15 +110,23 @@ const envSchema = z.object({
   STORYBOARD_TILE_HEIGHT: z.string().default("108").transform(Number),
   STORYBOARD_INTERVAL_SECONDS: z.string().default("6").transform(Number),
   STORYBOARD_FORMAT: z.enum(["webp", "jpg"]).default("webp"),
-  STORYBOARD_RAM_COPY_MAX_MB: z.string().default("512").transform(Number),
   STORYBOARD_MAX_TILES: z.string().default("300").transform(Number),
-  STORYBOARD_READAHEAD_MAX_MB: z.string().default("1024").transform(Number),
   STORYBOARD_QUALITY: z
     .string()
     .default("70")
     .transform(Number)
     .pipe(z.number().min(1).max(100)),
-  STORYBOARD_MAX_CONCURRENT: z.string().default("1").transform(Number),
+  STORYBOARD_MAX_CONCURRENT: z
+    .string()
+    .default("1")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(8)),
+  STORYBOARD_SAMPLING: z.enum(["auto", "precise", "keyframes"]).default("auto"),
+  STORYBOARD_MAX_KEYFRAME_DRIFT_SECONDS: z
+    .string()
+    .default("5")
+    .transform(Number)
+    .pipe(z.number().positive().max(60)),
 
   // File Scanning
   DEFAULT_SCAN_INTERVAL_MINUTES: z.string().default("30").transform(Number),
@@ -189,6 +197,11 @@ const envSchema = z.object({
     blankStringAsUndefined,
     z.string().default(resolvedVisionServiceEnvironment.secret)
   ),
+  CONTENT_ANALYSIS_REFINEMENT_CACHE_MB: z
+    .string()
+    .default("256")
+    .transform(Number)
+    .pipe(z.number().int().min(0).max(1024)),
   CONTENT_ANALYSIS_VISION_TIMEOUT_MS: z
     .string()
     .default("120000")

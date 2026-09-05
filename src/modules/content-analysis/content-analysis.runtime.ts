@@ -8,7 +8,10 @@ import {
   PostgresDurableJobStore,
 } from "@/modules/durable-jobs";
 import { eventsService } from "@/modules/events/events.service";
-import { NudityContentAnalysisProcessor } from "./content-analysis.processor";
+import {
+  NudityContentAnalysisProcessor,
+  DEFAULT_NUDITY_PROCESSOR_CONFIG,
+} from "./content-analysis.processor";
 import { ContentAnalysisHandler } from "./content-analysis.handler";
 import { PostgresContentAnalysisRunStore } from "./content-analysis.postgres.store";
 import { ContentAnalysisService } from "./content-analysis.service";
@@ -98,6 +101,11 @@ export class ContentAnalysisRuntime {
     const loadCurrentRevisions = async () =>
       contentAnalysisRevisionsFromCapabilities(await inference.capabilities());
     const processor = new NudityContentAnalysisProcessor({
+      config: {
+        ...DEFAULT_NUDITY_PROCESSOR_CONFIG,
+        refinementCacheMaxBytes:
+          env.CONTENT_ANALYSIS_REFINEMENT_CACHE_MB * 1024 * 1024,
+      },
       sourceResolver,
       loadSourceCandidate,
       extractor: new PtsAwareChunkExtractor({

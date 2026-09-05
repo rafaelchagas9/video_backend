@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { unlink, mkdir, appendFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/config/env";
+import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import { logger } from "@/utils/logger";
 import type { Video } from "@/modules/videos/videos.types";
 import type { ConversionPreset, CodecType } from "@/config/presets";
@@ -102,6 +103,39 @@ export class FfmpegService {
    * Run FFmpeg with VAAPI GPU acceleration
    */
   async runConversion(
+    jobId: number,
+    video: Video,
+    inputPath: string,
+    outputPath: string,
+    preset: ConversionPreset,
+    targetResolution: string | null,
+    onProgress?: (progress: number) => void,
+    signal: AbortSignal = new AbortController().signal
+  ): Promise<FfmpegRunResult> {
+    if (signal.aborted) throw new ConversionCancelledError();
+    return mediaWorkScheduler
+      .run(
+        "background",
+        () =>
+          this.runWithFallbacks(
+            jobId,
+            video,
+            inputPath,
+            outputPath,
+            preset,
+            targetResolution,
+            onProgress,
+            signal
+          ),
+        signal
+      )
+      .catch((error: unknown) => {
+        if (signal.aborted) throw new ConversionCancelledError();
+        throw error;
+      });
+  }
+
+  private async runWithFallbacks(
     jobId: number,
     video: Video,
     inputPath: string,
@@ -289,7 +323,7 @@ export class FfmpegService {
 
     const scaleFilter = this.getScaleFilter(
       targetResolution,
-      encodingMode === "hw"
+      encodingMode !== "full_sw"
     );
 
     if (encodingMode === "hw") {

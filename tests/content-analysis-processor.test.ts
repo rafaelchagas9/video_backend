@@ -226,9 +226,16 @@ function processor(
   inference: VisualInferencePort,
   readFrame: (path: string) => Promise<Blob> = async () =>
     new Blob(["synthetic-frame"], { type: "image/png" }),
-  expectedRun: ContentAnalysisRun = run
+  expectedRun: ContentAnalysisRun = run,
+  predictionCacheEntries = 16_384,
+  refinementCacheMaxBytes = 256 * 1024 * 1024
 ) {
   return new NudityContentAnalysisProcessor({
+    config: {
+      ...DEFAULT_NUDITY_PROCESSOR_CONFIG,
+      predictionCacheEntries,
+      refinementCacheMaxBytes,
+    },
     sourceResolver: {
       async resolve(candidate) {
         return {
@@ -361,10 +368,14 @@ describe("NudityContentAnalysisProcessor", () => {
     });
     const state = context();
 
-    const result = await processor(extractor, inference).process(
-      run,
-      state.value
-    );
+    // This fixture intentionally returns different scores at the same PTS in
+    // each pass, so represent the differing image bytes explicitly.
+    let imageVersion = 0;
+    const result = await processor(
+      extractor,
+      inference,
+      async () => new Blob([String(imageVersion++)])
+    ).process(run, state.value);
 
     expect(
       inference.requests.every((request) => request.items.length <= 2)
@@ -499,10 +510,14 @@ describe("NudityContentAnalysisProcessor", () => {
       id.includes(":coarse:") ? 0.99 : null
     );
 
-    const result = await processor(extractor, inference).process(
-      run,
-      context().value
-    );
+    // This fixture intentionally returns different scores at the same PTS in
+    // each pass, so represent the differing image bytes explicitly.
+    let imageVersion = 0;
+    const result = await processor(
+      extractor,
+      inference,
+      async () => new Blob([String(imageVersion++)])
+    ).process(run, context().value);
 
     expect(result.events).toEqual([]);
   });
@@ -712,5 +727,141 @@ describe("NudityContentAnalysisProcessor", () => {
     expect(await runStore.listObservationChunks(started.run.id)).toHaveLength(
       2
     );
+  });
+});
+
+it("reuses matching positive and negative predictions without changing observations or events", async () => {
+  const execute = async (limit: number, differentImages = false) => {
+    const extractor = new RecordingExtractor(
+      [chunk(0, 0, 12, [1, 2, 3], [])],
+      [chunk(0, 0, 8, [1, 2, 3, 4], [])]
+    );
+    const inference = new FindingInference((_id, timestamp) =>
+      timestamp === 2 ? null : 0.8
+    );
+    const state = context();
+    let version = 0;
+    const subject = processor(
+      extractor,
+      inference,
+      async () =>
+        new Blob([differentImages ? String(version++) : "same-pixels"]),
+      run,
+      limit
+    );
+    const result = await subject.process(run, state.value);
+    const inferredFrames = inference.requests.reduce(
+      (sum, batch) => sum + batch.items.length,
+      0
+    );
+    return {
+      result,
+      chunks: [...state.staged.values()],
+      inferredFrames,
+      subject,
+      inference,
+    };
+  };
+  const baseline = await execute(0);
+  const cached = await execute(100);
+  expect(cached.result).toEqual(baseline.result);
+  expect(cached.chunks).toEqual(baseline.chunks);
+  expect(baseline.inferredFrames).toBe(7);
+  expect(cached.inferredFrames).toBe(4);
+  expect((await execute(100, true)).inferredFrames).toBe(7);
+  expect((await execute(1)).inferredFrames).toBeGreaterThan(
+    cached.inferredFrames
+  );
+  // A new run cannot inherit another source or model's predictions.
+  await cached.subject.process(run, context().value);
+  expect(
+    cached.inference.requests.reduce(
+      (sum, batch) => sum + batch.items.length,
+      0
+    )
+  ).toBe(8);
+});
+
+it("uses prefetched refinement frames, falls back after eviction, and resumes without an in-memory cache", async () => {
+  const execute = async (budget: number) => {
+    const coarse = chunk(0, 0, 12, [0, 2, 4, 6, 8, 10], []);
+    coarse.prefetchedChunks = [
+      chunk(
+        0,
+        0,
+        12,
+        Array.from({ length: 12 }, (_, i) => i),
+        []
+      ),
+    ];
+    const extractor = new RecordingExtractor(
+      [coarse],
+      [coarse.prefetchedChunks[0]!]
+    );
+    const inference = new FindingInference(() => 0.8);
+    const state = context();
+    const subject = processor(
+      extractor,
+      inference,
+      async () => new Blob(["same-pixels"]),
+      run,
+      100,
+      budget
+    );
+    const result = await subject.process(run, state.value);
+    return { result, state, extractor, subject };
+  };
+  const original = await execute(0);
+  const cached = await execute(1_000);
+  expect(cached.result).toEqual(original.result);
+  expect([...cached.state.staged.values()]).toEqual([
+    ...original.state.staged.values(),
+  ]);
+  expect(cached.extractor.requests).toHaveLength(1);
+  expect(original.extractor.requests).toHaveLength(2);
+  const evicted = await execute(1);
+  expect(evicted.extractor.requests).toHaveLength(2);
+  expect(evicted.result).toEqual(original.result);
+  const resumed = context(
+    [...cached.state.staged.values()].filter((part) => part.phase === "coarse"),
+    {
+      version: 1,
+      phase: "refining",
+      scannedSeconds: 12,
+      sampledFrames: 6,
+      positiveFrames: 6,
+      cursor: { chunkIndex: 0 },
+    }
+  );
+  expect(await cached.subject.process(run, resumed.value)).toEqual(
+    cached.result
+  );
+  expect(cached.extractor.requests.at(-1)?.windows).toEqual([
+    { startSeconds: 0, endSeconds: 12 },
+  ]);
+});
+
+it("decodes shifted refinement windows instead of substituting nearby cached timestamps", async () => {
+  const coarse = chunk(0, 0, 12, [0, 2, 4, 6, 8, 10], []);
+  coarse.prefetchedChunks = [
+    chunk(0, 0, 12, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], []),
+  ];
+  const extractor = new RecordingExtractor(
+    [coarse],
+    [chunk(0, 2, 12, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [])]
+  );
+  const state = context();
+  await processor(
+    extractor,
+    new FindingInference((_id, pts) => (pts === 6 || pts === 8 ? 0.8 : null))
+  ).process(run, state.value);
+  expect(extractor.requests).toHaveLength(2);
+  expect(extractor.requests[1]?.windows).toEqual([
+    { startSeconds: 2, endSeconds: 12 },
+  ]);
+  expect(state.staged.get("refining:0")).toMatchObject({
+    startSeconds: 2,
+    endSeconds: 12,
+    sampledFrames: 10,
   });
 });

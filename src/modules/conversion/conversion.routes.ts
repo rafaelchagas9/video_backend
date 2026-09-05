@@ -8,8 +8,10 @@ import { randomUUID } from "crypto";
 import { NotFoundError } from "@/utils/errors";
 import { markRouteDeprecated } from "@/utils/api-deprecation";
 import { env } from "@/config/env";
+import { idParamSchema } from "@/utils/validation";
 import {
   createConversionJobSchema,
+  conversionPreflightSchema,
   conversionJobResponseSchema,
   listConversionJobsResponseSchema,
   listPresetsResponseSchema,
@@ -84,6 +86,34 @@ export async function videoConversionRoutes(fastify: FastifyInstance) {
 
   // All routes require authentication
   app.addHook("preHandler", authenticateUser);
+
+  app.get(
+    "/:id/conversion-estimate",
+    {
+      schema: {
+        tags: ["conversion"],
+        summary: "Estimate conversion savings before encoding",
+        description:
+          "Uses the current encoder plan and compatible conversion history. Does not start a job or modify media. Compatibility conversions remain available even when savings are unlikely.",
+        params: idParamSchema,
+        querystring: z.object({ preset: z.string().min(1) }),
+        response: {
+          200: z.object({
+            success: z.literal(true),
+            data: conversionPreflightSchema,
+          }),
+        },
+      },
+    },
+    async (request, reply) =>
+      reply.send({
+        success: true,
+        data: await conversionService.estimate(
+          request.params.id,
+          request.query.preset
+        ),
+      })
+  );
 
   /**
    * Create a conversion job for a video

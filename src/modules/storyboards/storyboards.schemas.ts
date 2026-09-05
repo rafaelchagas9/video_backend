@@ -10,6 +10,7 @@ export const generateStoryboardBodySchema = z
     tileWidth: z.number().min(64).max(512).optional(),
     tileHeight: z.number().min(36).max(288).optional(),
     intervalSeconds: z.number().min(1).max(60).optional(),
+    sampling: z.enum(["auto", "precise", "keyframes"]).optional(),
   })
   .optional();
 

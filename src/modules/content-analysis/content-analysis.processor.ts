@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import type { SystemBookmarkCategoryKey } from "@/modules/bookmarks/bookmark-categories.constants";
@@ -11,6 +13,14 @@ import type {
   ContentAnalysisSourceSnapshotResolver,
   ResolvedContentAnalysisSource,
 } from "./content-analysis.source-resolver";
+import {
+  buildChunkSpecs,
+  type PtsAwareExtractionInput,
+} from "./content-analysis.pts-extractor";
+import {
+  RefinementFrameCache,
+  type BufferedAnalysisFrame,
+} from "./content-analysis.frame-cache";
 import type {
   ContentAnalysisChunkExtractor,
   ExtractedContentAnalysisChunk,
@@ -50,11 +60,7 @@ const SKIPPABLE_ITEM_ERROR_CODES = new Set([
 ]);
 const MULTIPART_OVERHEAD_RESERVE_BYTES = 64 * 1024;
 
-interface BufferedAnalysisFrame {
-  index: number;
-  ptsSeconds: number;
-  image: Blob;
-}
+type PredictionCache = Map<string, readonly ContentAnalysisObservation[]>;
 
 export interface NudityProcessorProfileConfig {
   coarseIntervalSeconds: number;
@@ -81,6 +87,10 @@ export interface NudityContentAnalysisProcessorConfig {
   chunkDurationSeconds: number;
   refinementChunkDurationSeconds: number;
   maxRefinementWindows: number;
+  /** Run-local cache of successful predictions; 0 disables reuse for comparisons. */
+  predictionCacheEntries?: number;
+  /** Bounded run-local refinement images; 0 keeps the original two-pass extraction. */
+  refinementCacheMaxBytes?: number;
   maxBatchItems: number;
   maxFrameDimension: number;
   refinementWindowSeconds: number;
@@ -239,6 +249,10 @@ export class NudityContentAnalysisProcessor {
     context: ContentAnalysisProcessorContext
   ): Promise<{ events: ReturnType<typeof condenseNudityFindings> }> {
     try {
+      const predictions: PredictionCache = new Map();
+      const frameCache = new RefinementFrameCache(
+        this.config.refinementCacheMaxBytes ?? 256 * 1024 * 1024
+      );
       const source = await this.resolveSource(run, context.signal);
       const capability = await this.loadCapability(run, context.signal);
       const profile = this.config.profiles[run.profile];
@@ -258,6 +272,15 @@ export class NudityContentAnalysisProcessor {
           source,
           context,
           capability,
+          predictions,
+          frameCache,
+          prefetchRefinement: usesRefinement
+            ? {
+                sampleIntervalSeconds: profile.refinementIntervalSeconds!,
+                chunkDurationSeconds:
+                  this.config.refinementChunkDurationSeconds,
+              }
+            : undefined,
           phase: "coarse",
           progressPhase: "analyzing",
           sampleIntervalSeconds: profile.coarseIntervalSeconds,
@@ -296,6 +319,8 @@ export class NudityContentAnalysisProcessor {
             source,
             context,
             capability,
+            predictions,
+            frameCache,
             phase: "refining",
             progressPhase: "refining",
             windows: refinementWindows,
@@ -405,7 +430,57 @@ export class NudityContentAnalysisProcessor {
     return capability;
   }
 
+  private async *extractChunks(
+    request: PtsAwareExtractionInput,
+    frameCache: RefinementFrameCache,
+    phase: ContentAnalysisObservationChunk["phase"],
+    signal: AbortSignal
+  ): AsyncGenerator<{
+    chunk: ExtractedContentAnalysisChunk;
+    frames?: BufferedAnalysisFrame[];
+  }> {
+    if (phase !== "refining" || frameCache.size === 0) {
+      for await (const chunk of this.dependencies.extractor.extract(
+        request,
+        signal
+      ))
+        yield { chunk };
+      return;
+    }
+    const specs = buildChunkSpecs(request).slice(request.startChunkIndex ?? 0);
+    for (const spec of specs) {
+      throwIfAborted(signal);
+      const frames = frameCache.take(
+        spec.startSeconds,
+        spec.endSeconds,
+        request.sampleIntervalSeconds!
+      );
+      if (frames !== undefined) {
+        yield {
+          chunk: { ...spec, frames: [], dispose: async () => {} },
+          frames,
+        };
+        continue;
+      }
+      // An evicted or differently aligned window follows the original decoder path.
+      for await (const chunk of this.dependencies.extractor.extract(
+        {
+          ...request,
+          windows: [
+            { startSeconds: spec.startSeconds, endSeconds: spec.endSeconds },
+          ],
+          startChunkIndex: 0,
+        },
+        signal
+      ))
+        yield { chunk: { ...chunk, chunkIndex: spec.chunkIndex } };
+    }
+  }
+
   private async extractPass(input: {
+    predictions: PredictionCache;
+    frameCache: RefinementFrameCache;
+    prefetchRefinement?: PtsAwareExtractionInput["prefetchRefinement"];
     run: ContentAnalysisRun;
     source: ResolvedContentAnalysisSource;
     context: ContentAnalysisProcessorContext;
@@ -418,7 +493,12 @@ export class NudityContentAnalysisProcessor {
     keyframesOnly?: boolean;
     chunkDurationSeconds?: number;
   }): Promise<void> {
-    const iterable = this.dependencies.extractor.extract(
+    const passAbort = new AbortController();
+    const extractionSignal = AbortSignal.any([
+      input.context.signal,
+      passAbort.signal,
+    ]);
+    const iterable = this.extractChunks(
       {
         filePath: input.source.filePath,
         durationSeconds: input.run.sourceDurationSeconds,
@@ -432,8 +512,13 @@ export class NudityContentAnalysisProcessor {
         sampleIntervalSeconds: input.sampleIntervalSeconds,
         maxFrameDimension: this.config.maxFrameDimension,
         keyframesOnly: input.keyframesOnly ?? false,
+        ...(input.frameCache.maxBytes > 0 && input.prefetchRefinement
+          ? { prefetchRefinement: input.prefetchRefinement }
+          : {}),
       },
-      input.context.signal
+      input.frameCache,
+      input.phase,
+      extractionSignal
     );
     const iterator = iterable[Symbol.asyncIterator]();
     try {
@@ -441,16 +526,33 @@ export class NudityContentAnalysisProcessor {
       for (;;) {
         const step = await pending;
         if (step.done) break;
-        const chunk = step.value;
+        const { chunk } = step.value;
         let frames: BufferedAnalysisFrame[];
         try {
-          frames = await Promise.all(
-            chunk.frames.map(async (frame) => ({
-              index: frame.index,
-              ptsSeconds: frame.ptsSeconds,
-              image: await this.readFrame(frame.path),
-            }))
-          );
+          frames =
+            step.value.frames ??
+            (await Promise.all(
+              chunk.frames.map(async (frame) => ({
+                index: frame.index,
+                ptsSeconds: frame.ptsSeconds,
+                image: await this.readFrame(frame.path),
+              }))
+            ));
+          for (const prefetched of chunk.prefetchedChunks ?? []) {
+            const denseFrames = await Promise.all(
+              prefetched.frames.map(async (frame) => ({
+                index: frame.index,
+                ptsSeconds: frame.ptsSeconds,
+                image: await this.readFrame(frame.path),
+              }))
+            );
+            input.frameCache.put(
+              prefetched.startSeconds,
+              prefetched.endSeconds,
+              input.prefetchRefinement!.sampleIntervalSeconds,
+              denseFrames
+            );
+          }
         } finally {
           await chunk.dispose();
         }
@@ -477,7 +579,8 @@ export class NudityContentAnalysisProcessor {
           chunk,
           frames,
           input.capability,
-          input.context.signal
+          input.context.signal,
+          input.predictions
         );
         await input.context.stageObservationChunk(observationChunk);
         const staged = await input.context.loadObservationChunks();
@@ -493,7 +596,8 @@ export class NudityContentAnalysisProcessor {
         });
       }
     } finally {
-      await iterator.return?.();
+      passAbort.abort();
+      await iterator.return?.(undefined);
     }
   }
 
@@ -506,9 +610,18 @@ export class NudityContentAnalysisProcessor {
     >,
     frames: readonly BufferedAnalysisFrame[],
     capability: VisionCapability,
-    signal: AbortSignal
+    signal: AbortSignal,
+    predictions: PredictionCache
   ): Promise<ContentAnalysisObservationChunk> {
-    const findings: ContentAnalysisObservation[] = [];
+    const observations = new Map<
+      string,
+      readonly ContentAnalysisObservation[]
+    >();
+    const cacheKeys = new Map<string, string>();
+    const cacheLimit = Math.max(
+      0,
+      this.config.predictionCacheEntries ?? 16_384
+    );
     let positiveFrames = 0;
     const itemLimit = Math.min(
       this.config.maxBatchItems,
@@ -526,8 +639,13 @@ export class NudityContentAnalysisProcessor {
     const flush = async (): Promise<void> => {
       if (batch.length === 0) return;
       throwIfAborted(signal);
-      const result = await this.dependencies.inference.analyzeBatch(
-        { capabilities: ["nudity"], items: batch },
+      const result = await mediaWorkScheduler.run(
+        "analysis",
+        () =>
+          this.dependencies.inference.analyzeBatch(
+            { capabilities: ["nudity"], items: batch },
+            signal
+          ),
         signal
       );
       for (const item of result.items) {
@@ -554,15 +672,23 @@ export class NudityContentAnalysisProcessor {
             )
         );
         if (selected.length > 0) positiveFrames += 1;
+        const frameFindings: ContentAnalysisObservation[] = [];
         for (const finding of selected) {
           const providerLabel = finding.metadata?.provider_label;
-          findings.push({
+          frameFindings.push({
             timestampSeconds: item.timestampSeconds,
             category: finding.label as SystemBookmarkCategoryKey,
             score: finding.score,
             providerLabel:
               typeof providerLabel === "string" ? providerLabel : finding.label,
           });
+        }
+        observations.set(item.id, frameFindings);
+        const key = cacheKeys.get(item.id);
+        if (key && cacheLimit > 0) {
+          if (predictions.size >= cacheLimit)
+            predictions.delete(predictions.keys().next().value!);
+          predictions.set(key, frameFindings);
         }
       }
       batch = [];
@@ -579,6 +705,25 @@ export class NudityContentAnalysisProcessor {
       ) {
         throw new Error("Extracted frame exceeds vision service limits");
       }
+      const id = `${run.id}:${phase}:${chunk.chunkIndex}:${frame.index}`;
+      if (cacheLimit > 0) {
+        // A run fixes source, model, preprocessing and categories. Match both
+        // the source PTS and encoded image bytes; nearby timestamps are not interchangeable.
+        const hash = createHash("sha256")
+          .update(new Uint8Array(await image.arrayBuffer()))
+          .digest("hex");
+        const key = `${frame.ptsSeconds}:${image.type}:${hash}`;
+        cacheKeys.set(id, key);
+        const cached = predictions.get(key);
+        if (cached !== undefined) {
+          predictions.delete(key);
+          predictions.set(key, cached);
+          observations.set(id, cached);
+          successfulFrames++;
+          if (cached.length) positiveFrames++;
+          continue;
+        }
+      }
       if (
         batch.length >= itemLimit ||
         (batch.length > 0 && batchBytes + image.size > byteLimit)
@@ -586,17 +731,14 @@ export class NudityContentAnalysisProcessor {
         await flush();
       }
       batch.push({
-        id: `${run.id}:${phase}:${chunk.chunkIndex}:${frame.index}`,
+        id,
         timestampSeconds: frame.ptsSeconds,
         image,
       });
       batchBytes += image.size;
     }
     await flush();
-    const allowedSkippedFrames = Math.max(
-      1,
-      Math.floor(frames.length * 0.01)
-    );
+    const allowedSkippedFrames = Math.max(1, Math.floor(frames.length * 0.01));
     if (
       (frames.length > 0 && successfulFrames === 0) ||
       skippedFrames > allowedSkippedFrames
@@ -610,7 +752,12 @@ export class NudityContentAnalysisProcessor {
       endSeconds: chunk.endSeconds,
       sampledFrames: frames.length,
       positiveFrames,
-      findings,
+      findings: frames.flatMap(
+        (frame) =>
+          observations.get(
+            `${run.id}:${phase}:${chunk.chunkIndex}:${frame.index}`
+          ) ?? []
+      ),
     };
   }
 }

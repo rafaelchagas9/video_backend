@@ -7,10 +7,10 @@ import {
   thumbnailsTable,
   favoritesTable,
   conversionJobsTable,
-  conversionHistoryTable,
 } from "@/database/schema";
 import { CONVERSION_PRESETS } from "@/config/presets";
 import { settingsService } from "@/modules/settings/settings.service";
+import { conversionCalibrationService } from "@/modules/conversion/conversion.calibration.service";
 import { API_PREFIX } from "@/config/constants";
 import {
   buildConversionBitratePlan,
@@ -19,7 +19,6 @@ import {
   formatEffectiveResolution,
 } from "@/modules/conversion/conversion.planning";
 import {
-  buildConversionCalibration,
   classifyCompressionRecommendation,
   estimateConversion,
   USEFUL_ABSOLUTE_SAVINGS_BYTES,
@@ -42,30 +41,8 @@ function getCodecCategory(codec: string | null): string {
  * Service for generating video compression suggestions
  */
 export class VideosSuggestionsService {
-  private async buildCalibration() {
-    const rows = await db
-      .select({
-        preset: conversionHistoryTable.preset,
-        profileVersion: conversionHistoryTable.profileVersion,
-        sourceBitrate: conversionHistoryTable.sourceBitrate,
-        sourceCodec: conversionHistoryTable.sourceCodec,
-        outputWidth: conversionHistoryTable.outputWidth,
-        outputHeight: conversionHistoryTable.outputHeight,
-        originalSizeBytes: conversionHistoryTable.originalSizeBytes,
-        outputSizeBytes: conversionHistoryTable.outputSizeBytes,
-      })
-      .from(conversionHistoryTable);
-
-    return {
-      calibration: buildConversionCalibration(
-        rows.map((row) => ({
-          ...row,
-          originalSizeBytes: Number(row.originalSizeBytes),
-          outputSizeBytes: Number(row.outputSizeBytes),
-        })),
-      ),
-      historyCount: rows.length,
-    };
+  private buildCalibration() {
+    return conversionCalibrationService.get();
   }
 
   /**

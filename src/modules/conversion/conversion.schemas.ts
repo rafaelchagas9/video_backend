@@ -183,7 +183,7 @@ const commaSeparatedList = z
     value
       .split(",")
       .map((entry) => entry.trim())
-      .filter(Boolean),
+      .filter(Boolean)
   )
   .pipe(z.array(z.string()).max(20));
 
@@ -238,7 +238,7 @@ export const conversionHistoryQuerySchema = z.object({
 });
 
 export const conversionHistoryOverviewQuerySchema = z.object(
-  conversionHistoryFilterShape,
+  conversionHistoryFilterShape
 );
 
 export const conversionHistoryItemSchema = z.object({
@@ -347,7 +347,7 @@ export const conversionInsightsSchema = z.object({
       total_output_size_bytes: z.number(),
       total_saved_bytes: z.number(),
       avg_size_change_percent: z.number(),
-    }),
+    })
   ),
   break_even: z.array(
     z.object({
@@ -361,7 +361,7 @@ export const conversionInsightsSchema = z.object({
       above_count: z.number(),
       above_avg_size_change_percent: z.number().nullable(),
       above_saved_bytes: z.number(),
-    }),
+    })
   ),
   best: z.array(conversionInsightExtremeSchema),
   worst: z.array(conversionInsightExtremeSchema),
@@ -372,7 +372,7 @@ export const conversionInsightsSchema = z.object({
       title: z.string(),
       detail: z.string(),
       metric: z.string().nullable(),
-    }),
+    })
   ),
 });
 
@@ -406,4 +406,18 @@ export const conversionHistoryOverviewSchema = z.object({
 export const conversionHistoryOverviewResponseSchema = z.object({
   success: z.literal(true),
   data: conversionHistoryOverviewSchema,
+});
+export const conversionPreflightSchema = z.object({
+  video_id: z.number(),
+  preset: z.string(),
+  source_size_bytes: z.number(),
+  target_resolution: z.string(),
+  estimated_output_bytes: z.number().nullable(),
+  estimated_savings_bytes: z.number().nullable(),
+  estimated_savings_percent: z.number().nullable(),
+  confidence: z.enum(["high", "medium", "low"]),
+  historical_sample_count: z.number().int(),
+  prediction_error_percent: z.number().nullable(),
+  recommendation: z.enum(["recommended", "marginal", "unlikely", "unknown"]),
+  reason: z.enum(["insufficient_metadata", "little_or_no_savings"]).nullable(),
 });

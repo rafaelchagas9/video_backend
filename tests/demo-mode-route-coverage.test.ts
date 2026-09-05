@@ -271,7 +271,23 @@ describe("demo mode runtime route coverage", () => {
     );
   });
 
-  it("requires an explicit manifest record for all 293 primary operations", () => {
+  it("estimates manual conversions entirely from demo metadata without starting work", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/videos/1/conversion-estimate?preset=1080p_av1",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      data: {
+        video_id: 1,
+        preset: "1080p_av1",
+        historical_sample_count: 0,
+      },
+    });
+  });
+
+  it("requires an explicit manifest record for all 294 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -282,8 +298,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(293);
-    expect(manifestKeys).toHaveLength(293);
+    expect(runtimeOperationKeys).toHaveLength(294);
+    expect(manifestKeys).toHaveLength(294);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -311,7 +327,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 293,
+      allowed: 294,
       blocked: 0,
       conditional: 0,
     });
@@ -319,7 +335,7 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(181);
+    ).toHaveLength(182);
   });
 
   it("persists cleanup review progress without deleting demo media", async () => {
@@ -404,11 +420,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 123 generated HEAD counterparts", () => {
+  it("registers and classifies all 124 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(123);
+    expect(getScenarios).toHaveLength(124);
 
     for (const scenario of getScenarios) {
       expect(

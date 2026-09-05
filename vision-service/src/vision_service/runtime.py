@@ -95,8 +95,10 @@ class VisionRuntime:
                         providers=nudity_providers,
                         require_gpu=settings.nudity_require_gpu,
                         batch_size=settings.max_batch_items,
+                        fp16_enabled=settings.effective_nudity_fp16(),
                     ),
                     model_name=settings.nudity_model,
+                    fp16_enabled=settings.effective_nudity_fp16(),
                     require_gpu=settings.nudity_require_gpu,
                     initialization_retry_seconds=(settings.nudity_initialization_retry_seconds),
                 )

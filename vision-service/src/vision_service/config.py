@@ -1,6 +1,7 @@
 """Configuration settings for the visual inference service."""
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     nudity_model: Literal["640m", "320n"] = "640m"
     nudity_onnx_providers: str = "MIGraphXExecutionProvider,CPUExecutionProvider"
     nudity_require_gpu: bool = True
+    nudity_fp16_enabled: bool = False
     nudity_initialization_retry_seconds: float = Field(default=60, ge=0)
 
     # Request and admission limits
@@ -82,6 +84,15 @@ class Settings(BaseSettings):
         if "CPUExecutionProvider" not in providers:
             providers.append("CPUExecutionProvider")
         return providers
+
+    def effective_nudity_fp16(self) -> bool:
+        """ORT's process-wide flag takes precedence over session options."""
+        override = os.environ.get("ORT_MIGRAPHX_FP16_ENABLE")
+        if override is not None:
+            if override not in {"0", "1"}:
+                raise ValueError("ORT_MIGRAPHX_FP16_ENABLE must be 0 or 1")
+            return override == "1"
+        return self.nudity_fp16_enabled
 
 
 @lru_cache

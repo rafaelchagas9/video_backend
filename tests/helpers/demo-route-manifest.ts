@@ -205,6 +205,7 @@ allowed GET /api/backup/export http-contract
 allowed POST /api/backup/{filename}/restore http-contract
 allowed DELETE /api/backup/{filename} http-contract
 allowed GET /api/videos/{id}/conversions
+allowed GET /api/videos/{id}/conversion-estimate http-contract
 allowed POST /api/videos/{id}/conversions
 allowed POST /api/videos/{id}/convert
 allowed POST /api/videos/convert/bulk

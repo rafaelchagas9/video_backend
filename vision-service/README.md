@@ -379,6 +379,8 @@ MODEL_CACHE_DIR=./models
 | `NUDITY_MODEL`                      | `640m`                 | Pinned model: `640m` or bundled `320n`                         |
 | `NUDITY_ONNX_PROVIDERS`             | `MIGraphXExecutionProvider,CPUExecutionProvider` | Independent NudeNet provider preference |
 | `NUDITY_REQUIRE_GPU`                 | `true`                 | Require MIGraphX to be active; `false` permits CPU-only fallback |
+| `NUDITY_FP16_ENABLED`                | `false`                | Opt-in half precision for NudeNet; changes its model revision |
+| `MIGRAPHX_CACHE_ROOT`                | `vision-service/.migraphx_cache` | Parent directory for execution-specific compiled programs |
 | `NUDITY_INITIALIZATION_RETRY_SECONDS` | `60`                  | Cooldown before retrying failed lazy initialization            |
 | `MAX_IMAGE_BYTES`                   | `10485760`             | Maximum decoded image payload                                  |
 | `MAX_IMAGE_PIXELS`                  | `40000000`             | Maximum decoded image pixels                                   |
@@ -391,6 +393,19 @@ MODEL_CACHE_DIR=./models
 | `MODEL_CACHE_DIR`                   | `./models`             | Root for InsightFace and explicitly provisioned models         |
 
 **Model Selection:**
+
+NudeNet keeps FP32 precision by default. `NUDITY_FP16_ENABLED=true` is an
+optional performance experiment; detection scores can cross category thresholds.
+The process-level `ORT_MIGRAPHX_FP16_ENABLE=0` or `1` takes precedence over this
+setting, matching ONNX Runtime. FP16 reports a distinct `/fp16` model revision so
+analysis results cannot silently reuse FP32 jobs.
+
+Startup chooses a compiled-cache subdirectory using the model, precision, batch
+size, runtime libraries, GPU identifiers, and MIGraphX environment. Configure the
+parent with `MIGRAPHX_CACHE_ROOT`; do not copy old `.mxr` programs into a different
+precision's directory. A new execution configuration compiles and warms up once.
+Existing cache directories are retained. Changes take effect when the service
+restarts. See [MIGraphX provider options](https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html).
 
 - `buffalo_l`: Large model, 512-dim embeddings, best accuracy (recommended)
 - `buffalo_s`: Small model, faster inference, reduced accuracy

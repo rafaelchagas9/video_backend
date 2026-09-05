@@ -257,6 +257,7 @@ class NudeNetAdapterTests(unittest.TestCase):
             model_cache_dir=VISION_SERVICE_ROOT / "models",
             providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
             require_gpu=False,
+            fp16_enabled=False,
         )
 
 
@@ -748,6 +749,7 @@ class NudityRuntimeTests(unittest.IsolatedAsyncioTestCase):
             providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
             require_gpu=False,
             batch_size=16,
+            fp16_enabled=False,
         )
         statuses = {status.name: status for status in runtime.capability_statuses()}
         self.assertTrue(statuses["nudity"].ready)
@@ -773,6 +775,7 @@ class NudityRuntimeTests(unittest.IsolatedAsyncioTestCase):
             providers=("MIGraphXExecutionProvider", "CPUExecutionProvider"),
             require_gpu=True,
             batch_size=16,
+            fp16_enabled=False,
         )
         statuses = {status.name: status for status in runtime.capability_statuses()}
         self.assertIn("nudenet-3.4.2/320n@sha256:", statuses["nudity"].model_revision)

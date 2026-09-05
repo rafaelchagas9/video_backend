@@ -95,7 +95,7 @@ class OnnxSession(Protocol):
 
 
 class OnnxSessionFactory(Protocol):
-    def __call__(self, model_path: str, *, providers: list[str]) -> OnnxSession: ...
+    def __call__(self, model_path: str, *, providers: list[str | tuple[str, dict[str, str]]]) -> OnnxSession: ...
 
 
 RawDetection = Mapping[str, object]
@@ -124,6 +124,7 @@ class NudeNetOnnxBackend:
         providers: Sequence[str] = DEFAULT_NUDITY_PROVIDERS,
         require_gpu: bool = True,
         batch_size: int = DEFAULT_NUDITY_BATCH_SIZE,
+        fp16_enabled: bool = False,
     ) -> None:
         if batch_size < 1:
             raise ValueError("NudeNet batch size must be at least 1")
@@ -139,9 +140,14 @@ class NudeNetOnnxBackend:
             requested_providers.append("CPUExecutionProvider")
         if require_gpu and "MIGraphXExecutionProvider" not in requested_providers:
             raise RuntimeError("MIGraphXExecutionProvider is required for NudeNet")
+        session_providers = [
+            (provider, {"migraphx_fp16_enable": "1"})
+            if provider == "MIGraphXExecutionProvider" and fp16_enabled else provider
+            for provider in requested_providers
+        ]
         try:
             self._session: OnnxSession | None = session_factory(
-                str(model_path), providers=requested_providers
+                str(model_path), providers=session_providers
             )
         except Exception:
             if require_gpu or requested_providers == ["CPUExecutionProvider"]:
@@ -280,19 +286,21 @@ class NudeNetDetectorAdapter:
         model_cache_dir: Path = DEFAULT_MODEL_CACHE_DIR,
         providers: Sequence[str] = DEFAULT_NUDITY_PROVIDERS,
         require_gpu: bool = True,
+        fp16_enabled: bool = False,
         initialization_retry_seconds: float = 60,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if initialization_retry_seconds < 0:
             raise ValueError("Initialization retry cooldown cannot be negative")
         model_spec = get_nudenet_model_spec(model_name)
-        self.model_revision = model_spec.model_revision
+        self.model_revision = model_spec.model_revision + ("/fp16" if fp16_enabled else "")
         self._backend_factory = backend_factory or (
             lambda: create_nudenet_backend(
                 model_name=model_name,
                 model_cache_dir=model_cache_dir,
                 providers=providers,
                 require_gpu=require_gpu,
+                fp16_enabled=fp16_enabled,
             )
         )
         self._backend: NudeNetBackend | None = None
@@ -477,6 +485,7 @@ def create_nudenet_backend(
     providers: Sequence[str] = DEFAULT_NUDITY_PROVIDERS,
     require_gpu: bool = True,
     batch_size: int = DEFAULT_NUDITY_BATCH_SIZE,
+    fp16_enabled: bool = False,
 ) -> NudeNetOnnxBackend:
     """Create a pinned offline backend; model provisioning is an operator action."""
     try:
@@ -500,6 +509,7 @@ def create_nudenet_backend(
         providers=providers,
         require_gpu=require_gpu,
         batch_size=batch_size,
+        fp16_enabled=fp16_enabled,
     )
 
 

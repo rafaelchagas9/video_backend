@@ -411,4 +411,61 @@ describe("content analysis source snapshots and PTS extraction", () => {
     ).rejects.toBeInstanceOf(RetryableContentAnalysisError);
     expect(await visibleEntries(extractionRoot)).toEqual([]);
   });
+  it("precomputes the refinement grid in one decode with the same frame timestamps and pixels", async () => {
+    const extractor = new PtsAwareChunkExtractor({
+      ffmpegPath: FFMPEG_PATH,
+      temporaryRoot: extractionRoot,
+    });
+    const fingerprint = async (part: {
+      startSeconds: number;
+      endSeconds: number;
+      frames: readonly { ptsSeconds: number; path: string }[];
+    }) => ({
+      start: part.startSeconds,
+      end: part.endSeconds,
+      frames: await Promise.all(
+        part.frames.map(async (frame) => ({
+          pts: frame.ptsSeconds,
+          hash: new Bun.CryptoHasher("sha256")
+            .update(await Bun.file(frame.path).arrayBuffer())
+            .digest("hex"),
+        }))
+      ),
+    });
+    const cached = [];
+    const coarse = [];
+    for await (const part of extractor.extract({
+      filePath: fixturePath,
+      durationSeconds: 0.76,
+      chunkDurationSeconds: 0.76,
+      sampleIntervalSeconds: 0.2,
+      prefetchRefinement: {
+        chunkDurationSeconds: 0.2,
+        sampleIntervalSeconds: 0.04,
+      },
+    })) {
+      coarse.push(await fingerprint(part));
+      for (const dense of part.prefetchedChunks ?? [])
+        cached.push(await fingerprint(dense));
+    }
+    const precise = [];
+    for await (const part of extractor.extract({
+      filePath: fixturePath,
+      durationSeconds: 0.76,
+      chunkDurationSeconds: 0.2,
+      sampleIntervalSeconds: 0.04,
+    }))
+      precise.push(await fingerprint(part));
+    expect(cached).toEqual(precise);
+    const originalCoarse = [];
+    for await (const part of extractor.extract({
+      filePath: fixturePath,
+      durationSeconds: 0.76,
+      chunkDurationSeconds: 0.76,
+      sampleIntervalSeconds: 0.2,
+    }))
+      originalCoarse.push(await fingerprint(part));
+    expect(coarse).toEqual(originalCoarse);
+    expect(await visibleEntries(extractionRoot)).toEqual([]);
+  });
 });

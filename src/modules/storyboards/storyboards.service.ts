@@ -1,5 +1,6 @@
-import { join } from "path";
-import { createReadStream, existsSync, mkdirSync } from "fs";
+import { join, dirname, resolve, basename } from "path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync } from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import { db } from "@/config/drizzle";
 import { storyboardsTable } from "@/database/schema";
@@ -12,31 +13,30 @@ import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
 import { recordPerfStage } from "@/utils/performance-profiler";
 import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
-import { copyFile, unlink, stat, readFile, writeFile } from "fs/promises";
-import { freemem } from "os";
+import { unlink, stat, readFile, writeFile } from "fs/promises";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
 import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 import { resolveDemoAssetPath } from "@/database/demo";
 import { captureTelemetryException } from "@/utils/telemetry";
 
-interface SpriteSheetOptions {
+import {
+  StoryboardRenderer,
+  type StoryboardRenderOptions,
+} from "./storyboards.ffmpeg";
+
+interface SpriteSheetOptions extends StoryboardRenderOptions {
   videoId: number;
-  inputPath: string;
-  outputPath: string;
-  tileWidth: number;
-  tileHeight: number;
-  intervalSeconds: number;
-  cols: number;
-  rows: number;
-  format: "webp" | "jpg";
-  quality: number;
 }
 
 export class StoryboardsService {
-  // Queue system for sequential processing
-  private processingVideoId: number | null = null;
+  private readonly processingVideoIds = new Set<number>();
+  private readonly generating = new Map<number, Promise<Storyboard>>();
+  private readonly renderer = new StoryboardRenderer({
+    ffmpegPath: env.FFMPEG_PATH,
+    vaapiDevice: env.VAAPI_DEVICE,
+    maxKeyframeDriftSeconds: env.STORYBOARD_MAX_KEYFRAME_DRIFT_SECONDS,
+  });
   private pendingQueue: number[] = [];
-  private isProcessing = false;
 
   constructor() {
     // Ensure storyboards directory exists
@@ -81,7 +81,7 @@ export class StoryboardsService {
     }
 
     // Skip if this video is currently being processed
-    if (this.processingVideoId === videoId) {
+    if (this.processingVideoIds.has(videoId)) {
       logger.debug(
         { videoId },
         "Storyboard generation already in progress, skipping"
@@ -105,101 +105,115 @@ export class StoryboardsService {
       return;
     }
 
-    // Add to queue
+    // Recheck after the database read: simultaneous hover requests can race.
+    if (
+      this.processingVideoIds.has(videoId) ||
+      this.pendingQueue.includes(videoId)
+    )
+      return;
     this.pendingQueue.push(videoId);
     logger.info(
       { videoId, queueLength: this.pendingQueue.length },
       "Storyboard generation queued"
     );
 
-    // Start processing if not already running
-    if (!this.isProcessing) {
-      this.processQueue();
+    this.processQueue();
+  }
+
+  /** Start bounded workers; the shared media scheduler reserves capacity for previews. */
+  private processQueue(): void {
+    while (
+      this.pendingQueue.length > 0 &&
+      this.processingVideoIds.size < env.STORYBOARD_MAX_CONCURRENT
+    ) {
+      const videoId = this.pendingQueue.shift()!;
+      this.processingVideoIds.add(videoId);
+      void this.processQueuedVideo(videoId);
     }
   }
 
-  /**
-   * Process the generation queue sequentially.
-   */
-  private async processQueue(): Promise<void> {
-    if (this.isProcessing) return;
+  private async processQueuedVideo(videoId: number): Promise<void> {
+    try {
+      // Double-check storyboard doesn't exist (may have been created by another process)
+      const existing = await this.findByVideoId(videoId);
+      if (!existing) {
+        const video = await videosService.findById(videoId);
+        const videoContext = createVideoEventContext(video);
 
-    this.isProcessing = true;
-
-    while (this.pendingQueue.length > 0) {
-      const videoId = this.pendingQueue.shift()!;
-      this.processingVideoId = videoId;
-
-      try {
-        // Double-check storyboard doesn't exist (may have been created by another process)
-        const existing = await this.findByVideoId(videoId);
-        if (!existing) {
-          const video = await videosService.findById(videoId);
-          const videoContext = createVideoEventContext(video);
-
-          logger.info(
-            { videoId, remaining: this.pendingQueue.length },
-            "Processing storyboard generation"
-          );
-
-          eventsService.broadcastToAuthenticated({
-            type: "storyboard:generating",
-            message: {
-              ...videoContext,
-              message: "Generating storyboard thumbnails...",
-              text: "Generating storyboard thumbnails...",
-            },
-          });
-
-          await this.generate(videoId);
-
-          eventsService.broadcastToAuthenticated({
-            type: "storyboard:ready",
-            message: {
-              ...videoContext,
-              message: "Storyboard thumbnails ready",
-              text: "Storyboard thumbnails ready",
-            },
-          });
-        }
-      } catch (error) {
-        captureTelemetryException(error, {
-          source: "storyboard_job",
-          videoId,
-        });
-        logger.error({ videoId, error }, "Failed to generate storyboard");
-
-        let videoContext = { videoId, video_id: videoId };
-        try {
-          videoContext = createVideoEventContext(
-            await videosService.findById(videoId)
-          );
-        } catch {
-          // Keep the failure event actionable even if video enrichment fails.
-        }
+        logger.info(
+          { videoId, remaining: this.pendingQueue.length },
+          "Processing storyboard generation"
+        );
 
         eventsService.broadcastToAuthenticated({
-          type: "storyboard:error",
+          type: "storyboard:generating",
           message: {
             ...videoContext,
-            message: "Failed to generate storyboard",
-            text: "Failed to generate storyboard",
-            error: error instanceof Error ? error.message : String(error),
+            message: "Generating storyboard thumbnails...",
+            text: "Generating storyboard thumbnails...",
           },
         });
-      } finally {
-        this.processingVideoId = null;
-      }
-    }
 
-    this.isProcessing = false;
+        await this.generate(videoId);
+
+        eventsService.broadcastToAuthenticated({
+          type: "storyboard:ready",
+          message: {
+            ...videoContext,
+            message: "Storyboard thumbnails ready",
+            text: "Storyboard thumbnails ready",
+          },
+        });
+      }
+    } catch (error) {
+      captureTelemetryException(error, {
+        source: "storyboard_job",
+        videoId,
+      });
+      logger.error({ videoId, error }, "Failed to generate storyboard");
+
+      let videoContext = { videoId, video_id: videoId };
+      try {
+        videoContext = createVideoEventContext(
+          await videosService.findById(videoId)
+        );
+      } catch {
+        // Keep the failure event actionable even if video enrichment fails.
+      }
+
+      eventsService.broadcastToAuthenticated({
+        type: "storyboard:error",
+        message: {
+          ...videoContext,
+          message: "Failed to generate storyboard",
+          text: "Failed to generate storyboard",
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    } finally {
+      this.processingVideoIds.delete(videoId);
+      this.processQueue();
+    }
   }
 
   /**
    * Generate a storyboard sprite sheet and VTT file for a video.
    * Uses FFmpeg to extract frames at intervals and tile them into a single image.
    */
-  async generate(
+  generate(
+    videoId: number,
+    input?: GenerateStoryboardInput
+  ): Promise<Storyboard> {
+    const active = this.generating.get(videoId);
+    if (active) return active;
+    const pending = this.generateInternal(videoId, input).finally(() =>
+      this.generating.delete(videoId)
+    );
+    this.generating.set(videoId, pending);
+    return pending;
+  }
+
+  private async generateInternal(
     videoId: number,
     input?: GenerateStoryboardInput
   ): Promise<Storyboard> {
@@ -208,16 +222,12 @@ export class StoryboardsService {
     const totalStart = Date.now();
     const video = await videosService.findById(videoId);
 
-    // Delete existing storyboard if present
+    // Keep the current preview available until its replacement is fully rendered.
     const existing = await db
       .select()
       .from(storyboardsTable)
       .where(eq(storyboardsTable.videoId, videoId))
       .limit(1);
-
-    if (existing.length > 0) {
-      await this.delete(videoId);
-    }
 
     const { tileWidth, tileHeight } = this.getTileDimensions(
       video.width,
@@ -262,7 +272,7 @@ export class StoryboardsService {
     const rows = Math.ceil(tileCount / cols);
 
     // Generate unique filenames
-    const timestamp = Date.now();
+    const timestamp = `${Date.now()}_${randomUUID()}`;
     const spriteFilename = `storyboard_${videoId}_${timestamp}.${storyboardFormat}`;
     const vttFilename = `storyboard_${videoId}_${timestamp}.vtt`;
     const spritePath = join(env.STORYBOARDS_DIR, spriteFilename);
@@ -271,6 +281,8 @@ export class StoryboardsService {
     const options: SpriteSheetOptions = {
       videoId,
       inputPath: video.file_path,
+      durationSeconds: video.duration_seconds,
+      sampling: input?.sampling ?? env.STORYBOARD_SAMPLING,
       outputPath: spritePath,
       tileWidth,
       tileHeight,
@@ -281,69 +293,104 @@ export class StoryboardsService {
       quality: storyboardQuality,
     };
 
-    // Generate sprite sheet using FFmpeg
-    const spriteStart = Date.now();
-    await this.generateSpriteSheet(options);
-    await recordPerfStage(
-      { scenario: "storyboard", videoId, mode: "generate" },
-      "sprite_sheet",
-      Date.now() - spriteStart,
-      {
-        tileCount,
-        intervalSeconds,
-        requestedIntervalSeconds,
-        cols,
-        rows,
-      }
-    );
+    let published = false;
+    try {
+      // Generate sprite sheet using FFmpeg
+      const spriteStart = Date.now();
+      await this.generateSpriteSheet(options);
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "generate" },
+        "sprite_sheet",
+        Date.now() - spriteStart,
+        {
+          tileCount,
+          intervalSeconds,
+          requestedIntervalSeconds,
+          cols,
+          rows,
+        }
+      );
 
-    // Get sprite file size
-    const stats = await stat(spritePath);
-    const spriteSizeBytes = stats.size;
+      // Get sprite file size
+      const stats = await stat(spritePath);
+      const spriteSizeBytes = stats.size;
 
-    // Generate VTT file
-    const vttStart = Date.now();
-    await this.generateVttFile(
-      vttPath,
-      videoId,
-      tileWidth,
-      tileHeight,
-      intervalSeconds,
-      tileCount,
-      cols,
-      video.duration_seconds,
-      storyboardFormat
-    );
-    await recordPerfStage(
-      { scenario: "storyboard", videoId, mode: "generate" },
-      "vtt_file",
-      Date.now() - vttStart,
-      { tileCount, intervalSeconds, cols }
-    );
-
-    // Insert into database
-    const result = await db
-      .insert(storyboardsTable)
-      .values({
-        videoId,
-        spritePath,
+      // Generate VTT file
+      const vttStart = Date.now();
+      await this.generateVttFile(
         vttPath,
+        videoId,
         tileWidth,
         tileHeight,
-        tileCount,
         intervalSeconds,
-        spriteSizeBytes,
-      })
-      .returning();
+        tileCount,
+        cols,
+        video.duration_seconds,
+        storyboardFormat
+      );
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "generate" },
+        "vtt_file",
+        Date.now() - vttStart,
+        { tileCount, intervalSeconds, cols }
+      );
 
-    await recordPerfStage(
-      { scenario: "storyboard", videoId, mode: "generate" },
-      "total",
-      Date.now() - totalStart,
-      { tileCount, spriteSizeBytes }
-    );
+      // Insert into database
+      const result = await db
+        .insert(storyboardsTable)
+        .values({
+          videoId,
+          spritePath,
+          vttPath,
+          tileWidth,
+          tileHeight,
+          tileCount,
+          intervalSeconds,
+          spriteSizeBytes,
+        })
+        .onConflictDoUpdate({
+          target: storyboardsTable.videoId,
+          set: {
+            spritePath,
+            vttPath,
+            tileWidth,
+            tileHeight,
+            tileCount,
+            intervalSeconds,
+            spriteSizeBytes,
+            generatedAt: new Date(),
+          },
+        })
+        .returning();
+      published = true;
 
-    return this.mapToApiFormat(result[0]);
+      for (const previous of existing) {
+        for (const path of [previous.spritePath, previous.vttPath]) {
+          if (
+            resolve(dirname(path)) === resolve(env.STORYBOARDS_DIR) &&
+            basename(path).startsWith(`storyboard_${videoId}_`) &&
+            path !== spritePath &&
+            path !== vttPath
+          )
+            await unlink(path).catch(() => {});
+        }
+      }
+
+      await recordPerfStage(
+        { scenario: "storyboard", videoId, mode: "generate" },
+        "total",
+        Date.now() - totalStart,
+        { tileCount, spriteSizeBytes }
+      );
+
+      return this.mapToApiFormat(result[0]);
+    } finally {
+      if (!published) {
+        await Promise.all(
+          [spritePath, vttPath].map((path) => unlink(path).catch(() => {}))
+        );
+      }
+    }
   }
 
   /**
@@ -519,102 +566,18 @@ export class StoryboardsService {
   private async generateSpriteSheet(
     options: SpriteSheetOptions
   ): Promise<void> {
-    const { inputPath, videoId } = options;
-    const decisionStart = Date.now();
-
-    const fileSize = (await stat(inputPath)).size;
-    const availableShm = await this.getAvailableShm();
-    const availableRam = await this.getAvailableMemory(); // Use new method
-
-    const shmUsable = availableShm * 0.8;
-    const ramBuffer = 2 * 1024 * 1024 * 1024;
-
-    // Copying very large files to /dev/shm can dominate total time.
-    // Keep RAM-copy path only for relatively small inputs.
-    const maxRamCopyBytes = env.STORYBOARD_RAM_COPY_MAX_MB * 1024 * 1024;
-    const canUseRam =
-      fileSize < maxRamCopyBytes &&
-      fileSize < shmUsable &&
-      fileSize < availableRam - ramBuffer;
-
-    logger.debug(
-      {
-        canUseRam,
-        fileSize: this.formatBytes(fileSize),
-        shmUsable: this.formatBytes(shmUsable),
-        availableRam: this.formatBytes(availableRam),
-        ramBuffer: this.formatBytes(ramBuffer),
-        needed: this.formatBytes(fileSize),
-        actuallyAvailable: this.formatBytes(availableRam - ramBuffer),
-        maxRamCopyBytes: this.formatBytes(maxRamCopyBytes),
-      },
-      "Storyboard RAM path decision"
-    );
-
+    const start = Date.now();
+    const result = await this.renderer.render(options);
     await recordPerfStage(
-      { scenario: "storyboard", videoId, mode: "sprite_sheet" },
-      "path_decision",
-      Date.now() - decisionStart,
       {
-        canUseRam,
-        fileSizeBytes: fileSize,
-        maxRamCopyBytes,
-      }
+        scenario: "storyboard",
+        videoId: options.videoId,
+        mode: "sprite_sheet",
+      },
+      "decode_and_tile",
+      Date.now() - start,
+      { ...result }
     );
-
-    if (canUseRam) {
-      const ramStart = Date.now();
-      await this.processFromRam(options);
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "sprite_sheet" },
-        "process_from_ram",
-        Date.now() - ramStart,
-        { fileSizeBytes: fileSize }
-      );
-    } else {
-      const seqStart = Date.now();
-      await this.processSequential(options);
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "sprite_sheet" },
-        "process_sequential",
-        Date.now() - seqStart,
-        { fileSizeBytes: fileSize }
-      );
-    }
-  }
-
-  private formatBytes(bytes: number): string {
-    const gb = bytes / (1024 * 1024 * 1024);
-    return `${gb.toFixed(2)}GB`;
-  }
-
-  private async getAvailableShm(): Promise<number> {
-    try {
-      const { exec } = await import("child_process");
-      const { promisify } = await import("util");
-      const execAsync = promisify(exec);
-      const { stdout } = await execAsync(
-        "df -B1 /dev/shm | tail -1 | awk '{print $4}'"
-      );
-      return parseInt(stdout.trim(), 10);
-    } catch {
-      return 0;
-    }
-  }
-
-  private async getAvailableMemory(): Promise<number> {
-    try {
-      const meminfo = await readFile("/proc/meminfo", "utf-8");
-      const match = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/);
-      if (match) {
-        return parseInt(match[1], 10) * 1024; // Convert KB to bytes
-      }
-    } catch {
-      // Fallback for non-Linux systems
-    }
-
-    // Fallback to freemem (less accurate)
-    return freemem();
   }
 
   private getQualityOptions(
@@ -660,143 +623,6 @@ export class StoryboardsService {
     const maxTiles = Math.max(1, env.STORYBOARD_MAX_TILES);
     const intervalByTileLimit = Math.ceil(durationSeconds / maxTiles);
     return Math.max(1, requestedIntervalSeconds, intervalByTileLimit);
-  }
-
-  private async processFromRam(options: SpriteSheetOptions): Promise<void> {
-    const {
-      videoId,
-      inputPath,
-      outputPath,
-      tileWidth,
-      tileHeight,
-      intervalSeconds,
-      cols,
-      rows,
-      format,
-      quality,
-    } = options;
-    const ramPath = `/dev/shm/sprite_temp_${Date.now()}${this.getExtension(inputPath)}`;
-    const qualityOptions = this.getQualityOptions(format, quality);
-
-    try {
-      const copyStart = Date.now();
-      await copyFile(inputPath, ramPath);
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "process_from_ram" },
-        "copy_to_ram",
-        Date.now() - copyStart
-      );
-
-      const ffmpegStart = Date.now();
-      await new Promise<void>((resolve, reject) => {
-        ffmpeg(ramPath)
-          .inputOptions([
-            `-hwaccel`,
-            `vaapi`,
-            `-hwaccel_device`,
-            env.VAAPI_DEVICE,
-            `-hwaccel_output_format`,
-            `vaapi`,
-          ])
-          .outputOptions([
-            `-vf`,
-            `fps=1/${intervalSeconds},scale_vaapi=w=${tileWidth}:h=${tileHeight}:force_original_aspect_ratio=decrease,hwdownload,format=nv12,pad=${tileWidth}:${tileHeight}:(ow-iw)/2:(oh-ih)/2,tile=${cols}x${rows}`,
-            `-frames:v`,
-            `1`,
-            `-an`,
-            `-sn`,
-            `-dn`,
-            ...qualityOptions,
-          ])
-          .output(outputPath)
-          .on("end", () => resolve())
-          .on("error", (err) => reject(err))
-          .run();
-      });
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "process_from_ram" },
-        "ffmpeg_from_ram",
-        Date.now() - ffmpegStart
-      );
-    } finally {
-      await unlink(ramPath).catch(() => {});
-    }
-  }
-
-  private async processSequential(options: SpriteSheetOptions): Promise<void> {
-    const {
-      videoId,
-      inputPath,
-      outputPath,
-      tileWidth,
-      tileHeight,
-      intervalSeconds,
-      cols,
-      rows,
-      format,
-      quality,
-    } = options;
-
-    const qualityOptions = this.getQualityOptions(format, quality);
-    logger.debug(
-      { inputPath, outputPath, intervalSeconds },
-      "Processing storyboard sequentially (HDD path)"
-    );
-
-    const fileSizeBytes = (await stat(inputPath)).size;
-    const readaheadMaxBytes = env.STORYBOARD_READAHEAD_MAX_MB * 1024 * 1024;
-
-    if (fileSizeBytes <= readaheadMaxBytes) {
-      // Prime page cache only for smaller files; for very large files this can
-      // double total read volume and hurt end-to-end completion time.
-      const readAheadStart = Date.now();
-      await this.primePageCache(inputPath);
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "process_sequential" },
-        "prime_page_cache",
-        Date.now() - readAheadStart,
-        { fileSizeBytes, readaheadMaxBytes }
-      );
-    } else {
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "process_sequential" },
-        "prime_page_cache_skipped",
-        0,
-        { fileSizeBytes, readaheadMaxBytes }
-      );
-    }
-
-    const ffmpegStart = Date.now();
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(inputPath)
-        .inputOptions([
-          `-hwaccel`,
-          `vaapi`,
-          `-hwaccel_device`,
-          env.VAAPI_DEVICE,
-          `-hwaccel_output_format`,
-          `vaapi`,
-        ])
-        .outputOptions([
-          `-vf`,
-          `fps=1/${intervalSeconds},scale_vaapi=w=${tileWidth}:h=${tileHeight}:force_original_aspect_ratio=decrease,hwdownload,format=nv12,pad=${tileWidth}:${tileHeight}:(ow-iw)/2:(oh-ih)/2,tile=${cols}x${rows}`,
-          `-frames:v`,
-          `1`,
-          `-an`,
-          `-sn`,
-          `-dn`,
-          ...qualityOptions,
-        ])
-        .output(outputPath)
-        .on("end", () => resolve())
-        .on("error", (err) => reject(err))
-        .run();
-    });
-    await recordPerfStage(
-      { scenario: "storyboard", videoId, mode: "process_sequential" },
-      "ffmpeg_sequential",
-      Date.now() - ffmpegStart
-    );
   }
 
   /**
@@ -1003,28 +829,6 @@ export class StoryboardsService {
   private getExtension(filePath: string): string {
     const match = filePath.match(/\.[^.]+$/);
     return match ? match[0] : ".mp4";
-  }
-
-  /**
-   * Prime the OS page cache by reading the file sequentially.
-   * This converts slow random HDD I/O into sequential reads so FFmpeg
-   * finds the data in cache rather than stalling on disk seeks.
-   */
-  private primePageCache(filePath: string): Promise<void> {
-    return new Promise((resolve) => {
-      // 16 MB chunks — keeps the read sequential, matches HDD optimal block size
-      const stream = createReadStream(filePath, {
-        highWaterMark: 16 * 1024 * 1024,
-      });
-      // Discard data; we only want the side-effect of filling the page cache
-      stream.on("data", () => {});
-      stream.on("end", () => resolve());
-      // On error we still proceed — worst case FFmpeg reads from disk directly
-      stream.on("error", (err) => {
-        logger.warn({ filePath, err }, "Page cache priming failed, continuing");
-        resolve();
-      });
-    });
   }
 }
 

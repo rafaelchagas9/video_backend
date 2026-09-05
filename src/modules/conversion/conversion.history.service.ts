@@ -12,6 +12,7 @@ import {
 import { db } from "@/config/drizzle";
 import { conversionHistoryTable } from "@/database/schema";
 import { RESOLUTION_BUCKETS } from "./conversion.buckets";
+import { conversionCalibrationService } from "./conversion.calibration.service";
 import type {
   ConversionHistoryEntry,
   ConversionHistoryFilters,
@@ -84,6 +85,7 @@ export class ConversionHistoryService {
       startedAt: entry.startedAt,
       completedAt: entry.completedAt,
     });
+    conversionCalibrationService.invalidate();
   }
 
   async list(

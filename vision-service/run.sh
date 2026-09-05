@@ -19,8 +19,9 @@ export MIGRAPHX_DISABLE_MLIR=1
 # 5. Set MIGraphX model cache path to avoid recompilation across restarts
 # This caches compiled MIGraphX models, reducing startup time on subsequent runs
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ORT_MIGRAPHX_MODEL_CACHE_PATH="${SCRIPT_DIR}/.migraphx_cache"
-mkdir -p "${ORT_MIGRAPHX_MODEL_CACHE_PATH}"
+export MIGRAPHX_CACHE_ROOT="${MIGRAPHX_CACHE_ROOT:-${SCRIPT_DIR}/.migraphx_cache}"
+# Python selects a namespace using model, precision, batch shape and runtime.
+mkdir -p "${MIGRAPHX_CACHE_ROOT}"
 
 # Run the interpreter by absolute path so moving the deployment cannot leave an
 # activated environment pointing at the previous directory.

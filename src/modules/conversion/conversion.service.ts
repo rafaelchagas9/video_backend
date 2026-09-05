@@ -17,6 +17,8 @@ import { conversionDemoService } from "./conversion.demo.service";
 import { conversionOperationsDemoService } from "./conversion.operations.demo.service";
 import { ffmpegService } from "./conversion.ffmpeg.service";
 import { logger } from "@/utils/logger";
+import { conversionCalibrationService } from "./conversion.calibration.service";
+import { buildConversionPreflight } from "./conversion.preflight";
 import { db } from "@/config/drizzle";
 import { and, inArray, eq } from "drizzle-orm";
 import { videosTable, conversionJobsTable } from "@/database/schema";
@@ -32,6 +34,16 @@ import type {
 } from "./conversion.types";
 
 export class ConversionService {
+  async estimate(videoId: number, presetId: string) {
+    const preset = getPreset(presetId);
+    if (!preset) throw new BadRequestError(`Invalid preset: ${presetId}`);
+    const video = await videosService.findById(videoId);
+    const { calibration } = env.DEMO_MODE
+      ? { calibration: { exact: new Map(), anyVersion: new Map() } }
+      : await conversionCalibrationService.get();
+    return buildConversionPreflight(video, preset, calibration);
+  }
+
   constructor() {
     // Ensure converted videos directory exists
     if (!env.DEMO_MODE && !existsSync(env.CONVERTED_VIDEOS_DIR)) {
