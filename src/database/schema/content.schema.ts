@@ -117,7 +117,7 @@ export const bookmarksTable = pgTable(
     origin: text("origin").notNull().default("manual"),
     analysisRunId: integer("analysis_run_id").references(
       () => contentAnalysisRunsTable.id,
-      { onDelete: "restrict" }
+      { onDelete: "cascade" }
     ),
     userModifiedAt: timestamp("user_modified_at"),
     name: text("name").notNull(),

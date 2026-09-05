@@ -10,6 +10,8 @@ import {
 } from "./client";
 import { demoRepository } from "./repository";
 import { restoreDemoBaselineSnapshot } from "./baseline";
+import { demoContentAnalysisScenarioLabel } from "./scenarios";
+import { prepopulateDemoContentAnalysis } from "@/modules/content-analysis/content-analysis.demo.service";
 
 const DEMO_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 const DEMO_VIDEO_CATALOG_SIZE = 132;
@@ -434,9 +436,14 @@ export function importDemoSeedDocument(
 
     videos.forEach((video, index) => {
       const id = index + 1;
+      const sourceVideoId =
+        video.sourceVideoId ?? (id <= input.videos.length ? id : null);
+      const analysisScenarioLabel =
+        id <= 5 ? demoContentAnalysisScenarioLabel(sourceVideoId) : null;
+      const title = video.title ?? video.fileName;
       insertVideo.run(
         id,
-        video.sourceVideoId ?? (id <= input.videos.length ? id : null),
+        sourceVideoId,
         video.filePath,
         video.fileName,
         1,
@@ -449,7 +456,9 @@ export function importDemoSeedDocument(
         video.bitrate ?? null,
         video.fps ?? null,
         video.audioCodec ?? null,
-        video.title ?? null,
+        analysisScenarioLabel
+          ? `${title} · Demo: ${analysisScenarioLabel}`
+          : (video.title ?? null),
         video.description ?? null,
         video.themes ?? null,
         1,
@@ -552,6 +561,7 @@ export function importDemoSeedDocument(
       sqlite,
       new Set(videos.map((_video, index) => index + 1))
     );
+    prepopulateDemoContentAnalysis();
     sqlite.exec(
       "INSERT OR REPLACE INTO sqlite_sequence (name,seq) VALUES ('demo_bookmarks',1000000)"
     );

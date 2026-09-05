@@ -115,6 +115,48 @@ describe("immutable demo SQLite baseline reset", () => {
         >("SELECT COUNT(*) AS count FROM demo_artwork_assets")
         .get()!.count,
     };
+    const scenarioTitles = sqlite
+      .query<{ title: string }, []>(
+        "SELECT title FROM demo_videos WHERE id BETWEEN 1 AND 5 ORDER BY id"
+      )
+      .all()
+      .map(({ title }) => title);
+    expect(scenarioTitles).toEqual([
+      expect.stringContaining("Demo: Empty analysis"),
+      expect.stringContaining("Demo: Single analysis moment"),
+      expect.stringContaining("Demo: Typical analysis moments"),
+      expect.stringContaining("Demo: Dense analysis moments"),
+      expect.stringContaining("Demo: Stress-test analysis moments"),
+    ]);
+    const seededAnalysisRuns = sqlite
+      .query<
+        { count: number },
+        []
+      >("SELECT COUNT(*) AS count FROM demo_resources WHERE kind='content-analysis-run'")
+      .get()!.count;
+    const seededAutomaticBookmarks = sqlite
+      .query<
+        { count: number },
+        []
+      >("SELECT COUNT(*) AS count FROM demo_bookmarks WHERE origin='automatic'")
+      .get()!.count;
+    const seededBookmarksByVideo = sqlite
+      .query<{ video_id: number; count: number }, []>(
+        `SELECT video_id, COUNT(*) AS count
+         FROM demo_bookmarks
+         WHERE origin='automatic' AND video_id BETWEEN 1 AND 5
+         GROUP BY video_id
+         ORDER BY video_id`
+      )
+      .all();
+    expect(seededAnalysisRuns).toBe(5);
+    expect(seededAutomaticBookmarks).toBe(117);
+    expect(seededBookmarksByVideo).toEqual([
+      { video_id: 2, count: 1 },
+      { video_id: 3, count: 8 },
+      { video_id: 4, count: 28 },
+      { video_id: 5, count: 80 },
+    ]);
 
     sqlite.run("UPDATE demo_videos SET title = ? WHERE id = 1", [
       "Runtime-mutated title",
@@ -202,6 +244,15 @@ describe("immutable demo SQLite baseline reset", () => {
         "2026-08-01T00:00:00.000Z",
       ]
     );
+    sqlite.run(
+      `DELETE FROM demo_bookmarks
+       WHERE id = (
+         SELECT id FROM demo_bookmarks
+         WHERE origin = 'automatic' AND video_id = 5
+         ORDER BY id
+         LIMIT 1
+       )`
+    );
 
     // Additive migrations may make the live schema newer than an immutable
     // baseline captured by the previous release. Missing nullable columns must
@@ -234,6 +285,22 @@ describe("immutable demo SQLite baseline reset", () => {
         >("SELECT COUNT(*) AS count FROM demo_bookmark_categories WHERE kind='custom'")
         .get()!.count
     ).toBe(0);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_resources WHERE kind='content-analysis-run'")
+        .get()!.count
+    ).toBe(seededAnalysisRuns);
+    expect(
+      sqlite
+        .query<
+          { count: number },
+          []
+        >("SELECT COUNT(*) AS count FROM demo_bookmarks WHERE origin='automatic'")
+        .get()!.count
+    ).toBe(seededAutomaticBookmarks);
 
     expect(
       sqlite

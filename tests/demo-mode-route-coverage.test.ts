@@ -190,13 +190,43 @@ describe("demo mode runtime route coverage", () => {
   });
 
   it("completes the deterministic content-analysis contract without media inference", async () => {
+    const prepopulated = await app.inject({
+      method: "GET",
+      url: "/api/videos/4/bookmarks?origin=automatic",
+    });
+    expect(prepopulated.statusCode).toBe(200);
+    expect(prepopulated.json().data).toHaveLength(28);
+
+    const reusedSeed = await app.inject({
+      method: "POST",
+      url: "/api/videos/4/analyses/nudity",
+      headers: { "idempotency-key": "demo-prepopulated-analysis" },
+      payload: { profile: "balanced" },
+    });
+    expect(reusedSeed.statusCode).toBe(202);
+    expect(reusedSeed.json()).toMatchObject({
+      success: true,
+      data: {
+        reused: true,
+        job: {
+          id: 4,
+          status: "completed",
+          result: { bookmark_count: 28 },
+        },
+      },
+    });
+
     const started = await app.inject({
       method: "POST",
-      url: "/api/videos/1/analyses/nudity",
+      url: "/api/videos/3/analyses/nudity",
       headers: { "idempotency-key": "demo-content-analysis" },
       payload: {
         profile: "balanced",
-        categories: ["BUTTOCKS_EXPOSED"],
+        categories: [
+          "BUTTOCKS_EXPOSED",
+          "FEMALE_BREAST_EXPOSED",
+          "FEET_EXPOSED",
+        ],
       },
     });
     expect(started.statusCode).toBe(202);
@@ -206,8 +236,8 @@ describe("demo mode runtime route coverage", () => {
         reused: false,
         job: {
           status: "completed",
-          revisions: { model: "demo-no-inference" },
-          result: { bookmark_count: 0 },
+          revisions: { model: "demo-synthetic-findings-v1" },
+          result: { bookmark_count: 8 },
         },
       },
     });
@@ -219,6 +249,26 @@ describe("demo mode runtime route coverage", () => {
     expect(inspected.statusCode).toBe(200);
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().data.status).toBe("completed");
+
+    const bookmarks = await app.inject({
+      method: "GET",
+      url: "/api/videos/3/bookmarks?origin=automatic",
+    });
+    expect(bookmarks.statusCode).toBe(200);
+    expect(bookmarks.json().data).toHaveLength(8);
+    const firstBookmark = bookmarks.json().data[0];
+    expect(firstBookmark).toMatchObject({
+      origin: "automatic",
+      analysis_run_id: started.json().data.job.id,
+    });
+    expect(firstBookmark.categories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          confidence: expect.any(Number),
+          provider_label: "demo-synthetic",
+        }),
+      ])
+    );
   });
 
   it("requires an explicit manifest record for all 293 primary operations", () => {

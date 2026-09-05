@@ -10,11 +10,12 @@ const migrationPaths = [
   "0039_freezing_daimon_hellstrom.sql",
   "0040_overrated_dreaming_celestial.sql",
   "0041_fresh_talkback.sql",
+  "0042_even_prism.sql",
 ].map((migration) =>
   resolve(process.cwd(), "src/database/drizzle-migrations", migration)
 );
 
-describe("content-analysis schema migrations 0039 through 0041", () => {
+describe("content-analysis schema migrations 0039 through 0042", () => {
   let database: TestDatabase;
   let sql: ReturnType<typeof postgres>;
   let firstRunId: number;
@@ -306,11 +307,43 @@ describe("content-analysis schema migrations 0039 through 0041", () => {
       RETURNING id
     `;
     expect(transitioningEvents).toHaveLength(1);
-    await expectConstraintViolation(
-      (isolatedSql) => isolatedSql`
-        DELETE FROM content_analysis_runs WHERE id = ${firstRunId}
-      `
-    );
+  });
+
+  it("deletes automatic bookmarks when video analysis history cascades", async () => {
+    const [{ id: cascadingVideoId }] = await sql<Array<{ id: number }>>`
+      INSERT INTO videos DEFAULT VALUES RETURNING id
+    `;
+    const [{ id: durableJobId }] = await sql<Array<{ id: number }>>`
+      INSERT INTO durable_jobs DEFAULT VALUES RETURNING id
+    `;
+    const [{ id: runId }] = await sql<Array<{ id: number }>>`
+      INSERT INTO content_analysis_runs (
+        durable_job_id, video_id, user_id, profile, requested_categories,
+        source_duration_seconds, source_fingerprint, analyzer_revision,
+        model_revision, taxonomy_revision, config_revision, request_digest,
+        semantic_generation_key
+      ) VALUES (
+        ${durableJobId}, ${cascadingVideoId}, ${ownerId}, 'balanced',
+        '["BUTTOCKS_EXPOSED"]'::jsonb, 120, 'source:cascade', 'analyzer:v1',
+        'model:v1', 'taxonomy:v1', 'config:v1', 'request-digest:cascade',
+        'semantic:cascade'
+      )
+      RETURNING id
+    `;
+    const [{ id: bookmarkId }] = await sql<Array<{ id: number }>>`
+      INSERT INTO bookmarks (analysis_run_id) VALUES (${runId}) RETURNING id
+    `;
+
+    await sql`DELETE FROM videos WHERE id = ${cascadingVideoId}`;
+
+    const [remaining] = await sql<
+      Array<{ runs: number; bookmarks: number }>
+    >`
+      SELECT
+        (SELECT count(*)::int FROM content_analysis_runs WHERE id = ${runId}) AS runs,
+        (SELECT count(*)::int FROM bookmarks WHERE id = ${bookmarkId}) AS bookmarks
+    `;
+    expect(remaining).toEqual({ runs: 0, bookmarks: 0 });
   });
 
   it("stores one media-free observation payload per run, phase, and chunk", async () => {
