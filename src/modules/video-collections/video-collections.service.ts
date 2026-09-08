@@ -100,12 +100,10 @@ export class VideoCollectionsService {
         c.external_ids_json,
         COUNT(e.id)::int AS entry_count,
         COUNT(e.id) FILTER (
-          WHERE vs.play_count > 0
-            AND (
-              vs.last_position_seconds = 0
+          WHERE (
+              (COALESCE(vs.play_count, 0) > 0 AND COALESCE(vs.last_position_seconds, -1) = 0)
               OR (
-                v.duration_seconds > 0
-                AND vs.last_position_seconds / v.duration_seconds >= 0.95
+                COALESCE(vs.last_position_seconds / NULLIF(v.duration_seconds, 0), 0) >= 0.95
               )
             )
         )::int AS watched_count,
@@ -789,12 +787,10 @@ export class VideoCollectionsService {
         ${sql.join(collectionIds.map((collectionId) => sql`${collectionId}`), sql`, `)}
       )
         AND NOT (
-          COALESCE(vs.play_count, 0) > 0
-          AND (
-            vs.last_position_seconds = 0
+          (
+            (COALESCE(vs.play_count, 0) > 0 AND COALESCE(vs.last_position_seconds, -1) = 0)
             OR (
-              v.duration_seconds > 0
-              AND vs.last_position_seconds / v.duration_seconds >= 0.95
+              COALESCE(vs.last_position_seconds / NULLIF(v.duration_seconds, 0), 0) >= 0.95
             )
           )
         )

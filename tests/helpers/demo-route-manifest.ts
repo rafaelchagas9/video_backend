@@ -23,6 +23,10 @@ allowed POST /api/auth/register
 allowed POST /api/auth/login
 allowed POST /api/auth/logout
 allowed GET /api/auth/me
+allowed GET /api/saved-views/ http-contract
+allowed PUT /api/saved-views/{id} http-contract
+allowed DELETE /api/saved-views/{id} http-contract
+allowed PATCH /api/videos/{id}/progress http-contract
 allowed GET /api/search/
 allowed GET /api/directories/ http-contract
 allowed POST /api/directories/ http-contract
@@ -245,6 +249,7 @@ allowed GET /api/videos/{id}/thumbnails.vtt
 allowed GET /api/videos/{id}/storyboard.jpg
 allowed GET /api/videos/{id}/storyboard.webp
 allowed GET /api/videos/{id}/storyboard
+allowed GET /api/videos/{id}/storyboard/status
 allowed POST /api/videos/{id}/storyboard http-contract
 allowed DELETE /api/videos/{id}/storyboard http-contract
 allowed GET /api/stats/storage

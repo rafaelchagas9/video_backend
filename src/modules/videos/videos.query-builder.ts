@@ -32,6 +32,7 @@ export function buildVideoFilters(
     createdBefore,
     minPlayCount,
     maxPlayCount,
+    isWatched,
     lastPlayedBefore,
     lastPlayedAfter,
     // Resolution filters
@@ -124,6 +125,18 @@ export function buildVideoFilters(
   }
   if (maxPlayCount !== undefined) {
     conditions.push(sql`${playCountExpression} <= ${maxPlayCount}`);
+  }
+  if (isWatched !== undefined) {
+    const watched = sql`EXISTS (
+      SELECT 1 FROM ${videoStatsTable}
+      WHERE ${videoStatsTable.videoId} = ${videosTable.id}
+        AND ${videoStatsTable.userId} = ${userId}
+        AND (
+          (${videoStatsTable.playCount} > 0 AND ${videoStatsTable.lastPositionSeconds} = 0)
+          OR (${videosTable.durationSeconds} > 0 AND ${videoStatsTable.lastPositionSeconds} / ${videosTable.durationSeconds} >= 0.95)
+        )
+    )`;
+    conditions.push(isWatched ? watched : sql`NOT ${watched}`);
   }
   if (lastPlayedBefore !== undefined) {
     conditions.push(sql`EXISTS (

@@ -11,22 +11,24 @@ import {
   thumbnailsVttQuerySchema,
   messageResponseSchema,
   errorResponseSchema,
+  generationQuerySchema,
+  generationStatusResponseSchema,
 } from "./storyboards.schemas";
 
 export async function storyboardsRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   const mapStoryboard = (
-    storyboard: Awaited<ReturnType<typeof storyboardsService.findById>>,
+    storyboard: Awaited<ReturnType<typeof storyboardsService.findById>>
   ) => {
     const extension = storyboard.sprite_path.split(".").pop()?.toLowerCase();
     const spriteExtension = extension === "webp" ? "webp" : "jpg";
 
     return {
       ...storyboard,
-      sprite_url: `${API_PREFIX}/videos/${storyboard.video_id}/storyboard.${spriteExtension}`,
-      vtt_url: `${API_PREFIX}/videos/${storyboard.video_id}/thumbnails.vtt`,
+      sprite_url: `${API_PREFIX}/videos/${storyboard.video_id}/storyboard.${spriteExtension}?v=${encodeURIComponent(storyboard.generated_at)}`,
+      vtt_url: `${API_PREFIX}/videos/${storyboard.video_id}/thumbnails.vtt?v=${encodeURIComponent(storyboard.generated_at)}`,
     };
   };
 
@@ -71,7 +73,7 @@ export async function storyboardsRoutes(
 
         throw error;
       }
-    },
+    }
   );
 
   const spriteSchema = {
@@ -96,7 +98,7 @@ export async function storyboardsRoutes(
     {
       schema: spriteSchema,
     },
-    sendSprite,
+    sendSprite
   );
 
   fastify.get(
@@ -104,7 +106,7 @@ export async function storyboardsRoutes(
     {
       schema: spriteSchema,
     },
-    sendSprite,
+    sendSprite
   );
 
   // ========== AUTHENTICATED ROUTES ==========
@@ -118,11 +120,13 @@ export async function storyboardsRoutes(
         tags: ["storyboards"],
         summary: "Generate storyboard",
         description:
-          "Generates a storyboard sprite sheet and VTT file for slider preview thumbnails.",
+          "Generates a storyboard sprite sheet and VTT file. With background=true, returns 202 immediately; poll GET /api/videos/:id/storyboard/status for completion. Existing requests without this option wait and return 201.",
         params: idParamSchema,
         body: generateStoryboardBodySchema,
+        querystring: generationQuerySchema,
         response: {
           201: storyboardResponseSchema,
+          202: generationStatusResponseSchema,
           400: errorResponseSchema,
           401: errorResponseSchema,
           404: errorResponseSchema,
@@ -131,9 +135,20 @@ export async function storyboardsRoutes(
       },
     },
     async (request, reply) => {
+      if (request.query.background === "true") {
+        await storyboardsService.queueGenerate(
+          request.params.id,
+          request.body,
+          true
+        );
+        return reply.status(202).send({
+          success: true,
+          data: await storyboardsService.getGenerationStatus(request.params.id),
+        });
+      }
       const storyboard = await storyboardsService.generate(
         request.params.id,
-        request.body ?? undefined,
+        request.body ?? undefined
       );
 
       return reply.status(201).send({
@@ -141,7 +156,31 @@ export async function storyboardsRoutes(
         data: mapStoryboard(storyboard),
         message: "Storyboard generated successfully",
       });
+    }
+  );
+
+  app.get(
+    "/:id/storyboard/status",
+    {
+      preHandler: authenticateUser,
+      schema: {
+        tags: ["storyboards"],
+        summary: "Get storyboard generation status",
+        description:
+          "Reports queued/running work in this server process, its latest result, or an existing storyboard. After a server restart unfinished work reports idle (or ready if an older storyboard exists).",
+        params: idParamSchema,
+        response: {
+          200: generationStatusResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
     },
+    async (request) => ({
+      success: true as const,
+      data: await storyboardsService.getGenerationStatus(request.params.id),
+    })
   );
 
   // Delete storyboard for video
@@ -169,7 +208,7 @@ export async function storyboardsRoutes(
         success: true,
         message: "Storyboard deleted successfully",
       });
-    },
+    }
   );
 
   // Get storyboard info for video
@@ -191,13 +230,16 @@ export async function storyboardsRoutes(
     },
     async (request, reply) => {
       const storyboard = await storyboardsService.findByVideoId(
-        request.params.id,
+        request.params.id
       );
 
       if (!storyboard) {
         return reply.status(404).send({
           success: false,
-          message: "Storyboard not found for this video",
+          error: {
+            message: "Storyboard not found for this video",
+            statusCode: 404,
+          },
         });
       }
 
@@ -205,6 +247,6 @@ export async function storyboardsRoutes(
         success: true,
         data: mapStoryboard(storyboard),
       });
-    },
+    }
   );
 }

@@ -50,6 +50,13 @@
       "when": 1787963503821,
       "tag": "0006_stiff_king_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788823564810,
+      "tag": "0007_saved_library_views",
+      "breakpoints": true
     }
   ]
 }

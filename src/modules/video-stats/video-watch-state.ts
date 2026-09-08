@@ -17,8 +17,7 @@ export function isVideoWatched({
   positionSeconds,
   durationSeconds,
 }: VideoWatchStateInput): boolean {
-  if (!playCount || playCount <= 0) return false;
-  if (positionSeconds === 0) return true;
+  if (positionSeconds === 0) return (playCount ?? 0) > 0;
   if (
     positionSeconds == null ||
     positionSeconds < 0 ||

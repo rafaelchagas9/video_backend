@@ -32,8 +32,13 @@ mock.module("@/modules/media/demo-media-assets.service", () => ({
 mock.module("@/database/demo", () => ({
   resolveDemoAssetPath: (path: string) => path,
 }));
+const events: string[] = [];
 mock.module("@/modules/events/events.service", () => ({
-  eventsService: { broadcastToAuthenticated() {} },
+  eventsService: {
+    broadcastToAuthenticated(event: { type: string }) {
+      events.push(event.type);
+    },
+  },
 }));
 mock.module("@/modules/videos/videos.service", () => ({
   videosService: {
@@ -85,10 +90,12 @@ mock.module("@/config/drizzle", () => ({
   },
 }));
 let renders = 0;
+let renderBarrier: Promise<void> | undefined;
 mock.module("@/modules/storyboards/storyboards.ffmpeg", () => ({
   StoryboardRenderer: class {
     async render(input: { outputPath: string }) {
       renders++;
+      await renderBarrier;
       await writeFile(input.outputPath, "new-sprite");
       return { sampling: "keyframes", hardware: false };
     }
@@ -150,4 +157,36 @@ it("honors storyboard concurrency and prevents duplicate queue entries during ra
   expect(started).toEqual([1, 2, 3]);
   releases.forEach((release) => release());
   await Bun.sleep(10);
+});
+
+it("reports manual background progress, deduplicates retries, and recovers after publication failure", async () => {
+  const service = new StoryboardsService();
+  let release!: () => void;
+  renderBarrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  rejectPublication = true;
+  events.length = 0;
+  const before = renders;
+  await service.queueGenerate(42, { intervalSeconds: 10 }, true);
+  await service.queueGenerate(42, { intervalSeconds: 5 }, true);
+  await Bun.sleep(5);
+  expect((await service.getGenerationStatus(42)).status).toBe("processing");
+  expect(renders).toBe(before + 1);
+  release();
+  await Bun.sleep(20);
+  expect((await service.getGenerationStatus(42)).status).toBe("failed");
+  expect(events).toEqual(["storyboard:generating", "storyboard:error"]);
+  rejectPublication = false;
+  renderBarrier = undefined;
+  await service.queueGenerate(42, { intervalSeconds: 10 }, true);
+  await Bun.sleep(20);
+  expect((await service.getGenerationStatus(42)).status).toBe("ready");
+  expect(row.intervalSeconds).toBe(10);
+  expect(events).toEqual([
+    "storyboard:generating",
+    "storyboard:error",
+    "storyboard:generating",
+    "storyboard:ready",
+  ]);
 });

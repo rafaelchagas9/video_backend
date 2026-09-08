@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import { watchProgressSchema } from "./video-stats.types";
 import { videoStatsService } from "./video-stats.service";
 import {
   idParamSchema,
@@ -47,6 +48,19 @@ export async function videoStatsRoutes(
       });
     },
   );
+
+  app.patch("/:id/progress", {
+    schema: {
+      tags: ["video-stats"],
+      summary: "Change resume position without recording watch time",
+      params: idParamSchema,
+      body: watchProgressSchema,
+      response: { 200: statsResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema },
+    },
+  }, async (request, reply) => {
+    const result = await videoStatsService.updateProgress(request.user!.id, request.params.id, request.body);
+    return reply.send({ success: true, data: result });
+  });
 
   app.post(
     "/:id/watch",

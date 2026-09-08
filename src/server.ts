@@ -615,6 +615,8 @@ export async function buildServer() {
       await instance.register(cleanupRoutes, { prefix: "/cleanup" });
       await instance.register(usersTriageLegacyRoutes, { prefix: "/users" });
       await instance.register(videoStatsRoutes, { prefix: "/videos" });
+      const { savedViewsRoutes } = await import("./modules/saved-views/saved-views.routes");
+      await instance.register(savedViewsRoutes, { prefix: "/saved-views" });
       await instance.register(settingsRoutes, { prefix: "/settings" });
       await instance.register(storyboardsRoutes, { prefix: "/videos" });
       await instance.register(statsRoutes, { prefix: "/stats" });

@@ -58,7 +58,26 @@ export const messageResponseSchema = z.object({
 });
 
 export const errorResponseSchema = z.object({
-  success: z.boolean(),
-  message: z.string(),
-  statusCode: z.number().optional(),
+  success: z.literal(false),
+  error: z.object({
+    message: z.string(),
+    statusCode: z.number(),
+    details: z.unknown().optional(),
+  }),
+});
+
+export const generationQuerySchema = z.object({
+  background: z.enum(["true", "false"]).optional(),
+});
+
+export const generationStatusSchema = z.object({
+  video_id: z.number(),
+  status: z.enum(["idle", "queued", "processing", "ready", "failed"]),
+  updated_at: z.string().nullable(),
+  error: z.string().optional(),
+});
+
+export const generationStatusResponseSchema = z.object({
+  success: z.literal(true),
+  data: generationStatusSchema,
 });

@@ -105,6 +105,10 @@ export const listVideosQuerySchema = z
     createdBefore: z.iso.datetime({ offset: true }).optional(),
     minPlayCount: z.coerce.number().int().min(0).optional(),
     maxPlayCount: z.coerce.number().int().min(0).optional(),
+    isWatched: z.preprocess(
+      (value) => value === "true" ? true : value === "false" ? false : value,
+      z.boolean().optional(),
+    ),
     lastPlayedBefore: z.iso.datetime({ offset: true }).optional(),
     lastPlayedAfter: z.iso.datetime({ offset: true }).optional(),
 
@@ -305,6 +309,10 @@ export const randomVideoQuerySchema = z
     matchMode: z.enum(["any", "all"]).default("any"),
     minPlayCount: z.coerce.number().int().min(0).optional(),
     maxPlayCount: z.coerce.number().int().min(0).optional(),
+    isWatched: z.preprocess(
+      (value) => value === "true" ? true : value === "false" ? false : value,
+      z.boolean().optional(),
+    ),
     lastPlayedBefore: z.iso.datetime({ offset: true }).optional(),
     lastPlayedAfter: z.iso.datetime({ offset: true }).optional(),
     limit: z.coerce.number().int().positive().max(32).optional(),

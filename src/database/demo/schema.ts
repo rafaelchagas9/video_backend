@@ -614,3 +614,10 @@ export const demoResourcesTable = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.kind, table.id] })]
 );
+
+export const demoSavedViews = sqliteTable("demo_saved_library_views", {
+  userId: integer("user_id").notNull(),
+  id: text("id").notNull(),
+  name: text("name").notNull(),
+  filters: text("filters").notNull(),
+}, (table) => [primaryKey({ columns: [table.userId, table.id] })]);

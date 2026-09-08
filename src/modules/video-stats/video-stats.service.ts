@@ -1,7 +1,7 @@
 import { db } from "@/config/drizzle";
-import { eq, and, sql, desc, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, isNotNull, inArray, isNull } from "drizzle-orm";
 import { videoStatsTable, videosTable, thumbnailsTable } from "@/database/schema";
-import { NotFoundError } from "@/utils/errors";
+import { NotFoundError, ConflictError } from "@/utils/errors";
 import { API_PREFIX } from "@/config/constants";
 import type {
   AggregateVideoStats,
@@ -11,6 +11,7 @@ import type {
   WatchHistoryResult,
   WatchHistoryInclude,
   WatchUpdateInput,
+  WatchProgressInput,
 } from "./video-stats.types";
 import { settingsService } from "@/modules/settings/settings.service";
 import { env } from "@/config/env";
@@ -192,6 +193,34 @@ export class VideoStatsService {
           ? aggregate.last_played_at.toISOString()
           : aggregate.last_played_at,
     };
+  }
+
+  async updateProgress(userId: number, videoId: number, input: WatchProgressInput) {
+    if (env.DEMO_MODE) {
+      await this.getDemoVideo(videoId);
+      const { getDemoSqlite } = await import("@/database/demo/client");
+      const result = getDemoSqlite().query(
+        "UPDATE demo_video_stats SET last_position_seconds = ?, updated_at = ? WHERE user_id = ? AND video_id = ? AND last_position_seconds IS ?",
+      ).run(input.last_position_seconds, new Date().toISOString(), userId, videoId, input.expected_position_seconds);
+      if (!result.changes) throw new ConflictError("Playback progress changed. Refresh and try again.");
+      const stats = getDemoSqlite().query("SELECT * FROM demo_video_stats WHERE user_id = ? AND video_id = ?").get(userId, videoId) as VideoStats;
+      const aggregate = getDemoSqlite().query("SELECT video_id, SUM(play_count) AS total_play_count, SUM(total_watch_seconds) AS total_watch_seconds, MAX(last_played_at) AS last_played_at FROM demo_video_stats WHERE video_id = ? GROUP BY video_id").get(videoId) as AggregateVideoStats;
+      return { stats, aggregate };
+    } else {
+      // Compare the displayed position so Undo cannot overwrite newer playback.
+      const rows = await db.update(videoStatsTable).set({
+        lastPositionSeconds: input.last_position_seconds,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(videoStatsTable.userId, userId),
+        eq(videoStatsTable.videoId, videoId),
+        input.expected_position_seconds === null
+          ? isNull(videoStatsTable.lastPositionSeconds)
+          : eq(videoStatsTable.lastPositionSeconds, input.expected_position_seconds),
+      )).returning({ videoId: videoStatsTable.videoId });
+      if (!rows.length) throw new ConflictError("Playback progress changed. Refresh and try again.");
+    }
+    return this.getStats(userId, videoId);
   }
 
   async recordWatch(

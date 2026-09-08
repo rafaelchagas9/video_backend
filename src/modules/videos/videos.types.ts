@@ -96,6 +96,7 @@ export interface ListVideosOptions {
   createdBefore?: string;
   minPlayCount?: number;
   maxPlayCount?: number;
+  isWatched?: boolean;
   lastPlayedBefore?: string;
   lastPlayedAfter?: string;
 
@@ -165,6 +166,7 @@ export interface RandomVideoOptions {
   matchMode?: "any" | "all";
   minPlayCount?: number;
   maxPlayCount?: number;
+  isWatched?: boolean;
   lastPlayedBefore?: string;
   lastPlayedAfter?: string;
   limit?: number;

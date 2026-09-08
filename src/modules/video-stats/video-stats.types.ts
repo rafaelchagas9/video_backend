@@ -80,3 +80,9 @@ export const watchHistoryQuerySchema = z.object({
 
 export type WatchUpdateInput = z.infer<typeof watchUpdateSchema>;
 export type WatchHistoryQuery = z.infer<typeof watchHistoryQuerySchema>;
+
+export const watchProgressSchema = z.object({
+  last_position_seconds: z.number().nonnegative().nullable(),
+  expected_position_seconds: z.number().nonnegative().nullable(),
+});
+export type WatchProgressInput = z.infer<typeof watchProgressSchema>;

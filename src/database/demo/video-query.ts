@@ -130,6 +130,16 @@ export function buildDemoVideoQuery(
         userId,
         options[option]!
       );
+  if (options.isWatched !== undefined) {
+    add(
+      `${options.isWatched ? "" : "NOT "}EXISTS (
+        SELECT 1 FROM demo_video_stats s WHERE s.video_id = v.id AND s.user_id = ?
+          AND ((s.play_count > 0 AND s.last_position_seconds = 0)
+            OR (v.duration_seconds > 0 AND s.last_position_seconds / v.duration_seconds >= 0.95))
+      )`,
+      userId,
+    );
+  }
   for (const [option, operator] of [
     ["lastPlayedBefore", "<"],
     ["lastPlayedAfter", ">="],

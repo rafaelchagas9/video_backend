@@ -12,7 +12,11 @@ import { eventsService } from "@/modules/events/events.service";
 import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
 import { recordPerfStage } from "@/utils/performance-profiler";
-import type { Storyboard, GenerateStoryboardInput } from "./storyboards.types";
+import type {
+  Storyboard,
+  GenerateStoryboardInput,
+  StoryboardGenerationStatus,
+} from "./storyboards.types";
 import { unlink, stat, readFile, writeFile } from "fs/promises";
 import type { ExtractedFrame } from "@/modules/frame-extraction";
 import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
@@ -37,6 +41,50 @@ export class StoryboardsService {
     maxKeyframeDriftSeconds: env.STORYBOARD_MAX_KEYFRAME_DRIFT_SECONDS,
   });
   private pendingQueue: number[] = [];
+  private readonly queuedOptions = new Map<
+    number,
+    { input?: GenerateStoryboardInput; force: boolean }
+  >();
+  private readonly generationStates = new Map<
+    number,
+    StoryboardGenerationStatus
+  >();
+
+  private setGenerationStatus(
+    videoId: number,
+    status: StoryboardGenerationStatus["status"],
+    error?: string
+  ): void {
+    this.generationStates.delete(videoId);
+    this.generationStates.set(videoId, {
+      video_id: videoId,
+      status,
+      updated_at: new Date().toISOString(),
+      ...(error ? { error } : {}),
+    });
+    // Bound retained outcomes without dropping active work.
+    for (const [id, state] of this.generationStates) {
+      if (this.generationStates.size <= 1000) break;
+      if (state.status === "ready" || state.status === "failed")
+        this.generationStates.delete(id);
+    }
+  }
+
+  async getGenerationStatus(
+    videoId: number
+  ): Promise<StoryboardGenerationStatus> {
+    await videosService.findById(videoId);
+    if (!env.DEMO_MODE) {
+      const active = this.generationStates.get(videoId);
+      if (active && active.status !== "ready") return active;
+    }
+    const storyboard = await this.findByVideoId(videoId);
+    return {
+      video_id: videoId,
+      status: storyboard ? "ready" : "idle",
+      updated_at: storyboard?.generated_at ?? null,
+    };
+  }
 
   constructor() {
     // Ensure storyboards directory exists
@@ -74,14 +122,18 @@ export class StoryboardsService {
    * - If already in queue, skip.
    * - Otherwise add to queue and start processing if not already running.
    */
-  async queueGenerate(videoId: number): Promise<void> {
+  async queueGenerate(
+    videoId: number,
+    input?: GenerateStoryboardInput,
+    force = false
+  ): Promise<void> {
     if (env.DEMO_MODE) {
-      demoMediaAssetsService.generateStoryboard(videoId);
+      demoMediaAssetsService.generateStoryboard(videoId, input);
       return;
     }
 
     // Skip if this video is currently being processed
-    if (this.processingVideoIds.has(videoId)) {
+    if (this.processingVideoIds.has(videoId) || this.generating.has(videoId)) {
       logger.debug(
         { videoId },
         "Storyboard generation already in progress, skipping"
@@ -100,18 +152,23 @@ export class StoryboardsService {
 
     // Check if storyboard already exists
     const existing = await this.findByVideoId(videoId);
-    if (existing) {
+    if (existing && !force) {
       logger.debug({ videoId }, "Storyboard already exists, skipping");
       return;
     }
 
+    await videosService.findById(videoId);
+
     // Recheck after the database read: simultaneous hover requests can race.
     if (
       this.processingVideoIds.has(videoId) ||
+      this.generating.has(videoId) ||
       this.pendingQueue.includes(videoId)
     )
       return;
     this.pendingQueue.push(videoId);
+    this.queuedOptions.set(videoId, { input, force });
+    this.setGenerationStatus(videoId, "queued");
     logger.info(
       { videoId, queueLength: this.pendingQueue.length },
       "Storyboard generation queued"
@@ -133,63 +190,27 @@ export class StoryboardsService {
   }
 
   private async processQueuedVideo(videoId: number): Promise<void> {
+    const options = this.queuedOptions.get(videoId);
+    this.queuedOptions.delete(videoId);
     try {
-      // Double-check storyboard doesn't exist (may have been created by another process)
       const existing = await this.findByVideoId(videoId);
-      if (!existing) {
-        const video = await videosService.findById(videoId);
-        const videoContext = createVideoEventContext(video);
-
-        logger.info(
-          { videoId, remaining: this.pendingQueue.length },
-          "Processing storyboard generation"
-        );
-
-        eventsService.broadcastToAuthenticated({
-          type: "storyboard:generating",
-          message: {
-            ...videoContext,
-            message: "Generating storyboard thumbnails...",
-            text: "Generating storyboard thumbnails...",
-          },
-        });
-
-        await this.generate(videoId);
-
-        eventsService.broadcastToAuthenticated({
-          type: "storyboard:ready",
-          message: {
-            ...videoContext,
-            message: "Storyboard thumbnails ready",
-            text: "Storyboard thumbnails ready",
-          },
-        });
-      }
+      if (!existing || options?.force)
+        await this.generate(videoId, options?.input);
+      else this.setGenerationStatus(videoId, "ready");
     } catch (error) {
-      captureTelemetryException(error, {
-        source: "storyboard_job",
-        videoId,
-      });
-      logger.error({ videoId, error }, "Failed to generate storyboard");
-
-      let videoContext = { videoId, video_id: videoId };
-      try {
-        videoContext = createVideoEventContext(
-          await videosService.findById(videoId)
+      // generate() reports render/publication failures; also cover preflight failures.
+      if (this.generationStates.get(videoId)?.status !== "failed") {
+        this.setGenerationStatus(
+          videoId,
+          "failed",
+          "Could not start storyboard generation. Please try again."
         );
-      } catch {
-        // Keep the failure event actionable even if video enrichment fails.
+        logger.error(
+          { videoId, error },
+          "Failed to start storyboard generation"
+        );
+        captureTelemetryException(error, { source: "storyboard_job", videoId });
       }
-
-      eventsService.broadcastToAuthenticated({
-        type: "storyboard:error",
-        message: {
-          ...videoContext,
-          message: "Failed to generate storyboard",
-          text: "Failed to generate storyboard",
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
     } finally {
       this.processingVideoIds.delete(videoId);
       this.processQueue();
@@ -205,12 +226,78 @@ export class StoryboardsService {
     input?: GenerateStoryboardInput
   ): Promise<Storyboard> {
     const active = this.generating.get(videoId);
-    if (active) return active;
-    const pending = this.generateInternal(videoId, input).finally(() =>
+    if (active) {
+      logger.info(
+        { videoId },
+        "Storyboard generation already in progress; joining existing job"
+      );
+      return active;
+    }
+    const pending = this.runGeneration(videoId, input).finally(() =>
       this.generating.delete(videoId)
     );
     this.generating.set(videoId, pending);
     return pending;
+  }
+
+  private async runGeneration(
+    videoId: number,
+    input?: GenerateStoryboardInput
+  ): Promise<Storyboard> {
+    this.setGenerationStatus(videoId, "processing");
+    const started = Date.now();
+    let videoContext = { videoId, video_id: videoId };
+    try {
+      videoContext = createVideoEventContext(
+        await videosService.findById(videoId)
+      );
+      logger.info({ videoId }, "Storyboard generation started");
+      eventsService.broadcastToAuthenticated({
+        type: "storyboard:generating",
+        message: {
+          ...videoContext,
+          message: "Generating storyboard thumbnails...",
+          text: "Generating storyboard thumbnails...",
+        },
+      });
+      const storyboard = await this.generateInternal(videoId, input);
+      this.setGenerationStatus(videoId, "ready");
+      logger.info(
+        {
+          videoId,
+          durationMs: Date.now() - started,
+          tileCount: storyboard.tile_count,
+        },
+        "Storyboard generation completed"
+      );
+      eventsService.broadcastToAuthenticated({
+        type: "storyboard:ready",
+        message: {
+          ...videoContext,
+          message: "Storyboard thumbnails ready",
+          text: "Storyboard thumbnails ready",
+        },
+      });
+      return storyboard;
+    } catch (error) {
+      const message = "Storyboard generation failed. Please try again.";
+      this.setGenerationStatus(videoId, "failed", message);
+      logger.error(
+        { videoId, error, durationMs: Date.now() - started },
+        "Storyboard generation failed"
+      );
+      captureTelemetryException(error, { source: "storyboard_job", videoId });
+      eventsService.broadcastToAuthenticated({
+        type: "storyboard:error",
+        message: {
+          ...videoContext,
+          message,
+          text: message,
+          error: message,
+        },
+      });
+      throw error;
+    }
   }
 
   private async generateInternal(
@@ -660,7 +747,7 @@ export class StoryboardsService {
 
       // Use relative URL for the sprite (same endpoint path)
       vttContent += `${startFormatted} --> ${endFormatted}\n`;
-      vttContent += `/api/videos/${videoId}/storyboard.${spriteExtension}#xywh=${x},${y},${tileWidth},${tileHeight}\n\n`;
+      vttContent += `/api/videos/${videoId}/storyboard.${spriteExtension}?v=${encodeURIComponent(basename(vttPath))}#xywh=${x},${y},${tileWidth},${tileHeight}\n\n`;
     }
 
     await writeFile(vttPath, vttContent, "utf-8");

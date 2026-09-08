@@ -60,3 +60,5 @@ export * from "./multiplayer-remote.schema";
 
 // Relations (for Drizzle relational queries)
 export * from "./relations";
+
+export * from "./saved-views.schema";

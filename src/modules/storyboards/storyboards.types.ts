@@ -23,3 +23,10 @@ export const generateStoryboardSchema = z.object({
 });
 
 export type GenerateStoryboardInput = z.infer<typeof generateStoryboardSchema>;
+
+export interface StoryboardGenerationStatus {
+  video_id: number;
+  status: "idle" | "queued" | "processing" | "ready" | "failed";
+  updated_at: string | null;
+  error?: string;
+}

@@ -6,6 +6,9 @@ const SAFE_API_REQUESTS: Array<{
   methods: ReadonlySet<string>;
   path: RegExp;
 }> = [
+  { methods: new Set(["GET"]), path: new RegExp(`^${API_PREFIX}/saved-views/?$`) },
+  { methods: new Set(["PUT", "DELETE"]), path: new RegExp(`^${API_PREFIX}/saved-views/[a-f0-9-]{36}$`) },
+  { methods: new Set(["PATCH"]), path: new RegExp(`^${API_PREFIX}/videos/\\d+/progress$`) },
   {
     methods: new Set(["POST"]),
     path: new RegExp(`^${API_PREFIX}/auth/(?:login|logout|register)$`),
@@ -51,7 +54,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard|conversions|conversion-estimate|artwork)$`
+      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|conversions|conversion-estimate|artwork)$`
     ),
   },
   {
