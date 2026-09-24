@@ -565,6 +565,14 @@ export class WatcherService {
     // If new video, add to storyboard queue
     if (isNewVideo) {
       this.newVideoIds.push(videoId);
+      void import("@/modules/library-sync/library-sync.runtime")
+        .then(({ enqueueNewVideo }) => enqueueNewVideo(videoId))
+        .catch((error) =>
+          logger.warn(
+            { error, videoId },
+            "Could not schedule new-video synchronization"
+          )
+        );
     }
 
     const totalFileDuration = Date.now() - fileStartTime;

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { rmSync } from "fs";
+import { existsSync, rmSync } from "fs";
 import { resolve, sep } from "path";
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
@@ -280,13 +280,18 @@ describe("demo directories and core video HTTP contracts", () => {
     const { resolveDemoAssetPath } = await import("@/database/demo");
     const assetRoot = resolve(process.cwd(), env.DEMO_ASSETS_DIR);
     const demoPaths = sqlite
-      .query<{ file_path: string }, []>("SELECT file_path FROM demo_videos")
+      .query<{ file_path: string; is_available: number }, []>(
+        "SELECT file_path, is_available FROM demo_videos"
+      )
       .all();
     for (const row of demoPaths) {
-      const resolved = resolveDemoAssetPath(row.file_path);
+      const resolved = resolveDemoAssetPath(row.file_path, {
+        mustExist: row.is_available === 1,
+      });
       expect(
         resolved === assetRoot || resolved.startsWith(`${assetRoot}${sep}`)
       ).toBe(true);
+      if (row.is_available === 0) expect(existsSync(resolved)).toBe(false);
     }
 
     const patch = await app.inject({
@@ -330,6 +335,13 @@ describe("demo directories and core video HTTP contracts", () => {
     });
     expect(duplicates.statusCode, duplicates.body).toBe(200);
     expect(Array.isArray(duplicates.json().data)).toBe(true);
+
+    const seededUnavailable = await app.inject({
+      method: "GET",
+      url: "/api/videos/unavailable",
+    });
+    expect(seededUnavailable.statusCode, seededUnavailable.body).toBe(200);
+    expect(seededUnavailable.json().pagination.total).toBe(3);
 
     sqlite.run("UPDATE demo_videos SET is_available = 0 WHERE id = 129");
     const unavailable = await app.inject({

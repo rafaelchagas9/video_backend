@@ -4,6 +4,10 @@ import { env } from "@/config/env";
 import {
   tagAliasesTable,
   tagCategoriesTable,
+  tagExternalIdsTable,
+  taggingRuleActionsTable,
+  enrichmentRunsTable,
+  enrichmentSuggestionsTable,
   tagsTable,
   videoTagsTable,
 } from "@/database/schema";
@@ -11,6 +15,7 @@ import { demoSchema, getDemoDatabase } from "@/database/demo";
 import {
   NotFoundError,
   ConflictError,
+  BadRequestError,
   isUniqueViolation,
   isForeignKeyViolation,
 } from "@/utils/errors";
@@ -690,6 +695,64 @@ export class TagsService {
     const { enrichmentService } =
       await import("@/modules/enrichment/enrichment.service");
     await enrichmentService.deleteForEntity("tag", id);
+  }
+
+  /** Move assignments and child tags to the survivor in one transaction. */
+  async merge(fromId: number, intoId: number): Promise<Tag> {
+    if (fromId === intoId) throw new BadRequestError("A tag cannot merge into itself");
+    if (env.DEMO_MODE) return tagsDemoService.merge(fromId, intoId);
+
+    await db.transaction(async (tx) => {
+      const locked = await tx.select().from(tagsTable)
+        .where(inArray(tagsTable.id, [fromId, intoId]))
+        .orderBy(asc(tagsTable.id)).for("update");
+      const source = locked.find((tag) => tag.id === fromId);
+      const target = locked.find((tag) => tag.id === intoId);
+      if (!source) throw new NotFoundError(`Tag not found with id: ${fromId}`);
+      if (!target) throw new NotFoundError(`Tag not found with id: ${intoId}`);
+
+      const descendants = await this.getDescendants(fromId);
+      if (descendants.some((tag) => tag.id === intoId)) {
+        throw new ConflictError("Cannot merge a tag into one of its children");
+      }
+      const children = await tx.select({ name: tagsTable.name }).from(tagsTable)
+        .where(eq(tagsTable.parentId, fromId));
+      const targetChildren = await tx.select({ name: tagsTable.name }).from(tagsTable)
+        .where(eq(tagsTable.parentId, intoId));
+      const existingNames = new Set(targetChildren.map((child) => child.name.toLocaleLowerCase()));
+      if (children.some((child) => existingNames.has(child.name.toLocaleLowerCase()))) {
+        throw new ConflictError("A child tag with the same name already exists under the destination");
+      }
+
+      await tx.execute(sql`INSERT INTO video_tags (video_id, tag_id)
+        SELECT video_id, ${intoId} FROM video_tags WHERE tag_id = ${fromId}
+        ON CONFLICT (video_id, tag_id) DO NOTHING`);
+      await tx.execute(sql`INSERT INTO tag_aliases (tag_id, name, note)
+        SELECT ${intoId}, name, note FROM tag_aliases WHERE tag_id = ${fromId}
+        ON CONFLICT (tag_id, name) DO NOTHING`);
+      if (source.name !== target.name) {
+        await tx.insert(tagAliasesTable).values({ tagId: intoId, name: source.name })
+          .onConflictDoNothing();
+      }
+      await tx.update(tagExternalIdsTable).set({ tagId: intoId })
+        .where(eq(tagExternalIdsTable.tagId, fromId));
+      await tx.update(taggingRuleActionsTable).set({ targetId: intoId })
+        .where(and(eq(taggingRuleActionsTable.targetId, fromId), inArray(taggingRuleActionsTable.actionType, ["add_tag", "remove_tag"])));
+      await tx.update(tagsTable).set({ parentId: intoId })
+        .where(eq(tagsTable.parentId, fromId));
+      await tx.execute(sql`UPDATE enrichment_suggestions AS source
+        SET dedup_hash = source.dedup_hash || ':merged:' || source.id
+        WHERE source.entity_type = 'tag' AND source.entity_id = ${fromId}
+          AND EXISTS (SELECT 1 FROM enrichment_suggestions AS target
+            WHERE target.entity_type = 'tag' AND target.entity_id = ${intoId}
+              AND target.dedup_hash = source.dedup_hash)`);
+      await tx.update(enrichmentSuggestionsTable).set({ entityId: intoId })
+        .where(and(eq(enrichmentSuggestionsTable.entityType, "tag"), eq(enrichmentSuggestionsTable.entityId, fromId)));
+      await tx.update(enrichmentRunsTable).set({ entityId: intoId })
+        .where(and(eq(enrichmentRunsTable.entityType, "tag"), eq(enrichmentRunsTable.entityId, fromId)));
+      await tx.delete(tagsTable).where(eq(tagsTable.id, fromId));
+    });
+    return this.findById(intoId);
   }
 
   async getVideos(tagId: number): Promise<Video[]> {

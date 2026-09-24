@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import {
+  creatorExternalIdsTable,
   creatorFavoritesTable,
   creatorGalleryMediaTable,
   creatorsTable,
@@ -20,7 +21,10 @@ import type {
   ListCreatorsOptions,
   PaginatedCreators,
   EnhancedCreator,
+  CreatorExternalId,
+  CreatorReleaseYear,
 } from "./creators.types";
+import { externalProfileUrl } from "@/modules/enrichment/enrichment.reference";
 import { creatorsDemoService } from "./creators.demo.service";
 
 export class CreatorsService {
@@ -325,7 +329,14 @@ export class CreatorsService {
     }
 
     const creator = this.mapToSnakeCase(result[0]);
-    creator.gallery_media = await this.getGalleryMedia(id);
+    const [gallery, externalIds, releaseYears] = await Promise.all([
+      this.getGalleryMedia(id),
+      this.getExternalIds(id),
+      this.getReleaseYears(id),
+    ]);
+    creator.gallery_media = gallery;
+    creator.external_ids = externalIds;
+    creator.release_years = releaseYears;
     return creator;
   }
 
@@ -658,6 +669,39 @@ export class CreatorsService {
           ? item.updatedAt.toISOString()
           : item.updatedAt,
     }));
+  }
+
+  private async getExternalIds(creatorId: number): Promise<CreatorExternalId[]> {
+    const rows = await db
+      .select()
+      .from(creatorExternalIdsTable)
+      .where(eq(creatorExternalIdsTable.creatorId, creatorId));
+    return rows.map((row) => ({
+      source: row.source,
+      external_id: row.externalId,
+      // Enrichment never stored a URL, so derive the public profile page.
+      url: row.externalUrl ?? externalProfileUrl(row.source, row.externalId),
+      last_synced_at:
+        row.lastSyncedAt instanceof Date
+          ? row.lastSyncedAt.toISOString()
+          : row.lastSyncedAt,
+    }));
+  }
+
+  /** Videos per release year, from the source `release_date` on each video
+   * this creator appears in. Feeds the creator's career line. */
+  private async getReleaseYears(creatorId: number): Promise<CreatorReleaseYear[]> {
+    const rows = await db.execute(sql`
+      SELECT substring(vm.value from '^(\d{4})-')::int AS year, count(*)::int AS count
+      FROM video_metadata vm
+      JOIN video_creators vc ON vc.video_id = vm.video_id
+      WHERE vc.creator_id = ${creatorId}
+        AND vm.key = 'release_date'
+        AND vm.value ~ '^\d{4}-'
+      GROUP BY 1
+      ORDER BY 1
+    `);
+    return rows.map((row: any) => ({ year: Number(row.year), count: Number(row.count) }));
   }
 
   // Helper to map Drizzle results (camelCase) to API format (snake_case)

@@ -70,6 +70,13 @@ export function buildDemoVideoQuery(
         `${options[option] ? "" : "NOT "}EXISTS (SELECT 1 FROM ${table} r WHERE r.video_id = v.id)`
       );
   }
+  if (options.missingMetadata)
+    add(
+      // A confirmed "no studio" is an answer, not a gap — same as studioAssignmentStatus=unknown.
+      `(NOT EXISTS (SELECT 1 FROM demo_video_tags r WHERE r.video_id = v.id)
+        OR NOT EXISTS (SELECT 1 FROM demo_video_creators r WHERE r.video_id = v.id)
+        OR (NOT EXISTS (SELECT 1 FROM demo_video_studios r WHERE r.video_id = v.id) AND v.studio_absence_confirmed_at IS NULL))`
+    );
   if (options.isFavorite !== undefined)
     add(
       `${options.isFavorite ? "" : "NOT "}EXISTS (SELECT 1 FROM demo_favorites f WHERE f.video_id = v.id AND f.user_id = ?)`,

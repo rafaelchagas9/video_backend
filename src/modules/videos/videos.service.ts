@@ -15,6 +15,7 @@ import {
   videoFaceDetectionsTable,
   faceImagesTable,
   artworkAssetsTable,
+  videoExternalIdsTable,
 } from "@/database/schema";
 import {
   BadRequestError,
@@ -35,6 +36,7 @@ import type {
 import { deriveStudioAssignmentStatus } from "./videos.types";
 import { computeFileHash } from "@/utils/file-utils";
 import { metadataService } from "./metadata.service";
+import { externalProfileUrl } from "@/modules/enrichment/enrichment.reference";
 import { thumbnailsService } from "@/modules/thumbnails/thumbnails.service";
 import { videoCollectionsService } from "@/modules/video-collections/video-collections.service";
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
@@ -110,7 +112,7 @@ export class VideosService {
   ): Promise<Video> {
     if (env.DEMO_MODE) {
       const video = demoRepository.getVideoById(id);
-      const response = { ...video } as Video;
+      const response = { ...video, ...(include.includes("external_ids") ? { external_ids: [] } : {}) } as Video;
       if (include.includes("artwork")) {
         const { artworkService } =
           await import("@/modules/artwork/artwork.service");
@@ -210,6 +212,21 @@ export class VideosService {
     } as Video;
 
     const promises: Promise<void>[] = [];
+
+    if (include.includes("external_ids")) {
+      promises.push(
+        db.select().from(videoExternalIdsTable)
+          .where(eq(videoExternalIdsTable.videoId, id))
+          .then((rows) => {
+            response.external_ids = rows.map((row) => ({
+              source: row.source,
+              external_id: row.externalId,
+              url: row.externalUrl ?? externalProfileUrl(row.source, row.externalId, "scene"),
+              last_synced_at: row.lastSyncedAt?.toISOString() ?? null,
+            }));
+          })
+      );
+    }
 
     if (include.includes("collection")) {
       promises.push(
@@ -874,6 +891,14 @@ export class VideosService {
         { videoId: inserted.id, filePath },
         "Rendered video registered"
       );
+      void import("@/modules/library-sync/library-sync.runtime")
+        .then(({ enqueueNewVideo }) => enqueueNewVideo(inserted.id))
+        .catch((error) =>
+          logger.warn(
+            { error, videoId: inserted.id },
+            "Could not schedule new-video synchronization"
+          )
+        );
       return this.findById(inserted.id);
     } catch (error) {
       if (isUniqueViolation(error)) {

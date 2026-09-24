@@ -76,7 +76,7 @@ export const listVideosQuerySchema = z
   .object({
     // Existing pagination and search
     page: z.coerce.number().int().positive().default(1),
-    limit: z.coerce.number().int().positive().max(100).default(20),
+    limit: z.coerce.number().int().positive().max(1000).default(20),
     ids: z
       .preprocess(
         parseCommaSeparatedIds,
@@ -172,6 +172,8 @@ export const listVideosQuerySchema = z
     hasTags: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasCreator: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     hasStudio: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
+    // Missing tags OR a creator OR a studio (the has* flags AND together).
+    missingMetadata: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     studioAssignmentStatus: z
       .enum(["assigned", "confirmed_none", "unknown"])
       .optional(),
@@ -378,6 +380,7 @@ export const getVideoQuerySchema = z.object({
           z.enum([
             "collection",
             "collection_neighbors",
+            "external_ids",
             "creators",
             "tags",
             "studios",
@@ -467,6 +470,7 @@ export const videoSchema = z.object({
   tags: z.array(tagSchema).optional(),
   studios: z.array(studioSchema).optional(),
   artwork: artworkSummarySchema.nullable().optional(),
+  external_ids: z.array(z.object({ source: z.string(), external_id: z.string(), url: z.string().nullable(), last_synced_at: z.string().nullable() })).optional(),
   play_count: z.number().optional(),
   last_played_at: z.string().nullable().optional(),
 });

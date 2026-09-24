@@ -117,7 +117,7 @@ describe("demo triage and tagging-rules HTTP contracts", () => {
       const response = await app.inject({ method: "GET", url });
       expect(response.statusCode, `GET ${url}: ${response.body}`).toBe(200);
       expect(response.json().data).toMatchObject({
-        total_videos: 132,
+        total_videos: 129,
         tagged_percentage: expect.any(Number),
       });
     }

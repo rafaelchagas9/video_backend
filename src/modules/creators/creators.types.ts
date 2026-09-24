@@ -11,6 +11,10 @@ export interface Creator {
   main_picture_url?: string; // Computed field
   face_thumbnail_url?: string; // Computed field
   gallery_media?: CreatorGalleryMedia[];
+  /** ThePornDB / StashDB identities, detail responses only. */
+  external_ids?: CreatorExternalId[];
+  /** Videos per source release year, detail responses only. */
+  release_years?: CreatorReleaseYear[];
   is_favorite: boolean;
   created_at: string;
   updated_at: string;
@@ -31,6 +35,18 @@ export interface Creator {
   breast_type?: string | null;
   career_start_year?: number | null;
   career_end_year?: number | null;
+}
+
+export interface CreatorExternalId {
+  source: string;
+  external_id: string;
+  url: string | null;
+  last_synced_at: string | null;
+}
+
+export interface CreatorReleaseYear {
+  year: number;
+  count: number;
 }
 
 export interface CreatorGalleryMedia {

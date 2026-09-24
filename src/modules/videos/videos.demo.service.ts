@@ -309,6 +309,57 @@ export class VideosDemoService {
       .having(sql`count(*) > 1`)
       .all();
 
+    // Older demo baselines gave every generated catalog row a unique placeholder
+    // hash, even though copies of the same source point to the same file. Keep
+    // those installations useful for the UI without changing their saved state.
+    if (groups.length === 0) {
+      const copies = getDemoDatabase()
+        .select()
+        .from(demoVideosTable)
+        .where(inArray(demoVideosTable.sourceVideoId, [1, 2, 3]))
+        .all();
+      const examples = new Map<number, typeof copies>();
+      for (const copy of copies) {
+        if (copy.sourceVideoId == null) continue;
+        const group = examples.get(copy.sourceVideoId) ?? [];
+        group.push(copy);
+        examples.set(copy.sourceVideoId, group);
+      }
+      return [...examples.entries()]
+        .flatMap(([sourceId, videos]) => {
+          const source = videos.find((video) => video.id === sourceId);
+          if (!source?.fileHash) return [];
+          const matching = videos.filter(
+            (video) =>
+              video.filePath === source.filePath &&
+              video.fileSizeBytes === source.fileSizeBytes
+          );
+          if (matching.length < 2) return [];
+          return [
+            {
+              file_hash: source.fileHash,
+              count: matching.length,
+              total_size_bytes: String(
+                matching.reduce(
+                  (total, video) => total + video.fileSizeBytes,
+                  0
+                )
+              ),
+              videos: matching.map((video) => ({
+                id: video.id,
+                file_name: video.fileName,
+                file_path: video.filePath,
+                file_size_bytes: video.fileSizeBytes,
+                indexed_at: video.indexedAt,
+              })),
+            },
+          ];
+        })
+        .sort(
+          (a, b) => Number(b.total_size_bytes) - Number(a.total_size_bytes)
+        );
+    }
+
     return groups.map((group) => ({
       file_hash: group.fileHash!,
       count: Number(group.duplicateCount),

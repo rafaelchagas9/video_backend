@@ -135,6 +135,35 @@ export const creatorSchema = z.object({
   completeness: completenessSchema.optional(),
 });
 
+/** Full creator record. List and nested creator payloads keep the smaller schema. */
+export const creatorDetailSchema = creatorSchema.extend({
+  // The detail service supplies accepted source facts and identities. Keep them
+  // in the response schema so Fastify's serializer does not strip them.
+  gender: z.string().nullable().optional(),
+  birth_date: z.string().nullable().optional(),
+  death_date: z.string().nullable().optional(),
+  ethnicity: z.string().nullable().optional(),
+  country: z.string().nullable().optional(),
+  birthplace: z.string().nullable().optional(),
+  eye_color: z.string().nullable().optional(),
+  hair_color: z.string().nullable().optional(),
+  height_cm: z.number().nullable().optional(),
+  cup_size: z.string().nullable().optional(),
+  band_size: z.number().nullable().optional(),
+  waist_size: z.number().nullable().optional(),
+  hip_size: z.number().nullable().optional(),
+  breast_type: z.string().nullable().optional(),
+  career_start_year: z.number().nullable().optional(),
+  career_end_year: z.number().nullable().optional(),
+  external_ids: z.array(z.object({
+    source: z.string(),
+    external_id: z.string(),
+    url: z.string().nullable(),
+    last_synced_at: z.string().nullable(),
+  })).optional(),
+  release_years: z.array(z.object({ year: z.number(), count: z.number() })).optional(),
+})
+
 const platformProfileSchema = z.object({
   id: z.number(),
   creator_id: z.number(),
@@ -192,7 +221,7 @@ const errorSchema = z.object({
 
 export const creatorResponseSchema = z.object({
   success: z.literal(true),
-  data: creatorSchema,
+  data: creatorDetailSchema,
   message: z.string().optional(),
 });
 

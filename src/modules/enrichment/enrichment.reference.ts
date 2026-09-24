@@ -28,6 +28,29 @@ const ENTITY_BY_PATH_SEGMENT: Record<string, EntityType> = {
   tags: "tag",
 };
 
+const PROFILE_BASE: Record<EnrichmentSource, string> = {
+  theporndb: "https://theporndb.net",
+  stashdb: "https://stashdb.org",
+};
+
+const PROFILE_SEGMENT: Record<EntityType, string> = {
+  creator: "performers",
+  scene: "scenes",
+  studio: "studios",
+  tag: "tags",
+};
+
+/** Public page for an entity on its source, or null for an unknown source. */
+export function externalProfileUrl(
+  source: string,
+  externalId: string,
+  entityType: EntityType = "creator",
+): string | null {
+  const base = PROFILE_BASE[source as EnrichmentSource];
+  if (!base) return null;
+  return `${base}/${PROFILE_SEGMENT[entityType]}/${encodeURIComponent(externalId)}`;
+}
+
 function normalizeHost(hostname: string): string {
   return hostname.toLowerCase().replace(/^www\./, "");
 }

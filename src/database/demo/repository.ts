@@ -98,6 +98,10 @@ export class DemoRepository {
       "SELECT count(*) FROM demo_video_studios WHERE studio_id = ?",
       row.id
     );
+    const linkedCreatorCount = this.scalar(
+      "SELECT count(*) FROM demo_creator_studios WHERE studio_id = ?",
+      row.id
+    );
     return {
       id: Number(row.id),
       name: row.name,
@@ -109,17 +113,17 @@ export class DemoRepository {
       social_links: socialLinks,
       linked_video_count: linkedVideoCount,
       social_link_count: socialLinks.length,
-      linked_creator_count: 0,
+      linked_creator_count: linkedCreatorCount,
       has_profile_picture: row.profile_picture_path !== null,
       completeness: {
         is_complete:
           row.profile_picture_path !== null &&
           socialLinks.length > 0 &&
-          linkedVideoCount > 0,
+          linkedVideoCount + linkedCreatorCount > 0,
         missing_fields: [
           ...(row.profile_picture_path === null ? ["picture"] : []),
           ...(socialLinks.length === 0 ? ["social"] : []),
-          ...(linkedVideoCount === 0 ? ["linked"] : []),
+          ...(linkedVideoCount + linkedCreatorCount === 0 ? ["linked"] : []),
         ],
       },
       created_at: row.created_at,
@@ -269,6 +273,35 @@ export class DemoRepository {
         creator.name.toLowerCase().includes(search)
       );
     }
+    const studioIds: number[] = Array.isArray(options.studioIds)
+      ? options.studioIds.map(Number)
+      : options.studioIds !== undefined
+        ? [Number(options.studioIds)]
+        : [];
+    if (studioIds.length > 0) {
+      const linked = new Set(
+        this.rows(
+          `SELECT creator_id FROM demo_creator_studios WHERE studio_id IN (${studioIds.map(() => "?").join(",")})`,
+          ...studioIds
+        ).map((row) => Number(row.creator_id))
+      );
+      list = list.filter((creator) => linked.has(creator.id));
+    }
+    // Mirrors the real service's sort keys so demo lists order the same way.
+    const sort = String(options.sort ?? "name");
+    const direction = options.order === "desc" ? -1 : 1;
+    const key = (creator: any): string | number =>
+      sort === "video_count"
+        ? creator.linked_video_count
+        : sort === "created_at" || sort === "updated_at"
+          ? String(creator[sort] ?? "")
+          : creator.name.toLowerCase();
+    list.sort((a, b) => {
+      const left = key(a);
+      const right = key(b);
+      const order = left < right ? -1 : left > right ? 1 : 0;
+      return order * direction || a.name.localeCompare(b.name);
+    });
     const page = Number(options.page || 1);
     const limit = Number(options.limit || 20);
     const total = list.length;

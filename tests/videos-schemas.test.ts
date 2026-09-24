@@ -58,6 +58,11 @@ describe("video route schemas", () => {
     });
   });
 
+  it("allows larger paginated video lists without making the endpoint unbounded", () => {
+    expect(listVideosQuerySchema.parse({ limit: "500" }).limit).toBe(500);
+    expect(listVideosQuerySchema.safeParse({ limit: "1001" }).success).toBe(false);
+  });
+
   it("bounds ID-filtered list requests to one page", () => {
     const tooManyIds = Array.from({ length: 101 }, (_, index) =>
       String(index + 1),

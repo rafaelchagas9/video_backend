@@ -133,6 +133,43 @@ const envSchema = z.object({
   VAAPI_DEVICE: z.string().default("/dev/dri/renderD128"),
   CONVERTED_VIDEOS_DIR: z.string().default("./data/converted"),
 
+  // Crop-aware perceptual duplicate comparison
+  PERCEPTUAL_DUPLICATES_ENABLED: z
+    .string()
+    .default("true")
+    .transform((value) => value.toLowerCase() === "true"),
+  PERCEPTUAL_DUPLICATES_PYTHON_PATH: z
+    .string()
+    .default("./vision-service/.venv/bin/python"),
+  PERCEPTUAL_DUPLICATES_MODULE: z
+    .string()
+    .default("vision_service.video_copies"),
+  PERCEPTUAL_DUPLICATES_WORK_DIR: z.string().default("./vision-service"),
+  PERCEPTUAL_DUPLICATES_CACHE_DIR: z
+    .string()
+    .default("./data/perceptual-duplicates-cache"),
+  PERCEPTUAL_DUPLICATES_TIMEOUT_MS: z
+    .string()
+    .default("3600000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  PERCEPTUAL_DUPLICATES_MAX_OUTPUT_BYTES: z
+    .string()
+    .default(String(4 * 1024 * 1024))
+    .transform(Number)
+    .pipe(
+      z
+        .number()
+        .int()
+        .min(1024)
+        .max(16 * 1024 * 1024)
+    ),
+  PERCEPTUAL_DUPLICATES_MAX_ACTIVE_JOBS: z
+    .string()
+    .default("1")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(4)),
+
   // Redis (for job queue)
   REDIS_URL: z.string().default("redis://localhost:6379"),
 

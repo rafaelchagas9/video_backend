@@ -274,6 +274,33 @@ describe("demo mode runtime route coverage", () => {
     );
   });
 
+  it("keeps perceptual duplicate jobs explicitly unavailable without media work", async () => {
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/api/perceptual-duplicates/jobs",
+        payload: { video_ids: [1, 2] },
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/perceptual-duplicates/jobs/1",
+      }),
+      app.inject({
+        method: "DELETE",
+        url: "/api/perceptual-duplicates/jobs/1",
+      }),
+    ]);
+
+    expect(responses.map(({ statusCode }) => statusCode)).toEqual([
+      503, 503, 503,
+    ]);
+    for (const response of responses) {
+      expect(response.json().error.code).toBe(
+        "PERCEPTUAL_DUPLICATES_UNAVAILABLE_IN_DEMO"
+      );
+    }
+  });
+
   it("estimates manual conversions entirely from demo metadata without starting work", async () => {
     const response = await app.inject({
       method: "GET",
@@ -290,7 +317,7 @@ describe("demo mode runtime route coverage", () => {
     });
   });
 
-  it("requires an explicit manifest record for all 299 primary operations", () => {
+  it("requires an explicit manifest record for all 309 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -301,8 +328,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(299);
-    expect(manifestKeys).toHaveLength(299);
+    expect(runtimeOperationKeys).toHaveLength(309);
+    expect(manifestKeys).toHaveLength(309);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -330,7 +357,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 299,
+      allowed: 309,
       blocked: 0,
       conditional: 0,
     });
@@ -423,11 +450,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 126 generated HEAD counterparts", () => {
+  it("registers and classifies all 130 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(126);
+    expect(getScenarios).toHaveLength(130);
 
     for (const scenario of getScenarios) {
       expect(
@@ -567,10 +594,9 @@ describe("demo mode runtime route coverage", () => {
     expect(duplicateEntry.statusCode).toBe(409);
 
     const nonMemberVideo = getDemoSqlite()
-      .query<
-        { id: number },
-        [number]
-      >(`SELECT id FROM demo_videos WHERE id <> ? ORDER BY id LIMIT 1`)
+      .query<{ id: number }, [number]>(
+        `SELECT id FROM demo_videos WHERE id <> ? ORDER BY id LIMIT 1`
+      )
       .get(unassignedVideo!.id);
     expect(nonMemberVideo).toBeDefined();
     const rejectedCollectionCover = await app.inject({

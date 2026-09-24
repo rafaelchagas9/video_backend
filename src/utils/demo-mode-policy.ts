@@ -6,9 +6,18 @@ const SAFE_API_REQUESTS: Array<{
   methods: ReadonlySet<string>;
   path: RegExp;
 }> = [
-  { methods: new Set(["GET"]), path: new RegExp(`^${API_PREFIX}/saved-views/?$`) },
-  { methods: new Set(["PUT", "DELETE"]), path: new RegExp(`^${API_PREFIX}/saved-views/[a-f0-9-]{36}$`) },
-  { methods: new Set(["PATCH"]), path: new RegExp(`^${API_PREFIX}/videos/\\d+/progress$`) },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/saved-views/?$`),
+  },
+  {
+    methods: new Set(["PUT", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/saved-views/[a-f0-9-]{36}$`),
+  },
+  {
+    methods: new Set(["PATCH"]),
+    path: new RegExp(`^${API_PREFIX}/videos/\\d+/progress$`),
+  },
   {
     methods: new Set(["POST"]),
     path: new RegExp(`^${API_PREFIX}/auth/(?:login|logout|register)$`),
@@ -24,6 +33,30 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET", "DELETE"]),
     path: new RegExp(`^${API_PREFIX}/content-analysis/jobs/\\d+$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/library-sync(?:/perceptual-results)?$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/library-sync/runs$`),
+  },
+  {
+    methods: new Set(["GET", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/library-sync/runs/\\d+$`),
+  },
+  {
+    methods: new Set(["PATCH"]),
+    path: new RegExp(`^${API_PREFIX}/library-sync/settings$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/perceptual-duplicates/jobs$`),
+  },
+  {
+    methods: new Set(["GET", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/perceptual-duplicates/jobs/\\d+$`),
   },
   {
     methods: new Set(["GET"]),
@@ -266,6 +299,10 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET", "PATCH", "DELETE"]),
     path: new RegExp(`^${API_PREFIX}/tags/\\d+$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/tags/\\d+/merge$`),
   },
   {
     methods: new Set(["GET"]),

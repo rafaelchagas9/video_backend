@@ -15,8 +15,9 @@ export type VideoInclude =
   | "tags"
   | "studios"
   | "artwork"
-  | "stats";
-export type VideoListInclude = Exclude<VideoInclude, "collection_neighbors">;
+  | "stats"
+  | "external_ids";
+export type VideoListInclude = Exclude<VideoInclude, "collection_neighbors" | "external_ids">;
 
 export interface Video {
   id: number;
@@ -50,6 +51,8 @@ export interface Video {
   tags?: Tag[];
   studios?: Studio[];
   artwork?: VideoArtworkSummary | null;
+  /** Accepted ThePornDB / StashDB scene identities, detail responses only. */
+  external_ids?: Array<{ source: string; external_id: string; url: string | null; last_synced_at: string | null }>;
   play_count?: number;
   last_played_at?: string | null;
 }
@@ -146,6 +149,7 @@ export interface ListVideosOptions {
   hasTags?: boolean;
   hasCreator?: boolean;
   hasStudio?: boolean;
+  missingMetadata?: boolean;
   studioAssignmentStatus?: StudioAssignmentStatus;
   hasRating?: boolean;
   include?: VideoListInclude[];

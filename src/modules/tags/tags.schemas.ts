@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // Re-export from types for consistency
-export { createTagSchema, updateTagSchema } from "./tags.types";
+export { createTagSchema, updateTagSchema, mergeTagSchema } from "./tags.types";
 
 // Request schemas
 export const idParamSchema = z.object({

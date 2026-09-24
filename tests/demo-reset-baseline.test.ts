@@ -41,6 +41,9 @@ describe("immutable demo SQLite baseline reset", () => {
     demo.importDemoJsonFile(fixtures.seedPath, { reset: true });
     demo.importDemoArtworkManifestFile(fixtures.manifestPath);
     demo.createDemoBaselineSnapshot();
+    // Startup adds the three source-metadata demo creators after restoring the immutable baseline.
+    const { ensureDemoSourceMetadataCreators } = await import("@/database/demo/seed");
+    ensureDemoSourceMetadataCreators();
   });
 
   afterAll(() => {

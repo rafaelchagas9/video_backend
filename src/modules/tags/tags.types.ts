@@ -82,5 +82,9 @@ export const updateTagSchema = z.object({
     .optional(),
 });
 
+export const mergeTagSchema = z.object({
+  into_id: z.number().int().positive(),
+});
+
 export type CreateTagInput = z.infer<typeof createTagSchema>;
 export type UpdateTagInput = z.infer<typeof updateTagSchema>;

@@ -3,7 +3,12 @@ import {
   restoreDemoBaselineSnapshot,
 } from "./baseline";
 import { initializeDemoDatabase } from "./client";
-import { ensureDemoEntityPageData, hasDemoSeed } from "./seed";
+import {
+  ensureDemoEntityPageData,
+  ensureDemoSourceMetadataCreators,
+  ensureDemoMissingVideoExamples,
+  hasDemoSeed,
+} from "./seed";
 import { resetDemoRuntimeAssets } from "./assets";
 
 /** Prepare demo state without ever consulting the legacy JSON fixture. */
@@ -26,4 +31,6 @@ export function prepareDemoDatabaseForStartup(
       "Demo SQLite immutable baseline is missing. Run `bun run demo:download` to build it, or `bun run demo:migrate-json` for a legacy JSON migration."
     );
   }
+  ensureDemoSourceMetadataCreators();
+  ensureDemoMissingVideoExamples();
 }

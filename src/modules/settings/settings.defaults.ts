@@ -15,4 +15,5 @@ export const DEFAULT_SETTINGS: Record<string, SettingValue> = {
   notifications_storyboard_failed: true,
   notifications_face_extraction_completed: true,
   notifications_face_extraction_failed: true,
+  library_sync_auto_perceptual: false,
 };

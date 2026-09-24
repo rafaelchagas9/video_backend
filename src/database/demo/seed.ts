@@ -1,8 +1,12 @@
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "fs";
+import { dirname, join, resolve } from "path";
 import { API_PREFIX } from "@/config/constants";
 import { env } from "@/config/env";
-import { assertDemoAssetPath, resetDemoRuntimeAssets } from "./assets";
+import {
+  assertDemoAssetPath,
+  resetDemoRuntimeAssets,
+  resolveDemoAssetPath,
+} from "./assets";
 import {
   getDemoSqlite,
   initializeDemoDatabase,
@@ -16,6 +20,8 @@ import { prepopulateDemoContentAnalysis } from "@/modules/content-analysis/conte
 const DEMO_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 const DEMO_VIDEO_CATALOG_SIZE = 132;
 const DEMO_USER_ID = 1;
+const MISSING_VIDEO_EXAMPLE_IDS = [130, 131, 132] as const;
+const MISSING_VIDEO_EXAMPLES_KEY = "missing_video_examples_v1";
 
 type JsonObject = Record<string, any>;
 export interface DemoSeedDocument {
@@ -161,7 +167,11 @@ function expandVideos(videos: JsonObject[]): JsonObject[] {
       ...structuredClone(source),
       sourceVideoId: sourceIndex + 1,
       fileName: `${label} - ${source.fileName}`,
-      fileHash: `${source.fileHash || "demo-video"}-${id}`,
+      // Keep a few catalog copies as exact-match examples for the duplicates UI.
+      fileHash:
+        sourceIndex < 3 && source.fileHash
+          ? source.fileHash
+          : `${source.fileHash || "demo-video"}-${id}`,
       title: `${source.title || source.fileName} · ${label}`,
     });
   }
@@ -581,6 +591,46 @@ export function importDemoSeedDocument(
         "INSERT OR REPLACE INTO demo_meta (key,value,updated_at) VALUES ('base_video_count',?,?)"
       )
       .run(String(input.videos.length), DEMO_TIMESTAMP);
+    ensureDemoMissingVideoExamples();
+  });
+}
+
+/** Add durable missing-source examples without touching any seeded media. */
+export function ensureDemoMissingVideoExamples(): void {
+  initializeDemoDatabase();
+  const sqlite = getDemoSqlite();
+  if (
+    sqlite
+      .query<{ value: string }, [string]>(
+        "SELECT value FROM demo_meta WHERE key = ?"
+      )
+      .get(MISSING_VIDEO_EXAMPLES_KEY)
+  ) {
+    return;
+  }
+  const count = sqlite
+    .query<{ count: number }, []>("SELECT count(*) AS count FROM demo_videos")
+    .get()?.count;
+  if (count !== DEMO_VIDEO_CATALOG_SIZE) return;
+
+  withDemoTransaction(() => {
+    for (const id of MISSING_VIDEO_EXAMPLE_IDS) {
+      const fileName = `Missing demo video ${id}.webm`;
+      const filePath = join(env.DEMO_ASSETS_DIR, "missing", fileName);
+      const resolvedPath = resolveDemoAssetPath(filePath, { mustExist: false });
+      if (existsSync(resolvedPath)) continue;
+      sqlite.run(
+        `UPDATE demo_videos
+         SET file_path = ?, file_name = ?, is_available = 0,
+             last_verified_at = ?, updated_at = ?
+         WHERE id = ? AND source_video_id IS NOT NULL`,
+        [filePath, fileName, DEMO_TIMESTAMP, DEMO_TIMESTAMP, id]
+      );
+    }
+    sqlite.run(
+      "INSERT INTO demo_meta (key,value,updated_at) VALUES (?,?,?)",
+      [MISSING_VIDEO_EXAMPLES_KEY, "1", DEMO_TIMESTAMP]
+    );
   });
 }
 
@@ -813,9 +863,79 @@ export function ensureDemoEntityPageData(): void {
   `);
 }
 
+/** Read-only snapshots from three matching real creator records. Their seeded
+ * demo artwork depicts fictional people and never reads the real media library.
+ * IDs match the real library for direct URL comparison. */
+export function ensureDemoSourceMetadataCreators(): void {
+  initializeDemoDatabase();
+  const insert = getDemoSqlite().prepare(
+    "INSERT OR IGNORE INTO demo_creators (id,name,description,profile_picture_path,main_picture_path,face_thumbnail_path,extra_json,created_at,updated_at) VALUES (?,?,NULL,NULL,NULL,NULL,?,?,?)"
+  );
+  const examples = [
+    {
+      id: 1719,
+      name: "Larkin Love",
+      facts: {
+        gender: "FEMALE", birth_date: "1985-10-31", ethnicity: "CAUCASIAN",
+        country: "US", eye_color: "BROWN", hair_color: "BRUNETTE",
+        height_cm: 165, cup_size: "J", band_size: 32, breast_type: "FAKE",
+        career_start_year: 2011,
+        external_ids: [{ source: "theporndb", external_id: "05228194-cab1-4b0c-b624-b542974f1938", url: "https://theporndb.net/performers/05228194-cab1-4b0c-b624-b542974f1938", last_synced_at: "2026-08-24T14:15:55.653Z" }],
+      },
+    },
+    {
+      id: 1652,
+      name: "Jackie Hoff",
+      facts: {
+        gender: "Female", birth_date: "1993-05-25", ethnicity: "Caucasian",
+        country: "American", birthplace: "San Francisco, CA, USA",
+        eye_color: "Brown", hair_color: "Brunette", height_cm: 154,
+        cup_size: "34DD", waist_size: 26, hip_size: 30, career_start_year: 2021,
+        external_ids: [{ source: "theporndb", external_id: "6f481350-36ec-4131-bd02-0cac91b2882a", url: "https://theporndb.net/performers/6f481350-36ec-4131-bd02-0cac91b2882a", last_synced_at: "2026-08-12T14:29:12.130Z" }],
+      },
+    },
+    {
+      id: 1584,
+      name: "MeowLenna",
+      facts: {
+        gender: "FEMALE", birth_date: "2000", ethnicity: "LATIN", country: "US",
+        hair_color: "BLACK", height_cm: 160, cup_size: "C", band_size: 34,
+        breast_type: "NATURAL", career_start_year: 2022,
+        external_ids: [{ source: "stashdb", external_id: "5fd1ecfa-ad1d-4838-8a47-01b06e0df9b1", url: "https://stashdb.org/performers/5fd1ecfa-ad1d-4838-8a47-01b06e0df9b1", last_synced_at: "2026-06-13T03:28:46.755Z" }],
+      },
+    },
+  ];
+  const sqlite = getDemoSqlite();
+  const attachArtwork = sqlite.prepare(`
+    UPDATE demo_creators
+    SET profile_picture_path = COALESCE(profile_picture_path, ?),
+        main_picture_path = COALESCE(main_picture_path, ?),
+        updated_at = ?
+    WHERE id = ? AND name = ?
+      AND (profile_picture_path IS NULL OR main_picture_path IS NULL)
+  `);
+  for (const example of examples) {
+    insert.run(example.id, example.name, JSON.stringify(example.facts), DEMO_TIMESTAMP, DEMO_TIMESTAMP);
+    const paths = (["portrait", "main"] as const).map((variant) => {
+      const filename = `${example.id}-${variant}.webp`;
+      const bundled = resolve(process.cwd(), "public", "demo-creator-art", filename);
+      const seeded = resolveDemoAssetPath(
+        join(env.DEMO_ASSETS_DIR, "seeded", "creators", filename),
+        { mustExist: false }
+      );
+      mkdirSync(dirname(seeded), { recursive: true });
+      copyFileSync(bundled, seeded);
+      return seeded;
+    });
+    attachArtwork.run(paths[0], paths[1], DEMO_TIMESTAMP, example.id, example.name);
+  }
+}
+
 export function resetDemoRuntimeState(): void {
   restoreDemoBaselineSnapshot();
   ensureDemoEntityPageData();
+  ensureDemoSourceMetadataCreators();
+  ensureDemoMissingVideoExamples();
   resetDemoRuntimeAssets();
 }
 

@@ -53,6 +53,15 @@ allowed POST /api/videos/bulk/favorites http-contract
 allowed POST /api/videos/bulk/conditional-apply http-contract
 allowed GET /api/videos/random
 allowed GET /api/videos/duplicates http-contract
+allowed POST /api/perceptual-duplicates/jobs
+allowed GET /api/perceptual-duplicates/jobs/{id}
+allowed DELETE /api/perceptual-duplicates/jobs/{id}
+allowed GET /api/library-sync
+allowed POST /api/library-sync/runs
+allowed GET /api/library-sync/runs/{id}
+allowed DELETE /api/library-sync/runs/{id}
+allowed PATCH /api/library-sync/settings
+allowed GET /api/library-sync/perceptual-results
 allowed GET /api/videos/{id}/related
 allowed GET /api/videos/{id}
 allowed PATCH /api/videos/{id}
@@ -163,6 +172,7 @@ allowed POST /api/tags/
 allowed GET /api/tags/categories
 allowed GET /api/tags/{id}
 allowed PATCH /api/tags/{id}
+allowed POST /api/tags/{id}/merge
 allowed DELETE /api/tags/{id}
 allowed GET /api/tags/{id}/children
 allowed GET /api/tags/{id}/videos

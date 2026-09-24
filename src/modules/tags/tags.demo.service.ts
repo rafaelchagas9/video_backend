@@ -3,7 +3,7 @@ import { demoSchema, getDemoDatabase } from "@/database/demo";
 import { ConflictError, NotFoundError } from "@/utils/errors";
 import type { CreateTagInput, Tag, UpdateTagInput } from "./tags.types";
 
-const { demoTagsTable } = demoSchema;
+const { demoTagsTable, demoVideoTagsTable, demoTagAliasesTable, demoEnrichmentSuggestionsTable, demoEnrichmentRunsTable } = demoSchema;
 
 function now(): string {
   return new Date().toISOString();
@@ -106,6 +106,47 @@ export class TagsDemoService {
       .delete(demoTagsTable)
       .where(eq(demoTagsTable.id, id))
       .run();
+  }
+
+  merge(fromId: number, intoId: number): Tag {
+    if (fromId === intoId) throw new ConflictError("A tag cannot merge into itself");
+    const source = this.findById(fromId);
+    this.findById(intoId);
+    if (this.getDescendants(fromId).some((tag) => tag.id === intoId)) {
+      throw new ConflictError("Cannot merge a tag into one of its children");
+    }
+    const children = this.getChildren(fromId);
+    const targetNames = new Set(this.getChildren(intoId).map((tag) => tag.name.toLocaleLowerCase()));
+    if (children.some((tag) => targetNames.has(tag.name.toLocaleLowerCase()))) {
+      throw new ConflictError("A child tag with the same name already exists under the destination");
+    }
+
+    getDemoDatabase().transaction((tx) => {
+      const videos = tx.select({ videoId: demoVideoTagsTable.videoId })
+        .from(demoVideoTagsTable).where(eq(demoVideoTagsTable.tagId, fromId)).all();
+      for (const video of videos) {
+        tx.insert(demoVideoTagsTable).values({ videoId: video.videoId, tagId: intoId })
+          .onConflictDoNothing().run();
+      }
+      const aliases = tx.select().from(demoTagAliasesTable)
+        .where(eq(demoTagAliasesTable.tagId, fromId)).all();
+      for (const alias of aliases) {
+        tx.insert(demoTagAliasesTable).values({ tagId: intoId, name: alias.name, note: alias.note, createdAt: alias.createdAt })
+          .onConflictDoNothing().run();
+      }
+      if (source.name !== this.findById(intoId).name) {
+        tx.insert(demoTagAliasesTable).values({ tagId: intoId, name: source.name, createdAt: now() })
+          .onConflictDoNothing().run();
+      }
+      tx.update(demoTagsTable).set({ parentId: intoId, updatedAt: now() })
+        .where(eq(demoTagsTable.parentId, fromId)).run();
+      tx.update(demoEnrichmentSuggestionsTable).set({ entityId: intoId })
+        .where(and(eq(demoEnrichmentSuggestionsTable.entityType, "tag"), eq(demoEnrichmentSuggestionsTable.entityId, fromId))).run();
+      tx.update(demoEnrichmentRunsTable).set({ entityId: intoId })
+        .where(and(eq(demoEnrichmentRunsTable.entityType, "tag"), eq(demoEnrichmentRunsTable.entityId, fromId))).run();
+      tx.delete(demoTagsTable).where(eq(demoTagsTable.id, fromId)).run();
+    });
+    return this.findById(intoId);
   }
 
   getChildren(id: number): Tag[] {

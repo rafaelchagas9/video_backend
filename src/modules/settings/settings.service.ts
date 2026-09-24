@@ -36,6 +36,11 @@ export class SettingsService {
     this.initPromise = null;
   }
 
+  /** Clear values after a setting is updated in a wider database transaction. */
+  clearCache(): void {
+    this.invalidateCache();
+  }
+
   private parseSettingValue(key: string, value: string): SettingValue {
     if (value === "true") return true;
     if (value === "false") return false;

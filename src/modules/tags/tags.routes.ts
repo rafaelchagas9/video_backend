@@ -12,6 +12,7 @@ import {
   listTagsQuerySchema,
   createTagSchema,
   updateTagSchema,
+  mergeTagSchema,
   tagResponseSchema,
   tagRecordResponseSchema,
   tagListResponseSchema,
@@ -158,6 +159,29 @@ export async function tagsRoutes(fastify: FastifyInstance): Promise<void> {
         data: tag,
         message: "Tag updated successfully",
       });
+    },
+  );
+
+  app.post(
+    "/:id/merge",
+    {
+      schema: {
+        tags: ["tags"],
+        summary: "Merge one tag into another",
+        params: idParamSchema,
+        body: mergeTagSchema,
+        response: {
+          200: tagRecordResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const tag = await tagsService.merge(request.params.id, request.body.into_id);
+      return reply.send({ success: true, data: tag, message: "Tags merged successfully" });
     },
   );
 

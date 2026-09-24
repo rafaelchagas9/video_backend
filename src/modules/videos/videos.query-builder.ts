@@ -71,6 +71,7 @@ export function buildVideoFilters(
     hasTags,
     hasCreator,
     hasStudio,
+    missingMetadata,
     studioAssignmentStatus,
     hasRating,
   } = options;
@@ -300,6 +301,15 @@ export function buildVideoFilters(
   } else if (hasStudio === false) {
     conditions.push(
       sql`NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})`
+    );
+  }
+
+  if (missingMetadata === true) {
+    conditions.push(
+      sql`(NOT EXISTS (SELECT 1 FROM ${videoTagsTable} WHERE ${videoTagsTable.videoId} = ${videosTable.id})
+        OR NOT EXISTS (SELECT 1 FROM ${videoCreatorsTable} WHERE ${videoCreatorsTable.videoId} = ${videosTable.id})
+        OR (NOT EXISTS (SELECT 1 FROM ${videoStudiosTable} WHERE ${videoStudiosTable.videoId} = ${videosTable.id})
+          AND ${videosTable.studioAbsenceConfirmedAt} IS NULL))`
     );
   }
 
