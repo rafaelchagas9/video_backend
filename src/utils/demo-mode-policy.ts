@@ -51,14 +51,6 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(`^${API_PREFIX}/library-sync/settings$`),
   },
   {
-    methods: new Set(["POST"]),
-    path: new RegExp(`^${API_PREFIX}/perceptual-duplicates/jobs$`),
-  },
-  {
-    methods: new Set(["GET", "DELETE"]),
-    path: new RegExp(`^${API_PREFIX}/perceptual-duplicates/jobs/\\d+$`),
-  },
-  {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/search/?$`),
   },

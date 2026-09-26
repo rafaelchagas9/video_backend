@@ -7,7 +7,7 @@ import {
   COPY_ENGINE_NOT_READY_CODE,
   COPY_ENGINE_NOT_READY_REASON,
   isCopyEngineNotReadyError,
-} from "@/modules/perceptual-duplicates/perceptual-readiness";
+} from "@/modules/copy-detection/copy-detection.readiness";
 import {
   librarySyncOverviewResponseSchema,
   librarySyncPerceptualResultsResponseSchema,
@@ -112,6 +112,7 @@ function serialize(run: LibrarySyncRun) {
         },
       },
     },
+    matching: run.matching,
     recent_items: run.recentItems.map((item) => ({
       task: item.task,
       video_id: item.videoId,
@@ -285,7 +286,7 @@ export async function librarySyncRoutes(
         if (!env.DEMO_MODE) return unavailable(reply);
         // Demo mode never fingerprints, so there is nothing to review.
         const { PERCEPTUAL_ASSESSMENT_REVISION } = await import(
-          "@/modules/perceptual-duplicates/perceptual-relevance"
+          "@/modules/copy-detection/copy-detection.relevance"
         );
         return reply.send({
           success: true,

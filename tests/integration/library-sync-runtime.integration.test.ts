@@ -25,7 +25,12 @@ describe("library sync durable runtime", () => {
       process: async (id, signal) => {
         signal.throwIfAborted();
         calls.push(`perceptual:${id}`);
-        return { compared_videos: 2, match_count: 0, truncated_matches: false };
+        return { fingerprint: "extracted", items: 240 };
+      },
+      matchPending: async (signal) => {
+        signal.throwIfAborted();
+        calls.push("match");
+        return { pending: 2, fingerprints: 2, candidates: 0, matches: 0, rejected: 0, seconds: 0 };
       },
       results: async ({ limit, offset }) => ({
         items: [],
@@ -188,7 +193,7 @@ describe("library sync durable runtime", () => {
         done.recentItems.find((item) => item.videoId === videoIds[0])?.error
       ).toEqual({
         code: "COPY_DECODE_FAILED",
-        message: "Video could not be decoded for perceptual analysis",
+        message: "Audio could not be decoded for duplicate detection",
       });
       expect(capture).toHaveBeenCalledTimes(1);
       expect(capture).toHaveBeenCalledWith(failure, {
@@ -357,6 +362,7 @@ describe("library sync durable runtime", () => {
     expect(calls.slice(before)).toEqual([
       `perceptual:${videoIds[0]}`,
       `perceptual:${videoIds[1]}`,
+      "match",
     ]);
   });
 
@@ -454,6 +460,7 @@ describe("library sync durable runtime", () => {
     expect(calls.slice(before)).toEqual([
       `perceptual:${videoIds[0]}`,
       `perceptual:${videoIds[1]}`,
+      "match",
       `storyboards:${videoIds[1]}`,
     ]);
   });
@@ -502,7 +509,7 @@ describe("library sync durable runtime", () => {
           else signal.addEventListener("abort", abort, { once: true });
         });
       }
-      return { compared_videos: 1, match_count: 0, truncated_matches: false };
+      return { fingerprint: "reused" as const, items: 10 };
     };
     const queued = await runtime.startRun({ tasks: ["perceptual"], userId: 1 });
     const deadline = Date.now() + 5_000;
@@ -520,7 +527,7 @@ describe("library sync durable runtime", () => {
     adapters.perceptual.process = async (id, signal) => {
       signal.throwIfAborted();
       started.push(id);
-      return { compared_videos: 1, match_count: 0, truncated_matches: false };
+      return { fingerprint: "reused" as const, items: 10 };
     };
     const { LibrarySyncRuntime } =
       await import("@/modules/library-sync/library-sync.runtime");
@@ -532,24 +539,96 @@ describe("library sync durable runtime", () => {
     expect(started.filter((id) => id === first)).toHaveLength(1);
   });
 
-  it("stops the run on a systemic cache failure without leaking private details", async () => {
+  it("stops the run when the fingerprint tools are missing without leaking private details", async () => {
     const started: number[] = [];
     const [newest] = await manualOrder();
     adapters.perceptual.process = async (id) => {
       started.push(id);
       throw Object.assign(new Error("private /srv/media/path"), {
-        code: "COPY_CACHE_FULL",
+        code: "ENGINE_UNAVAILABLE",
       });
     };
     const queued = await runtime.startRun({ tasks: ["perceptual"], userId: 1 });
     const failed = await terminal(queued.run.id);
     expect(failed.status).toBe("failed");
     expect(failed.error).toEqual({
-      code: "COPY_CACHE_FULL",
-      message: "Perceptual duplicate cache is full",
+      code: "ENGINE_UNAVAILABLE",
+      message: "Duplicate detection engine is unavailable",
     });
     expect(started).toEqual([newest]);
     expect(JSON.stringify(failed)).not.toContain("/srv/media/path");
+  });
+
+  it("compares once after fingerprinting, even when resumed between the two", async () => {
+    adapters.perceptual.process = async (id, signal) => {
+      signal.throwIfAborted();
+      calls.push(`perceptual:${id}`);
+      return { fingerprint: "extracted", items: 240 };
+    };
+    const before = calls.length;
+    const { LIBRARY_SYNC_GENERATION } =
+      await import("@/modules/library-sync/library-sync.runtime");
+    const task = (total: number, processed: number) => ({
+      total, processed, completed: processed, failed: 0, skipped: 0, pending: total - processed,
+    });
+    // fingerprinting finished (cursor already past the task) but the comparison never ran
+    const [interrupted] = await sql<Array<{ id: number }>>`
+      INSERT INTO durable_jobs (kind,payload,checkpoint)
+      VALUES (
+        'library.sync',
+        ${sql.json({
+          version: 2,
+          generation: LIBRARY_SYNC_GENERATION,
+          userId: 1,
+          tasks: ["perceptual", "storyboards"],
+          trigger: "manual",
+          videoIds,
+        })},
+        ${sql.json({
+          stage: "executing",
+          completedUnits: 2,
+          totalUnits: 4,
+          data: {
+            generation: LIBRARY_SYNC_GENERATION,
+            progress: {
+              total: 4, processed: 2, completed: 2, failed: 0, skipped: 0, pending: 2, current: null,
+              byTask: { perceptual: task(2, 2), faces: task(0, 0), storyboards: task(2, 0), previews: task(0, 0) },
+            },
+            recentItems: [],
+            taskIndex: 1,
+            videoIndex: 0,
+            perceptualMatched: false,
+          },
+        })}
+      ) RETURNING id`;
+    const done = await terminal(interrupted!.id);
+    expect(done.status).toBe("completed");
+    expect(calls.slice(before)).toEqual([
+      "match",
+      `storyboards:${videoIds[0]}`,
+      `storyboards:${videoIds[1]}`,
+    ]);
+  });
+
+  it("fails the run with a safe code when the comparison engine fails", async () => {
+    const previous = adapters.perceptual.matchPending;
+    adapters.perceptual.matchPending = async () => {
+      throw Object.assign(new Error("Copy engine failed (Traceback /srv/private)"), {
+        code: "ENGINE_FAILED",
+      });
+    };
+    try {
+      const queued = await runtime.startRun({ tasks: ["perceptual"], userId: 1 });
+      const failed = await terminal(queued.run.id);
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toEqual({
+        code: "ENGINE_FAILED",
+        message: "Duplicate detection engine failed",
+      });
+      expect(JSON.stringify(failed)).not.toContain("/srv/private");
+    } finally {
+      adapters.perceptual.matchPending = previous;
+    }
   });
 
   it("keeps face work available while the perceptual engine is gated off", async () => {

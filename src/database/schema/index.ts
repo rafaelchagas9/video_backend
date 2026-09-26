@@ -58,6 +58,9 @@ export * from "./enrichment.schema";
 // Multiplayer Remote Control
 export * from "./multiplayer-remote.schema";
 
+// Audio fingerprints and decided copy pairs
+export * from "./copy-detection.schema";
+
 // Relations (for Drizzle relational queries)
 export * from "./relations";
 

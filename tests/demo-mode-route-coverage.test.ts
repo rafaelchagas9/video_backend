@@ -274,33 +274,6 @@ describe("demo mode runtime route coverage", () => {
     );
   });
 
-  it("keeps perceptual duplicate jobs explicitly unavailable without media work", async () => {
-    const responses = await Promise.all([
-      app.inject({
-        method: "POST",
-        url: "/api/perceptual-duplicates/jobs",
-        payload: { video_ids: [1, 2] },
-      }),
-      app.inject({
-        method: "GET",
-        url: "/api/perceptual-duplicates/jobs/1",
-      }),
-      app.inject({
-        method: "DELETE",
-        url: "/api/perceptual-duplicates/jobs/1",
-      }),
-    ]);
-
-    expect(responses.map(({ statusCode }) => statusCode)).toEqual([
-      503, 503, 503,
-    ]);
-    for (const response of responses) {
-      expect(response.json().error.code).toBe(
-        "PERCEPTUAL_DUPLICATES_UNAVAILABLE_IN_DEMO"
-      );
-    }
-  });
-
   it("estimates manual conversions entirely from demo metadata without starting work", async () => {
     const response = await app.inject({
       method: "GET",
@@ -317,7 +290,7 @@ describe("demo mode runtime route coverage", () => {
     });
   });
 
-  it("requires an explicit manifest record for all 316 primary operations", () => {
+  it("requires an explicit manifest record for all 313 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -328,8 +301,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(316);
-    expect(manifestKeys).toHaveLength(316);
+    expect(runtimeOperationKeys).toHaveLength(313);
+    expect(manifestKeys).toHaveLength(313);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -357,7 +330,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 316,
+      allowed: 313,
       blocked: 0,
       conditional: 0,
     });
@@ -450,11 +423,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 134 generated HEAD counterparts", () => {
+  it("registers and classifies all 133 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(134);
+    expect(getScenarios).toHaveLength(133);
 
     for (const scenario of getScenarios) {
       expect(

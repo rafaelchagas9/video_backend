@@ -119,6 +119,12 @@ than treating an example similarity score as proof of identity. New integrations
 should use the versioned endpoint; remove compatibility routes only after caller
 migration and parity have been established.
 
+## Offline workers
+
+`python -m vision_service.copy_detection` is not part of the HTTP service: the backend runs it
+during library synchronization to compare audio fingerprints and confirm matches on video frames
+(CPU only, no model). See [duplicate detection](../docs/perceptual-video-duplicates.md).
+
 ## Troubleshooting
 
 - Process responds but readiness is 503: inspect `/v1/capabilities` and logs for

@@ -161,9 +161,6 @@ export async function buildServer() {
       const { getContentAnalysisRuntime } =
         await import("./modules/content-analysis/content-analysis.runtime");
       await getContentAnalysisRuntime().stop();
-      const { stopPerceptualDuplicatesRuntime } =
-        await import("./modules/perceptual-duplicates/perceptual-duplicates.runtime");
-      await stopPerceptualDuplicatesRuntime();
       const { getLibrarySyncRuntime } =
         await import("./modules/library-sync/library-sync.runtime");
       await getLibrarySyncRuntime().stop();
@@ -581,8 +578,6 @@ export async function buildServer() {
         await import("./modules/cleanup/cleanup.routes");
       const { contentAnalysisRoutes } =
         await import("./modules/content-analysis/content-analysis.routes");
-      const { perceptualDuplicatesRoutes } =
-        await import("./modules/perceptual-duplicates/perceptual-duplicates.routes");
       const { librarySyncRoutes } =
         await import("./modules/library-sync/library-sync.routes");
 
@@ -646,7 +641,6 @@ export async function buildServer() {
       });
       await instance.register(enrichmentRoutes, { prefix: "/enrichment" });
       await instance.register(contentAnalysisRoutes);
-      await instance.register(perceptualDuplicatesRoutes);
       await instance.register(librarySyncRoutes);
     },
     { prefix: API_PREFIX }
@@ -705,14 +699,6 @@ export async function buildServer() {
       await import("./modules/content-analysis/content-analysis.runtime");
     if (await isContentAnalysisSchemaReady()) {
       await getContentAnalysisRuntime().start();
-    }
-    const {
-      getPerceptualDuplicatesRuntime,
-      isPerceptualDuplicatesSchemaReady,
-    } =
-      await import("./modules/perceptual-duplicates/perceptual-duplicates.runtime");
-    if (await isPerceptualDuplicatesSchemaReady()) {
-      await getPerceptualDuplicatesRuntime().start();
     }
   }
 

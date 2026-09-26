@@ -53,9 +53,6 @@ allowed POST /api/videos/bulk/favorites http-contract
 allowed POST /api/videos/bulk/conditional-apply http-contract
 allowed GET /api/videos/random
 allowed GET /api/videos/duplicates http-contract
-allowed POST /api/perceptual-duplicates/jobs
-allowed GET /api/perceptual-duplicates/jobs/{id}
-allowed DELETE /api/perceptual-duplicates/jobs/{id}
 allowed GET /api/library-sync
 allowed POST /api/library-sync/runs
 allowed GET /api/library-sync/runs/{id}

@@ -29,17 +29,21 @@ import {
   type DurableJobStatus,
 } from "@/modules/durable-jobs";
 import { getDurableFaceExtractionQueue } from "@/modules/face-recognition/face-extraction-durable.service";
-import { perceptualCatalog } from "@/modules/perceptual-duplicates/perceptual-catalog";
 import {
-  CATALOG_REVISION,
-  perceptualCatalogResultsSchema,
-} from "@/modules/perceptual-duplicates/perceptual-catalog.schemas";
+  getCopyDetectionService,
+  type MatchProgress,
+  type MatchSummary,
+  type ProcessResult,
+} from "@/modules/copy-detection/copy-detection.service";
+import {
+  COPY_DETECTION_REVISION,
+  type CopyDetectionResults,
+} from "@/modules/copy-detection/copy-detection.schemas";
 import {
   assertCopyEngineReady,
   COPY_ENGINE_NOT_READY_CODE,
   COPY_ENGINE_NOT_READY_REASON,
-} from "@/modules/perceptual-duplicates/perceptual-readiness";
-type PerceptualCatalogResults = z.infer<typeof perceptualCatalogResultsSchema>;
+} from "@/modules/copy-detection/copy-detection.readiness";
 import { settingsService } from "@/modules/settings/settings.service";
 import { storyboardsService } from "@/modules/storyboards/storyboards.service";
 import { previewsService } from "@/modules/previews/previews.service";
@@ -49,6 +53,7 @@ import { logger } from "@/utils/logger";
 import { captureTelemetryException } from "@/utils/telemetry";
 import type {
   LibrarySyncCounts,
+  LibrarySyncMatching,
   LibrarySyncProgress,
   LibrarySyncRecentItem,
   LibrarySyncRun,
@@ -59,10 +64,10 @@ import type {
 export const LIBRARY_SYNC_JOB_KIND = "library.sync";
 /**
  * Checkpoints are executable state, not historical metadata. Including the
- * perceptual catalog revision prevents a worker upgrade from resuming an old
+ * copy-detection revision prevents a worker upgrade from resuming an old
  * cursor and treating artifacts from a previous engine as current progress.
  */
-export const LIBRARY_SYNC_GENERATION = `library-sync-v2:${CATALOG_REVISION}`;
+export const LIBRARY_SYNC_GENERATION = `library-sync-v2:${COPY_DETECTION_REVISION}`;
 const AUTO_SETTING = "library_sync_auto_perceptual";
 const AUTO_WATERMARK = "library_sync_auto_perceptual_watermark_video_id";
 const AUTO_GENERATION = "library_sync_auto_perceptual_generation";
@@ -96,6 +101,9 @@ type CheckpointData = {
   videoIndex: number;
   resumeTaskIndex?: number;
   resumeVideoIndex?: number;
+  /** Set once the library-wide comparison after fingerprinting has finished. */
+  perceptualMatched?: boolean;
+  matching?: LibrarySyncMatching & { summary?: MatchSummary };
 };
 
 const legacyPayloadSchema = z
@@ -127,28 +135,24 @@ const checkpointDataSchema = z
     videoIndex: z.number().int().nonnegative(),
     resumeTaskIndex: z.number().int().nonnegative().optional(),
     resumeVideoIndex: z.number().int().nonnegative().optional(),
+    perceptualMatched: z.boolean().optional(),
   })
   .passthrough();
 
 export interface LibrarySyncAdapters {
   perceptual: {
     processedIds(videos: Video[]): Promise<Set<number>>;
-    process(
-      videoId: number,
-      signal: AbortSignal
-    ): Promise<{
-      compared_videos: number;
-      retrieval_references?: number;
-      retrieval_candidates?: number;
-      retrieval_truncated?: boolean;
-      match_count: number;
-      truncated_matches: boolean;
-    }>;
+    /** Fingerprints one video; comparison happens in matchPending once per run. */
+    process(videoId: number, signal: AbortSignal): Promise<ProcessResult>;
+    matchPending(
+      signal: AbortSignal,
+      onProgress?: (progress: MatchProgress) => void
+    ): Promise<MatchSummary>;
     results(input: {
       view?: "copies" | "similarity";
       limit: number;
       offset: number;
-    }): Promise<PerceptualCatalogResults>;
+    }): Promise<CopyDetectionResults>;
   };
   faces: {
     processedIds(videoIds: number[]): Promise<Set<number>>;
@@ -274,6 +278,7 @@ function checkpointForCurrentGeneration(
     payload.videoIds.length
   );
   initial.progress.byTask.perceptual = blankTask(payload.videoIds.length);
+  initial.perceptualMatched = false;
   initial.progress = totalsFromTasks(initial.progress);
   initial.recentItems = initial.recentItems.filter(
     (item) => item.task !== "perceptual"
@@ -319,25 +324,15 @@ function publicError(status: DurableJobStatus, value: unknown) {
       ? (value as Record<string, unknown>)
       : {};
   const code = typeof raw.code === "string" ? raw.code : "LIBRARY_SYNC_FAILED";
-    const messages: Record<string, string> = {
-    COPY_MODEL_MISSING: "Perceptual duplicate model is unavailable",
-    COPY_MODEL_INVALID: "Perceptual duplicate model is invalid",
-    COPY_GPU_UNAVAILABLE: "Required GPU inference is unavailable",
-    COPY_GPU_UNVERIFIED: "GPU inference could not be verified",
-    COPY_PRECISION_INVALID: "GPU inference precision is invalid",
-    COPY_CACHE_FULL: "Perceptual duplicate cache is full",
+  const messages: Record<string, string> = {
     COPY_ENGINE_NOT_READY: COPY_ENGINE_NOT_READY_REASON,
-    ENGINE_UNAVAILABLE: "Perceptual duplicate engine is unavailable",
-    COPY_DECODE_FAILED: "Video could not be decoded for perceptual analysis",
-    COPY_SOURCE_CHANGED: "Video changed during perceptual analysis",
-    COPY_CACHE_CORRUPT: "Perceptual duplicate cache is corrupt",
-    COPY_ANALYSIS_FAILED: "Perceptual duplicate analysis failed",
-    ENGINE_FAILED: "Perceptual duplicate engine failed",
-    ENGINE_TIMEOUT: "Perceptual duplicate analysis timed out",
-    ENGINE_OUTPUT_TOO_LARGE:
-      "Perceptual duplicate engine exceeded its output limit",
+    ENGINE_UNAVAILABLE: "Duplicate detection engine is unavailable",
+    COPY_DECODE_FAILED: "Audio could not be decoded for duplicate detection",
+    COPY_SOURCE_CHANGED: "Video changed during duplicate detection",
+    ENGINE_FAILED: "Duplicate detection engine failed",
+    ENGINE_TIMEOUT: "Duplicate detection timed out",
     ENGINE_INVALID_RESULT:
-      "Perceptual duplicate engine returned an invalid result",
+      "Duplicate detection engine returned an invalid result",
     LIBRARY_SYNC_GENERATION_STALE:
       "This synchronization belongs to an earlier perceptual engine revision",
     LIBRARY_SYNC_FAILED: "Library synchronization failed",
@@ -382,6 +377,15 @@ function mapJob(row: JobRow): LibrarySyncRun | null {
     phase,
     progress,
     recentItems: cp?.recentItems ?? [],
+    matching: cp?.matching
+      ? {
+          stage: cp.matching.stage,
+          done: cp.matching.done,
+          total: cp.matching.total,
+          matches: cp.matching.matches ?? 0,
+          rejected: cp.matching.rejected ?? 0,
+        }
+      : null,
     error: publicError(status, row.lastError),
     retryCount: row.retryCount,
     createdAt: row.createdAt,
@@ -424,7 +428,13 @@ async function delay(ms: number, signal: AbortSignal) {
 
 function defaultAdapters(): LibrarySyncAdapters {
   return {
-    perceptual: perceptualCatalog,
+    perceptual: {
+      processedIds: (videos) => getCopyDetectionService().processedIds(videos),
+      process: (videoId, signal) => getCopyDetectionService().process(videoId, signal),
+      matchPending: (signal, onProgress) =>
+        getCopyDetectionService().matchPending(signal, onProgress),
+      results: (input) => getCopyDetectionService().results(input),
+    },
     faces: {
       async processedIds(videoIds) {
         if (!videoIds.length) return new Set();
@@ -541,14 +551,11 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
             ? String((error as { code: string }).code)
             : "LIBRARY_SYNC_FAILED";
         const allowed = new Set([
-          "COPY_MODEL_MISSING",
-          "COPY_MODEL_INVALID",
-          "COPY_GPU_UNAVAILABLE",
-          "COPY_GPU_UNVERIFIED",
-          "COPY_PRECISION_INVALID",
-          "COPY_CACHE_FULL",
           COPY_ENGINE_NOT_READY_CODE,
           "ENGINE_UNAVAILABLE",
+          "ENGINE_FAILED",
+          "ENGINE_TIMEOUT",
+          "ENGINE_INVALID_RESULT",
           "LIBRARY_SYNC_GENERATION_STALE",
         ]);
         return {
@@ -1014,6 +1021,15 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
         totalUnits: state.progress.total,
         data: state as unknown as Record<string, unknown>,
       });
+      const perceptualIndex = payload.tasks.indexOf("perceptual");
+      if (
+        perceptualIndex >= 0 &&
+        state.taskIndex > perceptualIndex &&
+        state.resumeTaskIndex === undefined
+      ) {
+        // resumed after fingerprinting finished but before the comparison completed
+        await this.matchLibrary(state, context, controller.signal);
+      }
       let ti = state.taskIndex;
       while (ti < payload.tasks.length) {
         const task = payload.tasks[ti]!;
@@ -1076,74 +1092,37 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
                 );
                 captureTelemetryException(failure, context);
               };
-              if (
-                !(
-                  task === "perceptual" &&
-                  (code === "COPY_CACHE_CORRUPT" ||
-                    code === COPY_ENGINE_NOT_READY_CODE)
-                )
-              ) {
+              if (!(task === "perceptual" && code === COPY_ENGINE_NOT_READY_CODE))
                 reportFailure(error);
-              }
-              if (task === "perceptual" && code === "COPY_CACHE_CORRUPT") {
-                try {
-                  const result = await this.process(
-                    task,
-                    videoId,
-                    controller.signal
-                  );
-                  item = {
-                    task,
-                    videoId,
-                    status: "completed",
-                    result,
-                    error: null,
-                  };
-                } catch (retryError) {
-                  if (controller.signal.aborted) throw retryError;
-                  reportFailure(retryError);
-                  throw retryError;
-                }
-              } else if (
-                task === "perceptual" &&
-                new Set([
-                  "COPY_MODEL_MISSING",
-                  "COPY_MODEL_INVALID",
-                  "COPY_GPU_UNAVAILABLE",
-                  "COPY_GPU_UNVERIFIED",
-                  "COPY_PRECISION_INVALID",
-                  "COPY_CACHE_FULL",
-                  "ENGINE_UNAVAILABLE",
-                ]).has(code)
-              ) {
+              if (task === "perceptual" && code === "ENGINE_UNAVAILABLE") {
+                // missing ffmpeg/fpcalc fails every video the same way
                 throw error;
-              } else {
-                item = {
-                  task,
-                  videoId,
-                  status: "failed",
-                  result: null,
-                  error:
-                    task === "perceptual" &&
-                    publicError("failed", { code })?.code !==
-                      "LIBRARY_SYNC_FAILED"
-                      ? publicError("failed", { code })
-                      : {
-                          code:
-                            task === "perceptual"
-                              ? "PERCEPTUAL_SYNC_FAILED"
-                              : task === "faces"
-                                ? "FACE_SYNC_FAILED"
-                                : "STORYBOARD_SYNC_FAILED",
-                          message:
-                            task === "perceptual"
-                              ? "Perceptual analysis failed"
-                              : task === "faces"
-                                ? "Face analysis failed"
-                                : "Storyboard generation failed",
-                        },
-                };
               }
+              item = {
+                task,
+                videoId,
+                status: "failed",
+                result: null,
+                error:
+                  task === "perceptual" &&
+                  publicError("failed", { code })?.code !==
+                    "LIBRARY_SYNC_FAILED"
+                    ? publicError("failed", { code })
+                    : {
+                        code:
+                          task === "perceptual"
+                            ? "PERCEPTUAL_SYNC_FAILED"
+                            : task === "faces"
+                              ? "FACE_SYNC_FAILED"
+                              : "STORYBOARD_SYNC_FAILED",
+                        message:
+                          task === "perceptual"
+                            ? "Perceptual analysis failed"
+                            : task === "faces"
+                              ? "Face analysis failed"
+                              : "Storyboard generation failed",
+                      },
+              };
             }
           const progress = state.progress.byTask[task];
           progress.processed++;
@@ -1169,6 +1148,7 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
             data: state as unknown as Record<string, unknown>,
           });
         }
+        if (task === "perceptual") await this.matchLibrary(state, context, controller.signal);
         if (
           task === "perceptual" &&
           state.resumeTaskIndex !== undefined
@@ -1216,29 +1196,61 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
   ): Promise<Record<string, unknown>> {
     if (task === "perceptual") {
       assertCopyEngineReady(this.perceptualEnabled);
-      const r = await this.adapters.perceptual.process(id, signal);
-      return {
-        compared_videos: r.compared_videos,
-        ...(r.retrieval_references === undefined
-          ? {}
-          : { retrieval_references: r.retrieval_references }),
-        ...(r.retrieval_candidates === undefined
-          ? {}
-          : { retrieval_candidates: r.retrieval_candidates }),
-        ...(r.retrieval_truncated === undefined
-          ? {}
-          : { retrieval_truncated: r.retrieval_truncated }),
-        match_count: r.match_count,
-        truncated_matches: r.truncated_matches,
-      };
+      return { ...(await this.adapters.perceptual.process(id, signal)) };
     }
     if (task === "faces") return this.adapters.faces.process(id, signal);
     if (task === "previews") return this.adapters.previews.process(id, signal);
     return this.adapters.storyboards.process(id, signal);
   }
 
+  /**
+   * Library-wide comparison of every fingerprint not yet matched. Runs once per sync run after
+   * fingerprinting; decided pairs are stored as they arrive, so a cancelled pass loses little.
+   */
+  private async matchLibrary(
+    state: CheckpointData,
+    context: DurableJobHandlerContext,
+    signal: AbortSignal
+  ) {
+    if (!this.perceptualEnabled || state.perceptualMatched) return;
+    let writes = Promise.resolve();
+    let lastWrite = 0;
+    const save = () => {
+      writes = writes.then(() =>
+        context.checkpoint({
+          stage: "executing",
+          completedUnits: state.progress.processed,
+          totalUnits: state.progress.total,
+          data: state as unknown as Record<string, unknown>,
+        })
+      );
+      return writes;
+    };
+    state.matching = { stage: "prepare", done: 0, total: 0, matches: 0, rejected: 0 };
+    await save();
+    const summary = await this.adapters.perceptual.matchPending(signal, (progress) => {
+      state.matching = { ...progress };
+      if (Date.now() - lastWrite < 5_000) return;
+      lastWrite = Date.now();
+      void save().catch((error) =>
+        logger.warn({ error }, "Library sync matching checkpoint failed")
+      );
+    });
+    await writes.catch(() => undefined);
+    state.matching = {
+      stage: "done",
+      done: state.matching?.total ?? 0,
+      total: state.matching?.total ?? 0,
+      matches: state.matching?.matches ?? 0,
+      rejected: state.matching?.rejected ?? 0,
+      summary,
+    };
+    state.perceptualMatched = true;
+    await save();
+  }
+
   private get perceptualEnabled(): boolean {
-    return this.options.perceptualEnabled ?? env.PERCEPTUAL_DUPLICATES_ENABLED;
+    return this.options.perceptualEnabled ?? env.COPY_DETECTION_ENABLED;
   }
 }
 

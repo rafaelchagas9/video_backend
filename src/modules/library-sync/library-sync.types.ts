@@ -1,7 +1,5 @@
 import type { DurableJobStatus } from "@/modules/durable-jobs";
-import type { z } from "zod";
-import type { perceptualCatalogResultsSchema } from "@/modules/perceptual-duplicates/perceptual-catalog.schemas";
-type PerceptualCatalogResults = z.infer<typeof perceptualCatalogResultsSchema>;
+import type { CopyDetectionResults } from "@/modules/copy-detection/copy-detection.schemas";
 
 export type LibrarySyncTask = "perceptual" | "faces" | "storyboards" | "previews";
 export type LibrarySyncTrigger = "manual" | "automatic";
@@ -37,6 +35,15 @@ export interface LibrarySyncProgress {
   byTask: Record<LibrarySyncTask, LibrarySyncTaskProgress>;
 }
 
+/** Library-wide comparison that follows fingerprinting in a run with the perceptual task. */
+export interface LibrarySyncMatching {
+  stage: "prepare" | "join" | "verify" | "done";
+  done: number;
+  total: number;
+  matches: number;
+  rejected: number;
+}
+
 export interface LibrarySyncRun {
   id: number;
   /** Exact worker generation that owns this run's checkpoints and artifacts. */
@@ -47,6 +54,7 @@ export interface LibrarySyncRun {
   phase: LibrarySyncPhase;
   progress: LibrarySyncProgress;
   recentItems: LibrarySyncRecentItem[];
+  matching: LibrarySyncMatching | null;
   error: { code: string; message: string } | null;
   retryCount: number;
   createdAt: Date;
@@ -91,5 +99,5 @@ export interface LibrarySyncServiceContract {
     view?: "copies" | "similarity";
     limit: number;
     offset: number;
-  }): Promise<PerceptualCatalogResults>;
+  }): Promise<CopyDetectionResults>;
 }

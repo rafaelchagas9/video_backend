@@ -78,10 +78,11 @@ const run: LibrarySyncRun = {
       task: "perceptual",
       videoId: 11,
       status: "completed",
-      result: { compared_videos: 10, match_count: 1, truncated_matches: false },
+      result: { fingerprint: "extracted", items: 240 },
       error: null,
     },
   ],
+  matching: { stage: "verify", done: 40, total: 120, matches: 3, rejected: 5 },
   error: null,
   retryCount: 0,
   createdAt: now,
@@ -195,7 +196,8 @@ describe("library sync routes", () => {
         active_run: {
           id: 31,
           progress: { current: { task: "perceptual", video_id: 12 } },
-          recent_items: [{ video_id: 11, result: { match_count: 1 } }],
+          recent_items: [{ video_id: 11, result: { fingerprint: "extracted" } }],
+          matching: { stage: "verify", done: 40, total: 120, matches: 3, rejected: 5 },
         },
       },
     });

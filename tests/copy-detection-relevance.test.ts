@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { assessPerceptualMatch } from "@/modules/perceptual-duplicates/perceptual-relevance";
-import { engineMatchSchema } from "@/modules/perceptual-duplicates/perceptual-duplicates.schemas";
+import { assessPerceptualMatch } from "@/modules/copy-detection/copy-detection.relevance";
+import { engineMatchSchema } from "@/modules/copy-detection/copy-detection.schemas";
 import type { z } from "zod";
 
 type Match = z.infer<typeof engineMatchSchema>;

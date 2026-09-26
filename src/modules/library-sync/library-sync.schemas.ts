@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { perceptualCatalogResultsSchema } from "@/modules/perceptual-duplicates/perceptual-catalog.schemas";
+import { copyDetectionResultsSchema } from "@/modules/copy-detection/copy-detection.schemas";
 
 export const librarySyncTaskSchema = z.enum([
   "perceptual",
@@ -80,6 +80,15 @@ const runSchema = z.object({
       previews: taskProgressSchema,
     }),
   }),
+  matching: z
+    .object({
+      stage: z.enum(["prepare", "join", "verify", "done"]),
+      done: z.number().int(),
+      total: z.number().int(),
+      matches: z.number().int(),
+      rejected: z.number().int(),
+    })
+    .nullable(),
   recent_items: z.array(
     z.object({
       task: librarySyncTaskSchema,
@@ -148,5 +157,5 @@ export const librarySyncOverviewResponseSchema = z.object({
 });
 export const librarySyncPerceptualResultsResponseSchema = z.object({
   success: z.literal(true),
-  data: perceptualCatalogResultsSchema,
+  data: copyDetectionResultsSchema,
 });

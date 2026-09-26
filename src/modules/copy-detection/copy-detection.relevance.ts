@@ -1,35 +1,18 @@
-import { z } from "zod";
+import type { z } from "zod";
 import {
   engineMatchSchema,
   intervalCoverage,
-} from "./perceptual-duplicates.schemas";
+  PERCEPTUAL_ASSESSMENT_REVISION,
+  perceptualAssessmentSchema,
+} from "./copy-detection.schemas";
 
-/** Presentation policy, deliberately independent of the extraction/cache revision. */
-export const PERCEPTUAL_ASSESSMENT_REVISION = "relevance-v1";
-export const perceptualAssessmentSchema = z.object({
-  revision: z.literal(PERCEPTUAL_ASSESSMENT_REVISION),
-  classification: z.enum([
-    "near_duplicate",
-    "contained_clip",
-    "partial_overlap",
-    "similarity",
-    "shared_fragment",
-    "insufficient_evidence",
-  ]),
-  group: z.enum(["copies", "similarity", "suppressed"]),
-  reasons: z.array(z.string()),
-  segment_indices: z.array(z.number().int().nonnegative()),
-  coverage_a: z.number().finite().min(0).max(1),
-  coverage_b: z.number().finite().min(0).max(1),
-  matched_seconds_a: z.number().finite().nonnegative(),
-  matched_seconds_b: z.number().finite().nonnegative(),
-});
+export { PERCEPTUAL_ASSESSMENT_REVISION, perceptualAssessmentSchema };
 export type PerceptualAssessment = z.infer<typeof perceptualAssessmentSchema>;
 type Match = z.infer<typeof engineMatchSchema>;
 type Segment = Match["segments"][number];
 
 // Conservative presentation cutoffs, not calibrated probabilities or recall claims.
-const POLICY = {
+export const RELEVANCE_POLICY = {
   minimumVideoSeconds: 10,
   nearDuplicateCoverage: 0.9,
   containmentCoverage: 0.85,
@@ -69,9 +52,9 @@ function strongestAlignment(segments: Segment[], a: number, b: number) {
     const aligned = segments.filter(
       (s) =>
         Math.abs(s.b_start - (speed * s.a_start + offset)) <=
-          POLICY.alignmentToleranceSeconds &&
+          RELEVANCE_POLICY.alignmentToleranceSeconds &&
         Math.abs(s.b_end - (speed * s.a_end + offset)) <=
-          POLICY.alignmentToleranceSeconds
+          RELEVANCE_POLICY.alignmentToleranceSeconds
     );
     const c = coverage(aligned, a, b);
     const seconds = Math.min(c.matched_seconds_a, c.matched_seconds_b);
@@ -110,7 +93,7 @@ export function assessPerceptualMatch(
   });
   if (
     ![durationA, durationB].every(
-      (d) => Number.isFinite(d) && d >= POLICY.minimumVideoSeconds
+      (d) => Number.isFinite(d) && d >= RELEVANCE_POLICY.minimumVideoSeconds
     )
   ) {
     return result("insufficient_evidence", "suppressed", [
@@ -166,13 +149,13 @@ export function assessPerceptualMatch(
     const y = coordinates(selected);
     const start = Math.max(x[0], y[0]);
     const end = Math.min(x[1], y[1]);
-    if (end - start < POLICY.minimumClipEvidenceSeconds) return false;
+    if (end - start < RELEVANCE_POLICY.minimumClipEvidenceSeconds) return false;
     const time = (start + end) / 2;
     const referenceTime = (p: readonly [number, number, number, number]) =>
       p[2] + ((time - p[0]) * (p[3] - p[2])) / (p[1] - p[0]);
     return (
       Math.abs(referenceTime(x) - referenceTime(y)) >
-      2 * POLICY.alignmentToleranceSeconds
+      2 * RELEVANCE_POLICY.alignmentToleranceSeconds
     );
   };
   const competingAlignment = usable.some((other) =>
@@ -187,7 +170,7 @@ export function assessPerceptualMatch(
     durationA <= durationB ? c.matched_seconds_a : c.matched_seconds_b;
   if (
     !competingAlignment &&
-    Math.min(c.coverage_a, c.coverage_b) >= POLICY.nearDuplicateCoverage
+    Math.min(c.coverage_a, c.coverage_b) >= RELEVANCE_POLICY.nearDuplicateCoverage
   ) {
     return result(
       "near_duplicate",
@@ -199,8 +182,8 @@ export function assessPerceptualMatch(
   }
   if (
     !competingAlignment &&
-    shorterCoverage >= POLICY.containmentCoverage &&
-    shorterSeconds >= POLICY.minimumClipEvidenceSeconds
+    shorterCoverage >= RELEVANCE_POLICY.containmentCoverage &&
+    shorterSeconds >= RELEVANCE_POLICY.minimumClipEvidenceSeconds
   ) {
     return result(
       "contained_clip",
@@ -212,9 +195,9 @@ export function assessPerceptualMatch(
   }
   if (
     !competingAlignment &&
-    Math.min(c.coverage_a, c.coverage_b) >= POLICY.minimumOverlapCoverage &&
+    Math.min(c.coverage_a, c.coverage_b) >= RELEVANCE_POLICY.minimumOverlapCoverage &&
     Math.min(c.matched_seconds_a, c.matched_seconds_b) >=
-      POLICY.minimumOverlapSeconds
+      RELEVANCE_POLICY.minimumOverlapSeconds
   ) {
     return result(
       "partial_overlap",
@@ -233,8 +216,8 @@ export function assessPerceptualMatch(
       ? review.matched_seconds_a
       : review.matched_seconds_b;
   if (
-    reviewCoverage >= POLICY.minimumSimilarityCoverage &&
-    reviewSeconds >= POLICY.minimumSimilaritySeconds
+    reviewCoverage >= RELEVANCE_POLICY.minimumSimilarityCoverage &&
+    reviewSeconds >= RELEVANCE_POLICY.minimumSimilaritySeconds
   ) {
     return result(
       "similarity",

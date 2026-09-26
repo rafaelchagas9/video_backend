@@ -1,257 +1,131 @@
-# Duplicatas perceptuais de vídeo
+# Detecção de duplicatas de vídeo
 
-## Escopo atual
+## Escopo
 
-Este recurso compara de 2 a 12 vídeos escolhidos pelo usuário e procura cópias integrais ou
-trechos reaproveitados em velocidade fixa, inclusive com mudança de resolução, compressão e
-recorte. Edições que alteram a velocidade de reprodução não têm suporte. A execução é assíncrona
-porque a indexação pode percorrer horas de mídia.
+Encontra cópias do mesmo material na biblioteca mesmo quando o arquivo foi reencodado, trocou de
+resolução ou codec, recebeu crop, barras ou logo, foi aparado no início/fim, ou é um trecho
+(clip/highlights) de uma gravação maior, como uma live. Livestreams diferentes gravadas no mesmo
+quarto, com a mesma roupa e a mesma música de fundo **não** são cópias e são rejeitadas.
 
-`GET /api/videos/duplicates` continua inalterado. Ele agrupa arquivos com o mesmo `file_hash` e
-permanece sendo a opção barata para cópias exatas. A comparação perceptual usa endpoints e
-resultados próprios e não altera o significado de `file_hash`.
+`GET /api/videos/duplicates` continua agrupando arquivos com o mesmo `file_hash` (cópias exatas).
+Nada aqui remove arquivos ou registros; a cobertura descreve intervalos comprovados, não uma
+autorização de exclusão.
 
-A API de lotes selecionados e a [sincronização da biblioteca](library-synchronization.md) usam o
-mesmo índice global. A sincronização acrescenta processamento incremental do catálogo, backlog
-manual, automação somente para vídeos novos e acompanhamento no Kura web/mobile. A tela original
-de duplicatas exatas mantém seu significado.
+## Arquitetura (`audio-visual-v1`)
 
-Nenhum resultado remove arquivos ou registros. `coverage_a` e `coverage_b` descrevem cobertura
-temporal observada, não autorização de exclusão. O sistema também não calcula “espaço
-recuperável”: relações por trecho, ambiguidades e ausência de transitividade tornam essa conta
-enganosa sem revisão humana.
+A decisão tem duas etapas com papéis diferentes:
 
-## Arquitetura
+1. **Áudio propõe.** Cada vídeo recebe uma impressão digital Chromaprint do primeiro stream de
+   áudio: um inteiro de 32 bits a cada ~0,124 s (mono, 11 025 Hz, reamostrado contra os timestamps
+   do container para que lacunas virem silêncio e o item *k* continue em *k* × 0,124 s). Crop, logo,
+   resolução e codec de vídeo não alteram o áudio; clips e trims preservam o alinhamento temporal.
+2. **Vídeo confirma.** Música de fundo compartilhada entre lives diferentes produz um alinhamento
+   de áudio perfeito. Por isso, cada alinhamento relevante é conferido nos quadros daquele instante:
+   uma cópia mostra os mesmos pixels e o mesmo movimento; outra live mostra outra pose sobre o mesmo
+   cenário.
 
-1. O backend autentica o usuário, valida o lote e cria um `durable_job` do tipo
-   `vision.perceptual-duplicates`.
-2. O worker mantém lease e heartbeat e executa na classe `background` do agendador de mídia.
-3. O backend resolve IDs disponíveis, registra a identidade dos arquivos e inicia um processo
-   Python isolado. Caminhos locais nunca aparecem na resposta HTTP.
-4. O FFmpeg decodifica pela RX 7800 XT com VAAPI. Falha de hardware é explícita; não há fallback
-   silencioso que transfira toda a decodificação para o Ryzen 5 5600G.
-5. A indexação usa timestamps reais a 1 fps e 11 descritores SSCD de 512 dimensões por frame:
-   o quadro 288 × 288 inteiro, cinco faixas verticais e cinco faixas horizontais sobrepostas.
-6. O SSCD roda em lotes fixos de oito imagens, FP32, exclusivamente no
-   `MIGraphXExecutionProvider`. O cache grava os descritores em FP16; leitura, normalização,
-   recuperação e inferência usam FP32. O processo recusa inferência FP16 e fallback para CPU.
-7. A geração `sscd-temporal-v4` publica os descritores no índice global `retrieval-v4`. A busca
-   consulta somente membros elegíveis da geração atual e usa âncoras esparsas para formar hipóteses
-   temporais em velocidade fixa; descritores não confirmam cópias por si sós.
-8. As hipóteses coerentes são refinadas em janelas temporais. A consulta é decodificada a 1 fps e
-   a referência a 5 fps. Um orçamento adaptativo escolhe quantas janelas verificar, com teto de 128
-   por par. A API sinaliza quando a recuperação ou a verificação atingiu limites.
-9. A etapa fina extrai 512 × 512 com proporção preservada e barras pretas. As três primeiras
-   amostras procuram âncoras SIFT; âncoras periódicas renovam a geometria. Entre elas, uma
-   transformação aceita só é reutilizada quando os testes completos de pixels, gradientes,
-   suporte espacial e continuidade temporal também passam.
-10. A decisão exige ao menos nove amostras, oito alinhadas e cerca de oito segundos observados.
-    Movimento correlacionado e transformação estável produzem `verified`; pouca informação produz
-    `ambiguous`.
+### Recuperação global
 
-Preservar a proporção é obrigatório em recortes verticais severos. Esticar separadamente um frame
-16:9 e seu recorte 9:16 para quadrados destrói correspondências SIFT antes do RANSAC. Letterbox
-restaura uma transformação aproximadamente isotrópica e permite verificar recortes com cerca de
-30% da largura original. A cobertura e a distribuição dos pontos são medidas dentro da região
-visível compartilhada; barras pretas e partes que o crop removeu não entram nesse denominador.
-Os pisos de inliers e as checagens fotométricas continuam obrigatórios.
+O worker Python (`vision_service.copy_detection`) recebe todas as impressões num arquivo binário e
+faz um *self-join* por item idêntico: cada par de posições com o mesmo valor vota em
+(vídeo A, vídeo B, deslocamento). Valores presentes em mais de 48 posições (silêncio, clipping,
+tons) são descartados como *stop words*. Não há índice aproximado nem limite de candidatos: a
+biblioteca inteira cabe em memória (~50 milhões de itens, ~200 MB) e o join leva segundos.
 
-## AMD no Linux
+Para cada deslocamento com pelo menos 4 votos (um clip de 10 s reencodado tem só ~5 itens idênticos), a taxa de bits divergentes (BER) é medida item a
+item. Trechos com BER suavizada abaixo de 0,30 (aleatório ≈ 0,46–0,50) viram segmentos. Um segmento
+só vale se a BER no deslocamento alinhado for pelo menos 0,12 menor que em deslocamentos de 1 a 5 s:
+silêncio, zumbido e ruído estacionário casam em qualquer deslocamento e são rejeitados aqui.
 
-O histórico da AMD lista ROCm 10.0.0 em 26 de agosto de 2026 e ROCm 7.14.1 em 2 de setembro de
-2026. Consulte a [tabela de versões](https://rocm.docs.amd.com/en/latest/release/versions.html) e a
-[matriz de compatibilidade](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)
-antes de trocar componentes.
+Cada item resume ~20 quadros de áudio sobrepostos (~2,7 s), então um trecho de itens `[s, e)`
+cobre o áudio `[s × hop, e × hop + 2,6 s]`. Sem essa correção um clip de 10 s mediria 7,3 s.
 
-Arch Linux não consta como sistema oficialmente suportado para Radeon nessa matriz. Uma versão
-mais nova não justifica substituir uma combinação validada. Este recurso usa a pilha comprovada
-nesta máquina: VAAPI para decode e ONNX Runtime MIGraphX 1.25 para inferência. Não atualize ROCm,
-kernel, Mesa ou driver do host como parte deste setup.
+### Confirmação visual
 
-Em uma medição histórica, a primeira compilação MIGraphX levou cerca de 84 segundos; depois,
-somente a rede SSCD levou cerca de 11 ms por lote de oito. Isso não inclui decode, geração das 11
-vistas, cache, recuperação, SIFT ou verificação temporal e não representa o desempenho final da
-geração atual. Pilotos e benchmarks ficam em relatórios separados.
+Só vão para a etapa visual os pares cuja evidência de áudio poderia alcançar uma classe exibida
+(mesmos cortes da política de relevância abaixo). Intros e vinhetas de estúdio de poucos segundos
+ficam de fora sem custo.
 
-## Preparação do ambiente
+Os segmentos de um par são agrupados por deslocamento; cada grupo é verificado em até cinco
+instantes, parando quando duas amostras concordam:
 
-Pré-requisitos: Python 3.12 para o `uv`, FFmpeg com VAAPI, acesso a `/dev/dri/renderD128` e
-MIGraphX funcional. O ambiente é local ao `vision-service`; estes passos não alteram pacotes Python
-do sistema. Sincronize o runtime pelo lockfile. `onnx` atende à busca GPU e o runtime preserva
-`onnxruntime-migraphx` 1.25.
+- decodifica ~0,6 s de A e ~2,6 s de B ao redor do instante: cópias diferem em sincronia
+  áudio/vídeo em até ~0,7 s (reencode, priming do codec, contêiner);
+- escolhe o quadro de B registrando cada candidato (grade de 0,125 s, depois quadro a quadro nos
+  dois melhores) com SIFT + RANSAC de similaridade e ficando com o menor erro de pixels
+  normalizado. Mais inliers não basta (com câmera parada o quarto registra em qualquer instante)
+  e uma transformação única não basta (com câmera na mão ela muda a cada quadro). Depois da
+  primeira amostra verificada, as seguintes começam pela mesma defasagem A/V;
+- compara na menor das duas resoluções efetivas: fração de células texturizadas cujos gradientes
+  concordam (**aparência**) e correlação das diferenças entre quadros nos pixels em movimento
+  (**movimento**). Um crop vertical de vídeo horizontal é decodificado na altura do vertical.
 
-```bash
-cd /home/rafael/Documentos/projetos/conversor-video/vision-service
-uv sync --frozen --python 3.12
-.venv/bin/python -c "import onnxruntime as ort; print(ort.__version__, ort.get_available_providers())"
-```
+Uma amostra é `same` com aparência ≥ 0,65 e movimento ≥ 0,5, e `different` com aparência < 0,60
+ou movimento < 0,3 — mas só com registro forte (≥ 25 inliers): uma transformação fraca pode
+estar errada e explicaria qualquer divergência. Quadros ricos em textura sem nenhuma
+correspondência geométrica na janela (`no_correspondence`) indicam outro vídeo com a mesma trilha.
+O grupo é decidido pela mediana das amostras: `verified`, `rejected` ou, para cena estática,
+registro impossível ou evidência dividida, `ambiguous`.
 
-A saída deve conter `1.25.0` e `MIGraphXExecutionProvider`. Ao iniciar um trabalho, o engine ainda
-faz warmup perfilado e confirma execução exclusiva nesse provider.
+Playlists em loop fazem a mesma música reaparecer em outros deslocamentos do mesmo par. Depois que
+um grupo é verificado, grupos que remapeiam o mesmo trecho de qualquer um dos vídeos são marcados
+`superseded` sem gastar amostras: não somam cobertura e não aparecem como alinhamento conflitante.
 
-Converta uma vez o modelo oficial SSCD. A exportação usa outro ambiente, somente CPU; PyTorch não
-participa do runtime de produção.
+### Persistência
 
-```bash
-cd /home/rafael/Documentos/projetos/conversor-video/vision-service
-mkdir -p models/copies
-curl --fail --location \
-  https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_mixup.torchscript.pt \
-  --output models/copies/sscd_disc_mixup.torchscript.pt
-printf '%s  %s\n' \
-  9f26bd4c848cc19b73d2ae92eea6e04886f61a7b764ceb7a13aeee62e6a6db56 \
-  models/copies/sscd_disc_mixup.torchscript.pt | sha256sum --check
-uv venv --python 3.12 ../data/copy-model-export
-uv pip install --python ../data/copy-model-export/bin/python \
-  --index-url https://download.pytorch.org/whl/cpu torch==2.9.1
-uv pip install --python ../data/copy-model-export/bin/python numpy==1.26.4 onnx==1.20.1
-../data/copy-model-export/bin/python scripts/export_copy_model.py \
-  models/copies/sscd_disc_mixup.torchscript.pt \
-  models/copies/sscd_disc_mixup.onnx
-```
+- `video_audio_fingerprints`: uma linha por vídeo com os itens (`bytea`, little-endian), revisão,
+  identidade do arquivo (tamanho + `mtime_ns`) e `matched_at`. `no_audio` registra vídeos sem
+  áudio utilizável.
+- `video_copy_pairs`: cada par decidido (`match` ou `rejected`), com segmentos, coberturas e a
+  evidência por grupo (deslocamento, BER, amostras, aparência, movimento, inliers, escala).
+  Rejeições ficam salvas para que uma passada retomada não as verifique de novo.
 
-O exportador valida o SHA-256 da origem, verifica o ONNX e cria o manifesto
-`models/copies/sscd_disc_mixup.json` com procedência e SHA-256 do ONNX. O runtime recusa arquivos
-que não correspondam ao manifesto.
+Reextrair a impressão de um arquivo alterado apaga os pares daquele vídeo e o devolve à fila de
+comparação. As duas tabelas usam `ON DELETE CASCADE` a partir de `videos`.
 
-Configuração padrão de `.env.example`:
+## Operação
+
+A sincronização da biblioteca (tarefa `perceptual`) processa cada vídeo extraindo apenas a
+impressão — trabalho limitado pelo disco — e, ao fim do laço, executa **uma** comparação global de
+todas as impressões ainda não comparadas (`matched_at IS NULL`) contra a biblioteca inteira. Os
+pares decididos são gravados à medida que chegam; cancelar ou reiniciar perde no máximo o par em
+andamento, e uma execução retomada entre as duas etapas roda só a comparação.
+
+Custos medidos nesta máquina (Ryzen 5 5600G, biblioteca em HDD ST4000DM004):
+
+- Extração: limitada pela leitura sequencial do HDD (~130 MB/s, ~200–250× tempo real); a CPU
+  do Chromaprint é desprezível. Uma primeira passada nos ~2,9 TB leva ~6 h; depois, só vídeos novos.
+- Comparação: join de segundos; ~1 s por amostra visual, só nos pares candidatos.
+
+A extração roda com prioridade mínima de CPU/IO, sem ocupar vaga GPU do agendador de mídia. Um
+watchdog encerra um decoder travado após 5 min sem áudio.
+
+Configuração (`.env.example`):
 
 ```dotenv
-PERCEPTUAL_DUPLICATES_ENABLED=true
-PERCEPTUAL_DUPLICATES_PYTHON_PATH=./vision-service/.venv/bin/python
-PERCEPTUAL_DUPLICATES_MODULE=vision_service.video_copies
-PERCEPTUAL_DUPLICATES_WORK_DIR=./vision-service
-PERCEPTUAL_DUPLICATES_CACHE_DIR=./data/perceptual-duplicates-cache
-PERCEPTUAL_DUPLICATES_TIMEOUT_MS=3600000
-PERCEPTUAL_DUPLICATES_MAX_OUTPUT_BYTES=4194304
-PERCEPTUAL_DUPLICATES_MAX_ACTIVE_JOBS=1
-VAAPI_DEVICE=/dev/dri/renderD128
+COPY_DETECTION_ENABLED=true
+COPY_DETECTION_PYTHON_PATH=./vision-service/.venv/bin/python
+COPY_DETECTION_WORK_DIR=./vision-service
+COPY_DETECTION_CACHE_DIR=./data/copy-detection
+COPY_DETECTION_TIMEOUT_MS=43200000
+FPCALC_PATH=fpcalc
 ```
 
-`true` disponibiliza lotes manuais e a etapa perceptual da sincronização. Definir a flag como
-`false` retorna `503` com código `COPY_ENGINE_NOT_READY` para novos inícios e faz jobs perceptuais
-já enfileirados falharem antes do decode. Rostos e storyboard/VTT continuam disponíveis, inclusive
-nas demais etapas de jobs mistos. A varredura do backlog sempre exige ação explícita do usuário;
-a automação para vídeos novos é separada e começa desabilitada.
-
-Mantenha um trabalho ativo por usuário. O schema permite até quatro, mas aumentar esse valor gera
-contenção de GPU, disco e CPU; o agendador compartilhado ainda limita trabalhos de fundo.
-
-## API
-
-Todos os endpoints exigem autenticação. Inicie um lote com IDs distintos:
-
-```http
-POST /api/perceptual-duplicates/jobs
-Content-Type: application/json
-
-{"video_ids":[12,44,105]}
-```
-
-São aceitos 2 a 12 vídeos disponíveis. Cada um deve durar entre 5 segundos e 24 horas; a soma não
-pode exceder 72 horas. A resposta é `202 Accepted`, inclui `Location` e retorna `reused: true`
-quando já existe um trabalho ativo equivalente do mesmo usuário.
-
-```http
-GET /api/perceptual-duplicates/jobs/123
-```
-
-Estados: `queued`, `running`, `retry_wait`, `completed`, `failed` e `cancelled`. Fases públicas:
-`queued`, `preparing`, `comparing`, `completed`, `failed` e `cancelled`.
-`progress.completed_units` ainda não é progresso por minuto; passa de zero ao total no final.
-
-```http
-DELETE /api/perceptual-duplicates/jobs/123
-```
-
-O cancelamento registra a solicitação, interrompe a árvore do processo Python e é idempotente em
-jobs terminais. Cada usuário acessa somente seus jobs. O worker usa lease de 60 segundos,
-heartbeat de 20 segundos e até duas retentativas para falhas recuperáveis.
-
-O resultado possui `videos`, `matches` e `runtime`. Cada match informa os IDs, `coverage_a`,
-`coverage_b`, `status` e `segments`. Cada segmento informa intervalos nos dois vídeos, velocidade,
-quadros confirmados, inliers, movimento e resíduo do ajuste temporal. Esse resíduo mede
-a consistência entre amostras; não é uma garantia de precisão absoluta das bordas do trecho.
-`runtime.retrieval_truncated` indica recuperação global truncada;
-`runtime.verification_limited_pairs` indica pares que atingiram o orçamento de verificação.
-Esses sinais limitam qualquer conclusão negativa, inclusive quando `matches` está vazio.
-
-O payload interno do job inclui a geração atual, que também participa da deduplicação de pedidos.
-O backend só publica um resultado cuja `revision` seja `sscd-temporal-v4`. Jobs ativos de
-outra geração falham antes de executar o engine; resultados concluídos antigos são apresentados
-como obsoletos, sem expor o resultado como evidência atual. Jobs já cancelados continuam
-cancelados. Alterações posteriores nas mídias também exigem um novo lote.
-
-`verified` é evidência forte para revisão, não ordem de remoção. `ambiguous` significa que existe
-correspondência visual/temporal, mas o movimento não distingue com segurança cópia, cena estática,
-fundo reaproveitado ou alinhamentos concorrentes.
-
-## Cache, privacidade e integridade
-
-O cache usa diretório `0700` e processo com `umask 0077`. Guarda descritores FP16, timestamps reais
-e miniaturas 16 × 16 em chunks de um minuto; não guarda frames 288/512 completos. Ao carregar um
-chunk, o engine converte e normaliza os descritores em FP32 antes da busca.
-
-A chave inclui identidade (`device`, inode, tamanho, `mtime_ns`, `ctime_ns`), SHA-256 do modelo,
-revisão, início e duração. Cada `.npz` é validado, escrito em arquivo temporário e publicado por
-troca atômica. Cache inválido é removido e gera falha explícita para repetição segura.
-O limite padrão do cache é 128 GiB (`COPY_CACHE_MAX_BYTES`), com reserva mínima de 1 GiB livre no
-volume. Ao atingir o limite, o job falha com `COPY_CACHE_FULL`. `runtime.cache_bytes` informa o
-tamanho observado. Arquivos temporários de escritas interrompidas são removidos sob o lock do
-worker, sem tocar nas mídias.
-
-O índice global fica em `retrieval-v4`. Manifestos e shards são validados e publicados
-por troca atômica. Sua associação com a revisão, o modelo, a identidade da fonte e os tokens de
-membro impede que arquivos ausentes ou de outra geração participem da busca atual.
-
-Um lock de arquivo serializa estes workers entre processos no mesmo host, desde que compartilhem
-`PERCEPTUAL_DUPLICATES_CACHE_DIR`. O timeout de uma hora inclui espera por esse lock. O lock é
-liberado pelo kernel se o processo terminar ou for encerrado à força.
-
-O Python verifica a identidade antes, durante e depois da indexação. O backend compara caminho e
-`stat` antes de publicar. Isso detecta substituições e alterações normais, mas não equivale a hash
-integral do conteúdo.
-
-O processo recebe paths apenas por `stdin`, limita entrada, saída e tempo e não inclui paths em
-erros públicos. As mídias são abertas somente para leitura. Escritas ficam no cache privado e nos
-registros de durable jobs.
+Requer `fpcalc` (Chromaprint, pacote `chromaprint`) além de FFmpeg. O worker Python usa NumPy e
+OpenCV já presentes no ambiente do `vision-service`; não usa GPU nem modelo de rede neural.
+`COPY_DETECTION_ENABLED=false` responde `COPY_ENGINE_NOT_READY` sem afetar rostos e timeline.
 
 ## Limites conhecidos
 
-- A API de lotes limita a busca aos vídeos selecionados. A sincronização consulta os membros
-  elegíveis do índice global e publica resultados incrementais para o catálogo.
-- A recuperação global é aproximada e os tetos de recuperação e de 128 janelas de verificação por
-  par podem omitir trechos em montagens extensas.
-- A verificação termina quando reúne evidência suficiente para uma classe útil. Uma cópia integral
-  longa pode, portanto, aparecer como `partial_overlap` somente sobre a porção confirmada; o engine
-  não infere cobertura integral a partir de amostras esparsas.
-- O escopo atual aceita somente velocidade fixa. Alterações de velocidade de reprodução podem
-  falhar ou aparecer apenas como diagnóstico sem suporte.
-- Conteúdo parado, slides e fundos comuns tendem a `ambiguous`; sem movimento não há prova forte.
-- Recortes precisam conservar detalhes locais. Overlay extenso, espelhamento, rotação forte e
-  edição quadro a quadro podem falhar.
-- A confirmação exige ao menos nove amostras e, na prática, cerca de oito segundos; clips
-  prometidos pela interface continuam limitados a pelo menos dez segundos. Áudio não participa da decisão.
-- Antes de oferecer exclusão ou espaço recuperável na interface, é preciso validar positivos e
-  negativos naturais, definir revisão humana e representar relações por intervalo sem agrupamento
-  transitivo de sobreposições parciais.
+- **Sem áudio ou áudio substituído**: não há recuperação. A biblioteca atual tem 4 vídeos sem
+  áudio; clips com trilha trocada não são encontrados.
+- **Velocidade alterada** não tem suporte: a 1,05× só trechos curtos alinham (cobertura parcial
+  de ~30–50%). **EQ agressivo** (passa-faixa 200 Hz–6 kHz) reduz muito os itens idênticos; nas
+  variantes avaliadas ainda foi recuperado, mas sem garantia. Loudnorm, compressão, passa-baixa,
+  mixagem de música a −10 dB, áudio mono de 24 kbps e troca de codec funcionam.
+- Cenas estáticas sem movimento ficam `ambiguous` (aparecem só como similaridade).
+- Espelhamento e rotação não são registrados pelo SIFT de similaridade; com quadros ricos em
+  textura, a falta de correspondência é tratada como outro vídeo e o par é rejeitado.
+- Trechos compartilhados curtos (intro de estúdio, < 60 s e < 25% do menor) não são exibidos.
 
-## Histórico: geração v3 não promovida
-
-Arquitetura, métricas e limites medidos da geração experimental `sscd-hnswsq8-dense-v3` ficam no
-[relatório v3](spikes/video-duplicate-redesign-v3-2026-09-21.md). A primeira consulta sentinela
-concluiu em 177,248775 s, sem match, com recuperação truncada e um par limitado pela verificação;
-uma consulta sentinela subsequente foi interrompida durante a verificação. As 24 variantes
-reservadas foram indexadas, mas não consultadas.
-O resultado final da v3 foi **sem promoção para produção**; ele não descreve a operação da v4. O
-[relatório da implementação anterior](spikes/perceptual-video-implementation-2026-09-21.md) fica
-preservado como histórico; seus resultados e tempos não validam o índice global atual.
-
-## Evidências da geração atual
-
-O [relatório v4](spikes/video-duplicate-redesign-v4-2026-09-21.md) registra os testes reais,
-negativos históricos, custos medidos e limites da geração em operação.
-
-A confirmação normaliza cada par pela linha temporal do vídeo menor, mantendo os IDs,
-intervalos e coberturas na orientação original da API. Isso cobre também a inclusão de uma
-gravação completa depois dos seus clips já catalogados.
+As medições da validação estão no [relatório de avaliação](spikes/audio-visual-duplicates-2026-09-26.md).
