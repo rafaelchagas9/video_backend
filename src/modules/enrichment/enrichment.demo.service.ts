@@ -6,6 +6,7 @@ import type {
   RunEnrichmentOptions,
   SuggestionDTO,
 } from "./enrichment.types";
+import type { RelatedKind, ResolutionPreview } from "./enrichment.service";
 
 export interface DemoSuggestionFilters {
   entity_type?: EntityType;
@@ -57,6 +58,21 @@ export class EnrichmentDemoService {
       id,
       "rejected"
     ) as SuggestionDTO;
+  }
+
+  async previewResolution(
+    entityType: EntityType,
+    entityId: number
+  ): Promise<ResolutionPreview[]> {
+    const kinds: Record<string, RelatedKind> = { performer: "creator", studio: "studio", tag: "tag" };
+    return this.listSuggestions({ entity_type: entityType, entity_id: entityId, status: "pending" }).then((rows) =>
+      rows.flatMap((row) => {
+        const kind = kinds[row.type];
+        return kind
+          ? [{ suggestion_id: row.id, kind, match: demoRepository.findRelatedEntity(kind, row.value) }]
+          : [];
+      })
+    );
   }
 
   private assertSuggestionExists(id: number): void {

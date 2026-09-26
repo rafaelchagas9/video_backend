@@ -60,7 +60,7 @@ async function demoOverview() {
     settings: { auto_perceptual: false },
     counts: {
       total_videos: total,
-      tasks: { perceptual: done, faces: done, storyboards: done },
+      tasks: { perceptual: done, faces: done, storyboards: done, previews: done },
     },
     active_run: null,
     recent_runs: [],
@@ -101,6 +101,15 @@ function serialize(run: LibrarySyncRun) {
         perceptual: run.progress.byTask.perceptual,
         faces: run.progress.byTask.faces,
         storyboards: run.progress.byTask.storyboards,
+        // Runs recorded before the previews task existed carry no entry for it.
+        previews: run.progress.byTask.previews ?? {
+          total: 0,
+          processed: 0,
+          completed: 0,
+          failed: 0,
+          skipped: 0,
+          pending: 0,
+        },
       },
     },
     recent_items: run.recentItems.map((item) => ({

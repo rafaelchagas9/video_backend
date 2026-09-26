@@ -316,6 +316,7 @@ export async function buildServer() {
         { name: "conversion", description: "Video conversion and transcoding" },
         { name: "scheduler", description: "Scan scheduling" },
         { name: "storyboards", description: "Slider preview thumbnails" },
+        { name: "previews", description: "Hover preview teasers" },
         { name: "events", description: "Server-sent event streams" },
         {
           name: "multiplayer-remote",
@@ -561,6 +562,8 @@ export async function buildServer() {
         await import("./modules/settings/settings.routes");
       const { storyboardsRoutes } =
         await import("./modules/storyboards/storyboards.routes");
+      const { previewsRoutes } =
+        await import("./modules/previews/previews.routes");
       const { statsLegacySnapshotRoutes, statsRoutes } =
         await import("./modules/stats/stats.routes");
       const { eventsRoutes } = await import("./modules/events/events.routes");
@@ -630,6 +633,7 @@ export async function buildServer() {
       await instance.register(savedViewsRoutes, { prefix: "/saved-views" });
       await instance.register(settingsRoutes, { prefix: "/settings" });
       await instance.register(storyboardsRoutes, { prefix: "/videos" });
+      await instance.register(previewsRoutes, { prefix: "/videos" });
       await instance.register(statsRoutes, { prefix: "/stats" });
       await instance.register(statsLegacySnapshotRoutes, { prefix: "/stats" });
       await instance.register(eventsRoutes, { prefix: "/events" });

@@ -5,13 +5,14 @@ export const librarySyncTaskSchema = z.enum([
   "perceptual",
   "faces",
   "storyboards",
+  "previews",
 ]);
 export const librarySyncStartBodySchema = z
   .object({
     tasks: z
       .array(librarySyncTaskSchema)
       .min(1)
-      .max(3)
+      .max(4)
       .refine(
         (items) => new Set(items).size === items.length,
         "Tasks must be unique"
@@ -76,6 +77,7 @@ const runSchema = z.object({
       perceptual: taskProgressSchema,
       faces: taskProgressSchema,
       storyboards: taskProgressSchema,
+      previews: taskProgressSchema,
     }),
   }),
   recent_items: z.array(
@@ -131,6 +133,10 @@ export const librarySyncOverviewResponseSchema = z.object({
           completed: z.number().int(),
         }),
         storyboards: z.object({
+          pending: z.number().int(),
+          completed: z.number().int(),
+        }),
+        previews: z.object({
           pending: z.number().int(),
           completed: z.number().int(),
         }),

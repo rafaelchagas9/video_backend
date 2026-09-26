@@ -262,6 +262,11 @@ allowed GET /api/videos/{id}/storyboard
 allowed GET /api/videos/{id}/storyboard/status
 allowed POST /api/videos/{id}/storyboard http-contract
 allowed DELETE /api/videos/{id}/storyboard http-contract
+allowed GET /api/videos/{id}/preview.mp4
+allowed GET /api/videos/{id}/preview
+allowed GET /api/videos/{id}/preview/status
+allowed POST /api/videos/{id}/preview
+allowed DELETE /api/videos/{id}/preview
 allowed GET /api/stats/storage
 allowed GET /api/stats/storage/history
 allowed POST /api/stats/storage-snapshots
@@ -324,9 +329,11 @@ allowed POST /api/multiplayer-remote/sessions/{id}/join-requests/{requestId}/app
 allowed POST /api/multiplayer-remote/sessions/{id}/join-requests/{requestId}/reject http-contract
 allowed POST /api/enrichment/{entityType}/{id}/run
 allowed GET /api/enrichment/{entityType}/{id}/runs
+allowed GET /api/enrichment/{entityType}/{id}/resolution
 allowed GET /api/enrichment/suggestions
 allowed POST /api/enrichment/suggestions/{id}/accept
 allowed POST /api/enrichment/suggestions/{id}/reject
+allowed POST /api/enrichment/suggestions/resolve
 `;
 
 const HTTP_CONTRACT_OPERATIONS = new Set([
@@ -371,9 +378,11 @@ const HTTP_CONTRACT_OPERATIONS = new Set([
   "PATCH /api/settings/",
   "POST /api/enrichment/{entityType}/{id}/run",
   "GET /api/enrichment/{entityType}/{id}/runs",
+  "GET /api/enrichment/{entityType}/{id}/resolution",
   "GET /api/enrichment/suggestions",
   "POST /api/enrichment/suggestions/{id}/accept",
   "POST /api/enrichment/suggestions/{id}/reject",
+  "POST /api/enrichment/suggestions/resolve",
   "GET /api/videos/{id}/editing-metadata",
   "POST /api/videos/{id}/edits",
   "GET /api/edits/jobs",

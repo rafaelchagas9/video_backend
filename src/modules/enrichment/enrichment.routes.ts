@@ -6,6 +6,9 @@ import {
   entityParamSchema,
   runEnrichmentBodySchema,
   suggestionIdParamSchema,
+  resolveSuggestionsBodySchema,
+  resolveSuggestionsResponseSchema,
+  resolutionResponseSchema,
   listSuggestionsQuerySchema,
   runResponseSchema,
   runListResponseSchema,
@@ -104,6 +107,58 @@ export async function enrichmentRoutes(
     async (request, reply) => {
       const suggestions = await enrichmentService.listSuggestions(request.query);
       return reply.send({ success: true, data: suggestions });
+    },
+  );
+
+  // What each pending performer / studio / tag proposal would link to (read-only).
+  app.get(
+    "/:entityType/:id/resolution",
+    {
+      schema: {
+        tags: ["enrichment"],
+        summary: "Preview which library entities related proposals resolve to",
+        description:
+          "For each pending performer, studio and tag proposal: the existing creator, studio or tag " +
+          "accepting it would link (by external id, name ignoring case, or alias), or null when " +
+          "accepting would create a new one.",
+        params: entityParamSchema,
+        response: {
+          200: resolutionResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const data = await enrichmentService.previewResolution(
+        request.params.entityType,
+        request.params.id,
+      );
+      return reply.send({ success: true, data });
+    },
+  );
+
+  // Decide many suggestions in one request — a whole review pass at once.
+  app.post(
+    "/suggestions/resolve",
+    {
+      schema: {
+        tags: ["enrichment"],
+        summary: "Accept and reject suggestions in bulk",
+        description:
+          "Rejects are applied first, then accepts run through the entity writers. " +
+          "A failing accept is reported in `failed` and leaves that suggestion pending.",
+        body: resolveSuggestionsBodySchema,
+        response: {
+          200: resolveSuggestionsResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const result = await enrichmentService.resolveSuggestions(request.body);
+      return reply.send({ success: true, data: result });
     },
   );
 

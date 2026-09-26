@@ -5,6 +5,7 @@ import {
   favoritesTable,
   thumbnailsTable,
   storyboardsTable,
+  videoPreviewsTable,
   videoFaceDetectionsTable,
   faceImagesTable,
   artworkAssetsTable,
@@ -110,7 +111,7 @@ export class VideosBulkService {
 
   /**
    * Delete the on-disk derived artifact files (thumbnails, storyboard
-   * sprite/VTT, and extracted face images) for the given videos.
+   * sprite/VTT, hover previews, and extracted face images) for the given videos.
    *
    * The corresponding database rows are removed separately via FK cascade when
    * the video records are deleted, so this only handles the physical files that
@@ -135,7 +136,7 @@ export class VideosBulkService {
   }
 
   private async getVideoArtifactPaths(videoIds: number[]): Promise<string[]> {
-    const [thumbnails, storyboards, faceImages, artworkAssets] =
+    const [thumbnails, storyboards, faceImages, artworkAssets, previews] =
       await Promise.all([
         db
           .select({ filePath: thumbnailsTable.filePath })
@@ -165,6 +166,10 @@ export class VideosBulkService {
           .select({ filePath: artworkAssetsTable.filePath })
           .from(artworkAssetsTable)
           .where(inArray(artworkAssetsTable.videoId, videoIds)),
+        db
+          .select({ filePath: videoPreviewsTable.filePath })
+          .from(videoPreviewsTable)
+          .where(inArray(videoPreviewsTable.videoId, videoIds)),
       ]);
 
     const paths: string[] = [];
@@ -180,6 +185,9 @@ export class VideosBulkService {
     }
     for (const artworkAsset of artworkAssets) {
       if (artworkAsset.filePath) paths.push(artworkAsset.filePath);
+    }
+    for (const preview of previews) {
+      if (preview.filePath) paths.push(preview.filePath);
     }
 
     return paths;

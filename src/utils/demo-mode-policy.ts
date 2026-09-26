@@ -87,7 +87,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|conversions|conversion-estimate|artwork)$`
+      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|preview(?:/status)?|conversions|conversion-estimate|artwork)$`
     ),
   },
   {
@@ -149,7 +149,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:thumbnails\\.vtt|storyboard\\.(?:jpg|webp))$`
+      `^${API_PREFIX}/videos/\\d+/(?:thumbnails\\.vtt|storyboard\\.(?:jpg|webp)|preview\\.mp4)$`
     ),
   },
   {
@@ -329,12 +329,16 @@ const SAFE_API_REQUESTS: Array<{
       `^${API_PREFIX}/enrichment/suggestions/\\d+/(?:accept|reject)$`
     ),
   },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/suggestions/resolve$`),
+  },
   // All entity kinds run against the isolated SQLite catalog. A run only logs
   // a local scan and never reaches the enrichment network client.
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/enrichment/(?:creator|scene|studio|tag)/\\d+/runs$`
+      `^${API_PREFIX}/enrichment/(?:creator|scene|studio|tag)/\\d+/(?:runs|resolution)$`
     ),
   },
   {
@@ -521,7 +525,7 @@ const SAFE_API_REQUESTS: Array<{
   },
   {
     methods: new Set(["POST", "DELETE"]),
-    path: new RegExp(`^${API_PREFIX}/videos/\\d+/(?:artwork|storyboard)$`),
+    path: new RegExp(`^${API_PREFIX}/videos/\\d+/(?:artwork|storyboard|preview)$`),
   },
   {
     methods: new Set(["POST"]),

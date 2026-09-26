@@ -17,6 +17,7 @@
     "check:deps": "bun scripts/check-dependencies.ts",
     "demo:download": "bun scripts/download-demo-media.ts && bun scripts/generate-demo-artwork.ts",
     "demo:artwork": "bun scripts/generate-demo-artwork.ts",
+    "demo:previews": "bun scripts/generate-demo-previews.ts",
     "demo:import-json": "bun run demo:migrate-json",
     "demo:seed": "bun scripts/seed-demo-database.ts",
     "demo:migrate-json": "bun scripts/import-demo-json-to-sqlite.ts",

@@ -42,6 +42,7 @@ import {
 type PerceptualCatalogResults = z.infer<typeof perceptualCatalogResultsSchema>;
 import { settingsService } from "@/modules/settings/settings.service";
 import { storyboardsService } from "@/modules/storyboards/storyboards.service";
+import { previewsService } from "@/modules/previews/previews.service";
 import { ConflictError, NotFoundError } from "@/utils/errors";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import { logger } from "@/utils/logger";
@@ -66,7 +67,7 @@ const AUTO_SETTING = "library_sync_auto_perceptual";
 const AUTO_WATERMARK = "library_sync_auto_perceptual_watermark_video_id";
 const AUTO_GENERATION = "library_sync_auto_perceptual_generation";
 const ACTIVE = ["queued", "running", "retry_wait"] as const;
-const TASKS = ["perceptual", "faces", "storyboards"] as const;
+const TASKS = ["perceptual", "faces", "storyboards", "previews"] as const;
 
 type JobRow = typeof durableJobsTable.$inferSelect;
 type Video = { id: number; filePath: string; durationSeconds: number | null };
@@ -160,6 +161,13 @@ export interface LibrarySyncAdapters {
     processedIds(videoIds: number[]): Promise<Set<number>>;
     process(videoId: number, signal: AbortSignal): Promise<{ generated: true }>;
   };
+  previews: {
+    processedIds(videoIds: number[]): Promise<Set<number>>;
+    process(
+      videoId: number,
+      signal: AbortSignal
+    ): Promise<{ size_bytes: number; clip_count: number }>;
+  };
 }
 
 function durableJobs() {
@@ -189,6 +197,7 @@ function blankProgress(
     perceptual: blankTask(tasks.includes("perceptual") ? videos.length : 0),
     faces: blankTask(tasks.includes("faces") ? videos.length : 0),
     storyboards: blankTask(tasks.includes("storyboards") ? videos.length : 0),
+    previews: blankTask(tasks.includes("previews") ? videos.length : 0),
   };
   const total = Object.values(byTask).reduce(
     (sum, item) => sum + item.total,
@@ -486,6 +495,21 @@ function defaultAdapters(): LibrarySyncAdapters {
         return { generated: true };
       },
     },
+    previews: {
+      processedIds: (videoIds) => previewsService.processedIds(videoIds),
+      async process(videoId, signal) {
+        // The renderer takes its own background slot and runs ffmpeg at low priority.
+        const preview = await previewsService.generate(videoId, {
+          priority: "background",
+          signal,
+        });
+        signal.throwIfAborted();
+        return {
+          size_bytes: preview.file_size_bytes,
+          clip_count: preview.clip_count,
+        };
+      },
+    },
   };
 }
 
@@ -590,11 +614,13 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
         throw new ConflictError(
           "A library synchronization run is already active"
         );
+      // Newest first: recently added videos are the ones people browse, so a
+      // long backfill pays off from its first minutes.
       const videos = await tx
         .select({ id: videosTable.id })
         .from(videosTable)
         .where(eq(videosTable.isAvailable, true))
-        .orderBy(asc(videosTable.id));
+        .orderBy(desc(videosTable.createdAt), desc(videosTable.id));
       const payload: Payload = {
         version: 2,
         generation: LIBRARY_SYNC_GENERATION,
@@ -652,11 +678,12 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
   async overview() {
     const videos = await this.availableVideos();
     const ids = videos.map((v) => v.id);
-    const [perceptual, faces, storyboards, rows, activeRows, auto] =
+    const [perceptual, faces, storyboards, previews, rows, activeRows, auto] =
       await Promise.all([
         this.adapters.perceptual.processedIds(videos),
         this.adapters.faces.processedIds(ids),
         this.adapters.storyboards.processedIds(ids),
+        this.adapters.previews.processedIds(ids),
         db
           .select()
           .from(durableJobsTable)
@@ -693,6 +720,7 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
         perceptual: count(perceptual),
         faces: count(faces),
         storyboards: count(storyboards),
+        previews: count(previews),
       },
     };
     return {
@@ -1177,7 +1205,9 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
       ? this.adapters.perceptual.processedIds(videos)
       : task === "faces"
         ? this.adapters.faces.processedIds(ids)
-        : this.adapters.storyboards.processedIds(ids);
+        : task === "previews"
+          ? this.adapters.previews.processedIds(ids)
+          : this.adapters.storyboards.processedIds(ids);
   }
   private async process(
     task: LibrarySyncTask,
@@ -1203,6 +1233,7 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
       };
     }
     if (task === "faces") return this.adapters.faces.process(id, signal);
+    if (task === "previews") return this.adapters.previews.process(id, signal);
     return this.adapters.storyboards.process(id, signal);
   }
 

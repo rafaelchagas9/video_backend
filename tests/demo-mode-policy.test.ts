@@ -61,6 +61,11 @@ describe("demo mode request policy", () => {
     expect(isDemoRequestAllowed("GET", "/api/videos/1/storyboard.jpg")).toBe(
       true
     );
+    expect(isDemoRequestAllowed("GET", "/api/videos/1/preview.mp4")).toBe(true);
+    expect(isDemoRequestAllowed("GET", "/api/videos/1/preview/status")).toBe(
+      true
+    );
+    expect(isDemoRequestAllowed("POST", "/api/videos/1/preview")).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/creators/1/platforms")).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/creators/1/social-links")).toBe(
       true
@@ -84,6 +89,12 @@ describe("demo mode request policy", () => {
     ).toBe(true);
     expect(
       isDemoRequestAllowed("POST", "/api/enrichment/suggestions/3/reject")
+    ).toBe(true);
+    expect(
+      isDemoRequestAllowed("POST", "/api/enrichment/suggestions/resolve")
+    ).toBe(true);
+    expect(
+      isDemoRequestAllowed("GET", "/api/enrichment/scene/1/resolution")
     ).toBe(true);
     expect(isDemoRequestAllowed("GET", "/api/enrichment/creator/1/runs")).toBe(
       true

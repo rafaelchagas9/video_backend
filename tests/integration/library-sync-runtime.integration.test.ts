@@ -56,7 +56,22 @@ describe("library sync durable runtime", () => {
         return { generated: true };
       },
     },
+    previews: {
+      processedIds: async () => new Set(),
+      process: async (id, signal) => {
+        signal.throwIfAborted();
+        calls.push(`previews:${id}`);
+        return { size_bytes: 1, clip_count: 1 };
+      },
+    },
   };
+  /** Manual runs walk available videos newest first. */
+  async function manualOrder(): Promise<number[]> {
+    const rows = await sql<
+      Array<{ id: number }>
+    >`SELECT id FROM videos WHERE is_available ORDER BY created_at DESC, id DESC`;
+    return rows.map((row) => row.id);
+  }
   async function terminal(id: number): Promise<Run> {
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
@@ -131,6 +146,18 @@ describe("library sync durable runtime", () => {
       ])
     );
     expect(calls).not.toContain(`faces:${videoIds[0]}`);
+  });
+  it("backfills the newest videos first", async () => {
+    const before = calls.length;
+    const queued = await runtime.startRun({ tasks: ["storyboards"], userId: 1 });
+    await runtime.start();
+    expect((await terminal(queued.run.id)).status).toBe("completed");
+    // Both fixtures share created_at, so the newer id breaks the tie.
+    expect(await manualOrder()).toEqual([videoIds[1], videoIds[0]]);
+    expect(calls.slice(before)).toEqual([
+      `storyboards:${videoIds[1]}`,
+      `storyboards:${videoIds[0]}`,
+    ]);
   });
   it("reports a terminal item error once and preserves its safe code while continuing", async () => {
     const telemetry = await import("@/utils/telemetry");
@@ -444,6 +471,7 @@ describe("library sync durable runtime", () => {
       });
       throw new Error("unreachable");
     };
+    const [newest] = await manualOrder();
     const queued = await runtime.startRun({ tasks: ["perceptual"], userId: 1 });
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
@@ -453,19 +481,21 @@ describe("library sync durable runtime", () => {
     }
     expect((await runtime.getRun(queued.run.id)).progress.current).toEqual({
       task: "perceptual",
-      videoId: videoIds[0],
+      videoId: newest,
     });
     const cancelled = await runtime.cancelRun(queued.run.id);
     expect(cancelled.status).toBe("cancelled");
     expect(observedSignal?.aborted).toBe(true);
-    expect(started).toEqual([videoIds[0]]);
+    expect(started).toEqual([newest]);
   });
 
   it("resumes an expired lease from the last per-video checkpoint", async () => {
     const started: number[] = [];
+    const [first, second] = await manualOrder();
     adapters.perceptual.process = async (id, signal) => {
       started.push(id);
-      if (id === videoIds[1]) {
+      // Block on the second video so the first is checkpointed.
+      if (id === second) {
         await new Promise<void>((_resolve, reject) => {
           const abort = () => reject(signal.reason);
           if (signal.aborted) abort();
@@ -480,7 +510,7 @@ describe("library sync durable runtime", () => {
       const current = await runtime.getRun(queued.run.id);
       if (
         current.progress.processed === 1 &&
-        current.progress.current?.videoId === videoIds[1]
+        current.progress.current?.videoId === second
       )
         break;
       await Bun.sleep(20);
@@ -499,11 +529,12 @@ describe("library sync durable runtime", () => {
     const completed = await terminal(queued.run.id);
     expect(completed.status).toBe("completed");
     expect(completed.progress.processed).toBe(queued.run.progress.total);
-    expect(started.filter((id) => id === videoIds[0])).toHaveLength(1);
+    expect(started.filter((id) => id === first)).toHaveLength(1);
   });
 
   it("stops the run on a systemic cache failure without leaking private details", async () => {
     const started: number[] = [];
+    const [newest] = await manualOrder();
     adapters.perceptual.process = async (id) => {
       started.push(id);
       throw Object.assign(new Error("private /srv/media/path"), {
@@ -517,7 +548,7 @@ describe("library sync durable runtime", () => {
       code: "COPY_CACHE_FULL",
       message: "Perceptual duplicate cache is full",
     });
-    expect(started).toEqual([videoIds[0]]);
+    expect(started).toEqual([newest]);
     expect(JSON.stringify(failed)).not.toContain("/srv/media/path");
   });
 

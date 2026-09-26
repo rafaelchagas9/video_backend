@@ -261,6 +261,11 @@ export class WatcherService {
         );
 
         logger.info({ videoId }, "Video queued for unified processing");
+
+        // Hover teasers render in their own bounded background queue.
+        const { previewsService } =
+          await import("@/modules/previews/previews.service");
+        await previewsService.queueGenerate(videoId);
       } catch (error) {
         captureTelemetryException(error, {
           source: "video_processing_job",

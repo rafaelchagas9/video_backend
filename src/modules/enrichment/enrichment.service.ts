@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   creatorsTable,
@@ -121,6 +121,77 @@ function toInt(value: string, field: string): number {
     throw new BadRequestError(`Invalid integer for ${field}: ${value}`);
   }
   return n;
+}
+
+export type RelatedKind = "creator" | "studio" | "tag";
+
+export interface RelatedMatch {
+  id: number;
+  name: string;
+  via: "external_id" | "name" | "alias";
+  /** Tags only: how the library shows it. */
+  color?: string | null;
+  category?: string | null;
+}
+
+export interface ResolutionPreview {
+  suggestion_id: number;
+  kind: RelatedKind;
+  match: RelatedMatch | null;
+}
+
+const RELATED_KIND_BY_TYPE: Record<string, RelatedKind> = {
+  performer: "creator",
+  studio: "studio",
+  tag: "tag",
+};
+
+const RELATED_TABLES = {
+  creator: {
+    table: creatorsTable,
+    id: creatorsTable.id,
+    name: creatorsTable.name,
+    ext: creatorExternalIdsTable,
+    extOwner: creatorExternalIdsTable.creatorId,
+    extSource: creatorExternalIdsTable.source,
+    extId: creatorExternalIdsTable.externalId,
+    alias: creatorAliasesTable,
+    aliasOwner: creatorAliasesTable.creatorId,
+    aliasName: creatorAliasesTable.name,
+  },
+  studio: {
+    table: studiosTable,
+    id: studiosTable.id,
+    name: studiosTable.name,
+    ext: studioExternalIdsTable,
+    extOwner: studioExternalIdsTable.studioId,
+    extSource: studioExternalIdsTable.source,
+    extId: studioExternalIdsTable.externalId,
+    alias: studioAliasesTable,
+    aliasOwner: studioAliasesTable.studioId,
+    aliasName: studioAliasesTable.name,
+  },
+  tag: {
+    table: tagsTable,
+    id: tagsTable.id,
+    name: tagsTable.name,
+    ext: tagExternalIdsTable,
+    extOwner: tagExternalIdsTable.tagId,
+    extSource: tagExternalIdsTable.source,
+    extId: tagExternalIdsTable.externalId,
+    alias: tagAliasesTable,
+    aliasOwner: tagAliasesTable.tagId,
+    aliasName: tagAliasesTable.name,
+  },
+} as const;
+
+/** Image accepts download from the source, so a pass runs this many at once. */
+const RESOLVE_IMAGE_CONCURRENCY = 4;
+
+export interface ResolveResult {
+  accepted: number[];
+  rejected: number[];
+  failed: Array<{ id: number; message: string }>;
 }
 
 export interface ListSuggestionsFilters {
@@ -487,6 +558,99 @@ export class EnrichmentService {
     return this.toSuggestionDTO(updated);
   }
 
+  /**
+   * Resolve a review pass. Rejects land in one statement; accepts go through
+   * `acceptSuggestion` so each one uses the same writers as a single accept.
+   * Images download, so they run a few at a time; everything else runs in order
+   * because fields and aliases write the same creator row.
+   */
+  async resolveSuggestions(body: {
+    accept: number[];
+    reject: number[];
+  }): Promise<ResolveResult> {
+    const result: ResolveResult = { accepted: [], rejected: [], failed: [] };
+
+    if (body.reject.length > 0) {
+      if (env.DEMO_MODE) {
+        for (const id of body.reject) {
+          await this.settle(result, id, async () => {
+            await enrichmentDemoService.rejectSuggestion(id);
+            result.rejected.push(id);
+          });
+        }
+      } else {
+        const rows = await db
+          .update(enrichmentSuggestionsTable)
+          .set({ status: "rejected", updatedAt: new Date() })
+          .where(
+            and(
+              inArray(enrichmentSuggestionsTable.id, body.reject),
+              eq(enrichmentSuggestionsTable.status, "pending")
+            )
+          )
+          .returning({ id: enrichmentSuggestionsTable.id });
+        const done = new Set(rows.map((row) => row.id));
+        for (const id of body.reject) {
+          if (done.has(id)) result.rejected.push(id);
+          else result.failed.push({ id, message: "Not pending" });
+        }
+      }
+    }
+
+    // Demo suggestions live in SQLite, so every demo accept takes the ordered path.
+    const types = new Map<number, string>();
+    if (!env.DEMO_MODE && body.accept.length > 0) {
+      const rows = await db
+        .select({
+          id: enrichmentSuggestionsTable.id,
+          type: enrichmentSuggestionsTable.type,
+        })
+        .from(enrichmentSuggestionsTable)
+        .where(inArray(enrichmentSuggestionsTable.id, body.accept));
+      for (const row of rows) types.set(row.id, row.type);
+    }
+    const accept = async (id: number) =>
+      this.settle(result, id, async () => {
+        await this.acceptSuggestion(id);
+        result.accepted.push(id);
+      });
+
+    for (const id of body.accept.filter((id) => types.get(id) !== "image")) {
+      await accept(id);
+    }
+    const images = body.accept.filter((id) => types.get(id) === "image");
+    for (let index = 0; index < images.length; index += RESOLVE_IMAGE_CONCURRENCY) {
+      await Promise.all(
+        images.slice(index, index + RESOLVE_IMAGE_CONCURRENCY).map(accept)
+      );
+    }
+
+    logger.info(
+      {
+        accepted: result.accepted.length,
+        rejected: result.rejected.length,
+        failed: result.failed.length,
+      },
+      "Resolved enrichment suggestions"
+    );
+    return result;
+  }
+
+  private async settle(
+    result: ResolveResult,
+    id: number,
+    work: () => Promise<void>
+  ): Promise<void> {
+    try {
+      await work();
+    } catch (error) {
+      result.failed.push({
+        id,
+        message: error instanceof Error ? error.message : "Failed",
+      });
+    }
+  }
+
   async rejectSuggestion(id: number): Promise<SuggestionDTO> {
     if (env.DEMO_MODE) {
       return enrichmentDemoService.rejectSuggestion(id);
@@ -817,45 +981,124 @@ export class EnrichmentService {
     }
   }
 
-  // --- Cross-entity resolvers (external id → name → create) ---------------
+  // --- Cross-entity resolvers (external id → name → alias → create) -------
+
+  /**
+   * Find the library entity a scene's performer / studio / tag proposal points
+   * at, without creating anything: the source's external id first, then the
+   * name ignoring case, then an alias. Accepting uses the same lookup, so the
+   * review preview and the write always agree.
+   */
+  async findRelatedEntity(
+    kind: RelatedKind,
+    name: string,
+    source?: string | null,
+    externalId?: string | null
+  ): Promise<RelatedMatch | null> {
+    const t = RELATED_TABLES[kind];
+    if (source && externalId) {
+      const [ext] = await db
+        .select({ id: t.extOwner, name: t.name })
+        .from(t.ext)
+        .innerJoin(t.table, eq(t.id, t.extOwner))
+        .where(and(eq(t.extSource, source), eq(t.extId, externalId)))
+        .limit(1);
+      if (ext) return { id: ext.id, name: ext.name, via: "external_id" };
+    }
+    const lowered = name.trim().toLowerCase();
+    const [byName] = await db
+      .select({ id: t.id, name: t.name })
+      .from(t.table)
+      .where(sql`lower(${t.name}) = ${lowered}`)
+      .limit(1);
+    if (byName) return { id: byName.id, name: byName.name, via: "name" };
+    const [byAlias] = await db
+      .select({ id: t.id, name: t.name })
+      .from(t.alias)
+      .innerJoin(t.table, eq(t.id, t.aliasOwner))
+      .where(sql`lower(${t.aliasName}) = ${lowered}`)
+      .limit(1);
+    if (byAlias) return { id: byAlias.id, name: byAlias.name, via: "alias" };
+    return null;
+  }
+
+  /** What each pending performer / studio / tag proposal of a scene resolves to. */
+  async previewResolution(
+    entityType: EntityType,
+    entityId: number
+  ): Promise<ResolutionPreview[]> {
+    if (env.DEMO_MODE) {
+      return enrichmentDemoService.previewResolution(entityType, entityId);
+    }
+    const rows = await db
+      .select()
+      .from(enrichmentSuggestionsTable)
+      .where(
+        and(
+          eq(enrichmentSuggestionsTable.entityType, entityType),
+          eq(enrichmentSuggestionsTable.entityId, entityId),
+          eq(enrichmentSuggestionsTable.status, "pending")
+        )
+      );
+    const previews: ResolutionPreview[] = [];
+    const tagLooks = new Map<number, { color: string | null; category: string | null }>();
+    for (const row of rows) {
+      const kind = RELATED_KIND_BY_TYPE[row.type];
+      if (!kind) continue;
+      const raw = this.parseRaw(row);
+      const match = await this.findRelatedEntity(
+        kind,
+        row.value,
+        raw.source ?? row.source,
+        raw.external_id
+      );
+      if (match && kind === "tag") {
+        let look = tagLooks.get(match.id);
+        if (!look) {
+          const [tag] = await db
+            .select({ color: tagsTable.color, category: tagCategoriesTable.name })
+            .from(tagsTable)
+            .leftJoin(tagCategoriesTable, eq(tagCategoriesTable.id, tagsTable.categoryId))
+            .where(eq(tagsTable.id, match.id))
+            .limit(1);
+          look = { color: tag?.color ?? null, category: tag?.category ?? null };
+          tagLooks.set(match.id, look);
+        }
+        Object.assign(match, look);
+      }
+      previews.push({ suggestion_id: row.id, kind, match });
+    }
+    return previews;
+  }
+
+  private async linkExternalId(
+    kind: RelatedKind,
+    id: number,
+    source?: string | null,
+    externalId?: string | null
+  ): Promise<void> {
+    if (!source || !externalId) return;
+    const t = RELATED_TABLES[kind];
+    await db
+      .insert(t.ext)
+      .values({
+        [kind === "creator" ? "creatorId" : kind === "studio" ? "studioId" : "tagId"]: id,
+        source,
+        externalId,
+        lastSyncedAt: new Date(),
+      } as never)
+      .onConflictDoNothing();
+  }
 
   private async resolveCreatorId(
     name: string,
     source: string,
     externalId?: string | null
   ): Promise<number> {
-    if (externalId) {
-      const [ext] = await db
-        .select({ creatorId: creatorExternalIdsTable.creatorId })
-        .from(creatorExternalIdsTable)
-        .where(
-          and(
-            eq(creatorExternalIdsTable.source, source),
-            eq(creatorExternalIdsTable.externalId, externalId)
-          )
-        )
-        .limit(1);
-      if (ext) return ext.creatorId;
-    }
-    const [byName] = await db
-      .select({ id: creatorsTable.id })
-      .from(creatorsTable)
-      .where(eq(creatorsTable.name, name))
-      .limit(1);
-    if (byName) return byName.id;
-
+    const found = await this.findRelatedEntity("creator", name, source, externalId);
+    if (found) return found.id;
     const created = await creatorsService.quickCreate(name);
-    if (externalId) {
-      await db
-        .insert(creatorExternalIdsTable)
-        .values({
-          creatorId: created.id,
-          source,
-          externalId,
-          lastSyncedAt: new Date(),
-        })
-        .onConflictDoNothing();
-    }
+    await this.linkExternalId("creator", created.id, source, externalId);
     return created.id;
   }
 
@@ -864,38 +1107,10 @@ export class EnrichmentService {
     source: string,
     externalId?: string | null
   ): Promise<number> {
-    if (externalId) {
-      const [ext] = await db
-        .select({ studioId: studioExternalIdsTable.studioId })
-        .from(studioExternalIdsTable)
-        .where(
-          and(
-            eq(studioExternalIdsTable.source, source),
-            eq(studioExternalIdsTable.externalId, externalId)
-          )
-        )
-        .limit(1);
-      if (ext) return ext.studioId;
-    }
-    const [byName] = await db
-      .select({ id: studiosTable.id })
-      .from(studiosTable)
-      .where(eq(studiosTable.name, name))
-      .limit(1);
-    if (byName) return byName.id;
-
+    const found = await this.findRelatedEntity("studio", name, source, externalId);
+    if (found) return found.id;
     const created = await studiosService.create({ name });
-    if (externalId) {
-      await db
-        .insert(studioExternalIdsTable)
-        .values({
-          studioId: created.id,
-          source,
-          externalId,
-          lastSyncedAt: new Date(),
-        })
-        .onConflictDoNothing();
-    }
+    await this.linkExternalId("studio", created.id, source, externalId);
     return created.id;
   }
 
@@ -904,52 +1119,14 @@ export class EnrichmentService {
     source?: string,
     externalId?: string | null
   ): Promise<number> {
-    if (source && externalId) {
-      const [ext] = await db
-        .select({ tagId: tagExternalIdsTable.tagId })
-        .from(tagExternalIdsTable)
-        .where(
-          and(
-            eq(tagExternalIdsTable.source, source),
-            eq(tagExternalIdsTable.externalId, externalId)
-          )
-        )
-        .limit(1);
-      if (ext) return ext.tagId;
+    const found = await this.findRelatedEntity("tag", name, source, externalId);
+    if (found) {
+      // Remember the source's id so the next scene resolves without guessing.
+      if (found.via !== "external_id") await this.linkExternalId("tag", found.id, source, externalId);
+      return found.id;
     }
-
-    const [byName] = await db
-      .select({ id: tagsTable.id })
-      .from(tagsTable)
-      .where(eq(tagsTable.name, name))
-      .limit(1);
-    if (byName) {
-      if (source && externalId) {
-        await db
-          .insert(tagExternalIdsTable)
-          .values({
-            tagId: byName.id,
-            source,
-            externalId,
-            lastSyncedAt: new Date(),
-          })
-          .onConflictDoNothing();
-      }
-      return byName.id;
-    }
-
     const created = await tagsService.create({ name: name.slice(0, 255) });
-    if (source && externalId) {
-      await db
-        .insert(tagExternalIdsTable)
-        .values({
-          tagId: created.id,
-          source,
-          externalId,
-          lastSyncedAt: new Date(),
-        })
-        .onConflictDoNothing();
-    }
+    await this.linkExternalId("tag", created.id, source, externalId);
     return created.id;
   }
 

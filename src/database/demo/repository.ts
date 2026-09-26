@@ -14,6 +14,7 @@ import {
 } from "./client";
 
 import { buildDemoVideoQuery } from "./video-query";
+import { demoCreatorScan, demoSceneScan } from "./enrichment-scan";
 
 const DEMO_USER_ID = 1;
 type DemoPage = {
@@ -1403,6 +1404,8 @@ export class DemoRepository {
     sources: string[]
   ): any {
     const timestamp = now();
+    if (entityType === "creator") this.seedCreatorScan(entityId, timestamp);
+    if (entityType === "scene") this.seedSceneScan(entityId, timestamp);
     const count = this.getEnrichmentSuggestions({
       entity_type: entityType,
       entity_id: entityId,
@@ -1424,6 +1427,82 @@ export class DemoRepository {
     return this.getEnrichmentRuns(entityType, entityId).find(
       (item) => item.id === Number(result.lastInsertRowid)
     );
+  }
+  /** A creator scan replays the real-volume sample once; decisions survive rescans. */
+  private seedCreatorScan(creatorId: number, timestamp: string): void {
+    const pictures = [
+      ...this.rows(
+        "SELECT id FROM demo_creator_gallery WHERE creator_id = ? ORDER BY id",
+        creatorId
+      ).map((item) => `${API_PREFIX}/creators/${creatorId}/gallery/${item.id}/image`),
+      ...this.rows(
+        "SELECT a.id FROM demo_artwork_assets a JOIN demo_video_creators vc ON vc.video_id = a.video_id WHERE vc.creator_id = ? AND a.variant IN ('poster','card','square') ORDER BY a.video_id, a.variant",
+        creatorId
+      ).map((item) => `${API_PREFIX}/artwork/${item.id}/image`),
+    ];
+    this.insertScanRows("creator", creatorId, demoCreatorScan(pictures), timestamp);
+  }
+  /** A scene scan replays the real scene sample; its covers are the video's own art. */
+  private seedSceneScan(videoId: number, timestamp: string): void {
+    const pictures = this.rows(
+      "SELECT id FROM demo_artwork_assets WHERE video_id = ? AND variant IN ('hero','card','poster') ORDER BY variant",
+      videoId
+    ).map((item) => `${API_PREFIX}/artwork/${item.id}/image`);
+    if (pictures.length === 0) pictures.push(`${API_PREFIX}/thumbnails/${videoId}/image`);
+    this.insertScanRows("scene", videoId, demoSceneScan(pictures), timestamp);
+  }
+  private insertScanRows(
+    entityType: string,
+    entityId: number,
+    rows: ReturnType<typeof demoCreatorScan>,
+    timestamp: string
+  ): void {
+    const existing = new Set(
+      this.rows(
+        "SELECT dedup_hash FROM demo_enrichment_suggestions WHERE entity_type=? AND entity_id=?",
+        entityType,
+        entityId
+      ).map((item) => String(item.dedup_hash))
+    );
+    const nextId =
+      Number(this.row("SELECT COALESCE(MAX(id),0) AS id FROM demo_enrichment_suggestions")?.id ?? 0) + 1;
+    let offset = 0;
+    for (const row of rows) {
+      // Demo dedup hashes are unique across entities. Creator scans shipped first
+      // with the short form, and rescans must keep matching the rows they made.
+      const hash =
+        entityType === "creator"
+          ? `demo-scan-${entityId}-${row.dedup}`
+          : `demo-scan-${entityType}-${entityId}-${row.dedup}`;
+      if (existing.has(hash)) continue;
+      getDemoSqlite().run(
+        "INSERT INTO demo_enrichment_suggestions (id,entity_type,entity_id,type,field_key,value,source,source_url,confidence,face_match_score,cached_preview_path,status,dedup_hash,raw_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [nextId + offset++, entityType, entityId, row.type, row.field_key, row.value, row.source, row.source_url, 0.95, null, null, "pending", hash, JSON.stringify(row.raw), timestamp, timestamp]
+      );
+    }
+  }
+  /** Demo twin of the backend's related-entity lookup: name ignoring case, then alias. */
+  findRelatedEntity(kind: "creator" | "studio" | "tag", name: string): { id: number; name: string; via: "name" | "alias"; color?: string | null; category?: string | null } | null {
+    const table = kind === "creator" ? "demo_creators" : kind === "studio" ? "demo_studios" : "demo_tags";
+    const aliases = kind === "creator" ? "demo_creator_aliases" : kind === "studio" ? "demo_studio_aliases" : "demo_tag_aliases";
+    const owner = kind === "creator" ? "creator_id" : kind === "studio" ? "studio_id" : "tag_id";
+    const lowered = name.trim().toLowerCase();
+    const byName = this.row(`SELECT id, name FROM ${table} WHERE lower(name) = ? LIMIT 1`, lowered);
+    const byAlias = byName
+      ? null
+      : this.row(
+          `SELECT t.id AS id, t.name AS name FROM ${aliases} a JOIN ${table} t ON t.id = a.${owner} WHERE lower(a.name) = ? LIMIT 1`,
+          lowered
+        );
+    const found = byName ?? byAlias;
+    if (!found) return null;
+    const match = { id: Number(found.id), name: String(found.name), via: byName ? ("name" as const) : ("alias" as const) };
+    if (kind !== "tag") return match;
+    const look = this.row(
+      "SELECT t.color AS color, c.name AS category FROM demo_tags t LEFT JOIN demo_tag_categories c ON c.id = t.category_id WHERE t.id = ?",
+      match.id
+    );
+    return { ...match, color: look?.color ?? null, category: look?.category ?? null };
   }
   decideEnrichmentSuggestion(id: number, status: "accepted" | "rejected"): any {
     const suggestion = this.getEnrichmentSuggestionById(id);

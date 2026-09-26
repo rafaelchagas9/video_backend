@@ -2,7 +2,7 @@ import {
   pgTable,
   serial,
   text,
-  integer, bigint,
+  integer, bigint, boolean,
   real,
   timestamp,
   index,
@@ -42,6 +42,20 @@ export const storyboardsTable = pgTable('storyboards', {
 }, (table) => ({
   videoIdx: index('idx_storyboards_video').on(table.videoId),
 }));
+
+// Hover preview teasers (AV1 + AAC MP4 stitched from evenly spaced clips)
+export const videoPreviewsTable = pgTable('video_previews', {
+  id: serial('id').primaryKey(),
+  videoId: integer('video_id').notNull().unique().references(() => videosTable.id, { onDelete: 'cascade' }),
+  filePath: text('file_path').notNull(),
+  fileSizeBytes: bigint('file_size_bytes', { mode: "number" }).notNull(),
+  durationSeconds: real('duration_seconds').notNull(),
+  clipCount: integer('clip_count').notNull(),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  hasAudio: boolean('has_audio').notNull(),
+  generatedAt: timestamp('generated_at').defaultNow().notNull(),
+});
 
 export const videoArtworkTable = pgTable('video_artwork', {
   id: serial('id').primaryKey(),
@@ -96,3 +110,4 @@ export type VideoArtworkRecord = typeof videoArtworkTable.$inferSelect;
 export type NewVideoArtworkRecord = typeof videoArtworkTable.$inferInsert;
 export type ArtworkAssetRecord = typeof artworkAssetsTable.$inferSelect;
 export type NewArtworkAssetRecord = typeof artworkAssetsTable.$inferInsert;
+export type VideoPreviewRecord = typeof videoPreviewsTable.$inferSelect;

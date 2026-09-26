@@ -562,4 +562,50 @@ describe("enrichment loop (all entity types)", () => {
       .where(eq(tagExternalIdsTable.tagId, tag.id));
     expect(tagExternalIds.map((e) => e.externalId)).toContain("tag-77");
   });
+  it("scene: previews links by external id, name ignoring case, then alias — and never creates", async () => {
+    const { db } = await import("@/config/drizzle");
+    const { creatorsTable, creatorAliasesTable, tagsTable } = await import("@/database/schema");
+    const { enrichmentService } = await import("@/modules/enrichment/enrichment.service");
+
+    const [tag] = await db.insert(tagsTable).values({ name: "Mixed Case Tag" }).returning();
+    const [creator] = await db.insert(creatorsTable).values({ name: "Canonical Person" }).returning();
+    await db.insert(creatorAliasesTable).values({ creatorId: creator.id, name: "Stage Name" });
+
+    expect(await enrichmentService.findRelatedEntity("tag", "mixed CASE tag")).toMatchObject({ id: tag.id, via: "name" });
+    expect(await enrichmentService.findRelatedEntity("creator", "stage name")).toMatchObject({ id: creator.id, via: "alias" });
+    expect(await enrichmentService.findRelatedEntity("tag", "Nobody Has This")).toBeNull();
+
+    // The earlier scene test created and linked these, so they now resolve by source id.
+    const { videoId } = await seedVideoFixture();
+    await runAndList("scene", videoId, SCENE_CANDIDATES.length);
+    const tagsBefore = await db.select().from(tagsTable);
+    const res = await ctx!.authInject({ method: "GET", url: `/api/enrichment/scene/${videoId}/resolution` });
+    expect(res.statusCode).toBe(200);
+    const previews = res.json().data as Array<{ kind: string; match: { via: string } | null }>;
+    expect(previews.map((item) => item.kind).sort()).toEqual(["creator", "studio", "tag"]);
+    expect(previews.every((item) => item.match?.via === "external_id")).toBe(true);
+    expect(await db.select().from(tagsTable)).toHaveLength(tagsBefore.length);
+  });
+
+  it("resolves a review pass in one request: accepts write, rejects only mark", async () => {
+    const { videoId } = await seedVideoFixture();
+    const { pick } = await runAndList("scene", videoId, SCENE_CANDIDATES.length);
+    const res = await ctx!.authInject({
+      method: "POST",
+      url: "/api/enrichment/suggestions/resolve",
+      payload: { accept: [pick("field", "title").id], reject: [pick("tag").id, pick("performer").id] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({
+      accepted: [pick("field", "title").id],
+      rejected: [pick("tag").id, pick("performer").id],
+      failed: [],
+    });
+    const again = await ctx!.authInject({
+      method: "POST",
+      url: "/api/enrichment/suggestions/resolve",
+      payload: { reject: [pick("tag").id] },
+    });
+    expect(again.json().data.failed).toEqual([{ id: pick("tag").id, message: "Not pending" }]);
+  });
 });

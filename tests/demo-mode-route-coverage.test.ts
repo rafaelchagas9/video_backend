@@ -317,7 +317,7 @@ describe("demo mode runtime route coverage", () => {
     });
   });
 
-  it("requires an explicit manifest record for all 309 primary operations", () => {
+  it("requires an explicit manifest record for all 316 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -328,8 +328,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(309);
-    expect(manifestKeys).toHaveLength(309);
+    expect(runtimeOperationKeys).toHaveLength(316);
+    expect(manifestKeys).toHaveLength(316);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -357,7 +357,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 309,
+      allowed: 316,
       blocked: 0,
       conditional: 0,
     });
@@ -365,7 +365,7 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(186);
+    ).toHaveLength(188);
   });
 
   it("persists cleanup review progress without deleting demo media", async () => {
@@ -450,11 +450,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 130 generated HEAD counterparts", () => {
+  it("registers and classifies all 134 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(130);
+    expect(getScenarios).toHaveLength(134);
 
     for (const scenario of getScenarios) {
       expect(
@@ -808,6 +808,35 @@ describe("demo mode runtime route coverage", () => {
     expect(accepted.json().data.status).toBe("accepted");
     expect(rejected.statusCode).toBe(200);
     expect(rejected.json().data.status).toBe("rejected");
+
+    expect(pending.length).toBeGreaterThanOrEqual(4);
+    const resolved = await app.inject({
+      method: "POST",
+      url: "/api/enrichment/suggestions/resolve",
+      payload: { accept: [pending[2]!.id], reject: [pending[3]!.id] },
+    });
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json().data).toEqual({
+      accepted: [pending[2]!.id],
+      rejected: [pending[3]!.id],
+      failed: [],
+    });
+    const conflicting = await app.inject({
+      method: "POST",
+      url: "/api/enrichment/suggestions/resolve",
+      payload: { accept: [pending[4]!.id], reject: [pending[4]!.id] },
+    });
+    expect(conflicting.statusCode).toBe(400);
+
+    // A scene scan replays the real scene sample; its cast, studio and tags preview their resolution.
+    const preview = await app.inject({
+      method: "GET",
+      url: "/api/enrichment/scene/1/resolution",
+    });
+    expect(preview.statusCode).toBe(200);
+    const previews = preview.json().data as Array<{ kind: string; match: unknown }>;
+    expect(previews.filter((item) => item.kind === "tag").length).toBeGreaterThanOrEqual(40);
+    expect(previews.some((item) => item.kind === "creator")).toBe(true);
   });
 
   it("simulates the complete edit lifecycle without FFmpeg or Redis", async () => {

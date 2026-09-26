@@ -270,8 +270,10 @@ describe("SQLite demo operations services", () => {
       entity_id: 1,
       status: "success",
       sources_used: ["theporndb"],
-      suggestion_count: 1,
     });
+    // The seeded proposal plus the replayed real sample (pictures are skipped:
+    // this seed has no creator art to stand in for them).
+    expect(run.suggestion_count).toBeGreaterThan(1);
     expect(
       await new EnrichmentDemoService().listRuns("creator", 1)
     ).toHaveLength(1);

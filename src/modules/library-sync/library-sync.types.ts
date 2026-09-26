@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { perceptualCatalogResultsSchema } from "@/modules/perceptual-duplicates/perceptual-catalog.schemas";
 type PerceptualCatalogResults = z.infer<typeof perceptualCatalogResultsSchema>;
 
-export type LibrarySyncTask = "perceptual" | "faces" | "storyboards";
+export type LibrarySyncTask = "perceptual" | "faces" | "storyboards" | "previews";
 export type LibrarySyncTrigger = "manual" | "automatic";
 export type LibrarySyncItemStatus = "completed" | "failed" | "skipped";
 export type LibrarySyncPhase =

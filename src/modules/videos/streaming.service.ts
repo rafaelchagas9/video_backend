@@ -106,78 +106,71 @@ export class StreamingService {
       throw new AppError(410, "Video file is not available");
     }
 
-    // Get file stats
-    const stats = statSync(filePath);
-    const fileSize = stats.size;
-    const mimeType = getMimeType(filePath);
+    return streamFile(filePath, rangeHeader, getMimeType(filePath), {
+      videoId,
+    });
+  }
+}
+
+/** Serve a local file with HTTP range support; shared by video streams and previews. */
+export function streamFile(
+  filePath: string,
+  rangeHeader: string | undefined,
+  mimeType: string,
+  logContext: Record<string, unknown> = {}
+): StreamResult {
+  const fileSize = statSync(filePath).size;
+
+  logger.debug(
+    { ...logContext, hasRange: Boolean(rangeHeader), fileSize },
+    "Preparing file stream"
+  );
+
+  if (rangeHeader) {
+    const maxChunkBytes = Math.max(1, env.STREAM_MAX_CHUNK_MB) * 1024 * 1024;
+    const range = parseRangeHeader(rangeHeader, fileSize, maxChunkBytes);
+
+    if (!range) {
+      // Invalid range - return 416 Range Not Satisfiable
+      throw new AppError(416, "Range Not Satisfiable");
+    }
+
+    const { start, end } = range;
+    const contentLength = end - start + 1;
 
     logger.debug(
-      {
-        videoId,
-        hasRange: Boolean(rangeHeader),
-        fileSize,
-      },
-      "Preparing video stream"
+      { ...logContext, rangeHeader, start, end, contentLength, maxChunkBytes },
+      "Streaming byte range"
     );
 
-    // Handle range request
-    if (rangeHeader) {
-      const maxChunkBytes = Math.max(1, env.STREAM_MAX_CHUNK_MB) * 1024 * 1024;
-      const range = parseRangeHeader(rangeHeader, fileSize, maxChunkBytes);
-
-      if (!range) {
-        // Invalid range - return 416 Range Not Satisfiable
-        throw new AppError(416, "Range Not Satisfiable");
-      }
-
-      const { start, end } = range;
-      const contentLength = end - start + 1;
-
-      logger.debug(
-        {
-          videoId,
-          rangeHeader,
-          start,
-          end,
-          contentLength,
-          maxChunkBytes,
-        },
-        "Streaming byte range"
-      );
-
-      const stream = createReadStream(filePath, { start, end });
-
-      return {
-        stream,
-        statusCode: 206,
-        headers: {
-          "Content-Type": mimeType,
-          "Content-Length": contentLength,
-          "Accept-Ranges": "bytes",
-          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-        },
-      };
-    }
-
-    // No range - return full file
-    if (fileSize > 100 * 1024 * 1024) {
-      logger.warn(
-        { videoId, fileSize },
-        "Streaming without Range header on large file"
-      );
-    }
-    const stream = createReadStream(filePath);
-
     return {
-      stream,
-      statusCode: 200,
+      stream: createReadStream(filePath, { start, end }),
+      statusCode: 206,
       headers: {
         "Content-Type": mimeType,
-        "Content-Length": fileSize,
+        "Content-Length": contentLength,
         "Accept-Ranges": "bytes",
+        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
       },
     };
   }
+
+  if (fileSize > 100 * 1024 * 1024) {
+    logger.warn(
+      { ...logContext, fileSize },
+      "Streaming without Range header on large file"
+    );
+  }
+
+  return {
+    stream: createReadStream(filePath),
+    statusCode: 200,
+    headers: {
+      "Content-Type": mimeType,
+      "Content-Length": fileSize,
+      "Accept-Ranges": "bytes",
+    },
+  };
 }
 
 export const streamingService = new StreamingService();
