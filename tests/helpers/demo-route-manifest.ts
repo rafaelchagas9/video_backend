@@ -98,6 +98,7 @@ allowed PATCH /api/videos/{id}/studio-assignment http-contract
 allowed POST /api/videos/{id}/studios/{studio_id} http-contract
 allowed DELETE /api/videos/{id}/studios/{studio_id} http-contract
 allowed GET /api/creators/
+allowed GET /api/creators/facets http-contract
 allowed POST /api/creators/
 allowed GET /api/creators/{id}
 allowed PATCH /api/creators/{id}
@@ -255,6 +256,7 @@ allowed PATCH /api/settings/
 allowed GET /api/videos/{id}/thumbnails.vtt
 allowed GET /api/videos/{id}/storyboard.jpg
 allowed GET /api/videos/{id}/storyboard.webp
+allowed GET /api/videos/{id}/storyboard/pages/{page}
 allowed GET /api/videos/{id}/storyboard
 allowed GET /api/videos/{id}/storyboard/status
 allowed POST /api/videos/{id}/storyboard http-contract

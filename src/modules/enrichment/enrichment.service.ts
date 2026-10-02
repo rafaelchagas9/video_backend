@@ -54,6 +54,7 @@ import { tagsService } from "@/modules/tags/tags.service";
 import { platformsService } from "@/modules/platforms/platforms.service";
 import { getEnrichmentClient } from "./enrichment.client";
 import { enrichmentDemoService } from "./enrichment.demo.service";
+import { imageSizeProbe } from "./enrichment.image-sizes";
 import { parseExactExternalReference } from "./enrichment.reference";
 import type {
   Candidate,
@@ -62,6 +63,7 @@ import type {
   RelationalRaw,
   RunEnrichmentOptions,
   RunDTO,
+  SceneResetDTO,
   SuggestionDTO,
 } from "./enrichment.types";
 
@@ -248,6 +250,7 @@ export class EnrichmentService {
         entityId
       );
       let inserted = 0;
+      let images: number[] = [];
       if (result.candidates.length > 0) {
         const rows = result.candidates.map((candidate) =>
           this.toSuggestionRow(entityType, canonicalEntityId, candidate)
@@ -256,8 +259,14 @@ export class EnrichmentService {
           .insert(enrichmentSuggestionsTable)
           .values(rows)
           .onConflictDoNothing()
-          .returning({ id: enrichmentSuggestionsTable.id });
+          .returning({
+            id: enrichmentSuggestionsTable.id,
+            type: enrichmentSuggestionsTable.type,
+          });
         inserted = insertedRows.length;
+        images = insertedRows
+          .filter((row) => row.type === "image")
+          .map((row) => row.id);
       }
 
       const [updated] = await tx
@@ -272,8 +281,9 @@ export class EnrichmentService {
         })
         .where(eq(enrichmentRunsTable.id, run.id))
         .returning();
-      return { canonicalEntityId, inserted, updated };
+      return { canonicalEntityId, inserted, updated, images };
     });
+    imageSizeProbe.measure(persisted.images);
 
     logger.info(
       {
@@ -483,6 +493,17 @@ export class EnrichmentService {
         enrichmentSuggestionsTable.id
       );
 
+    // Pictures from before sizes were recorded get measured in the background.
+    imageSizeProbe.measure(
+      rows
+        .filter(
+          (row) =>
+            row.type === "image" &&
+            row.status === "pending" &&
+            row.imageWidth === null
+        )
+        .map((row) => row.id)
+    );
     return rows.map((r) => this.toSuggestionDTO(r));
   }
 
@@ -689,6 +710,175 @@ export class EnrichmentService {
           eq(enrichmentRunsTable.entityId, entityId)
         )
       );
+  }
+
+  /**
+   * Undo a scene's enrichment. Only what accepted proposals wrote is removed, and a
+   * field only when it still holds the value that was applied (a later manual edit
+   * stays). Every proposal and run is then deleted, because a rescan skips decided
+   * proposals and would otherwise never offer the right match again.
+   */
+  async resetScene(videoId: number): Promise<SceneResetDTO> {
+    if (env.DEMO_MODE) {
+      return enrichmentDemoService.resetScene(videoId);
+    }
+
+    const [video] = await db
+      .select({
+        id: videosTable.id,
+        title: videosTable.title,
+        description: videosTable.description,
+      })
+      .from(videosTable)
+      .where(eq(videosTable.id, videoId))
+      .limit(1);
+    if (!video) throw new NotFoundError(`Video not found: ${videoId}`);
+
+    const accepted = await db
+      .select()
+      .from(enrichmentSuggestionsTable)
+      .where(
+        and(
+          eq(enrichmentSuggestionsTable.entityType, "scene"),
+          eq(enrichmentSuggestionsTable.entityId, videoId),
+          eq(enrichmentSuggestionsTable.status, "accepted")
+        )
+      );
+
+    const fieldsCleared = new Set<string>();
+    let linksRemoved = 0;
+    const clearMetadata = async (key: string, value: string) => {
+      const rows = await db
+        .delete(videoMetadataTable)
+        .where(
+          and(
+            eq(videoMetadataTable.videoId, videoId),
+            eq(videoMetadataTable.key, key),
+            eq(videoMetadataTable.value, value)
+          )
+        )
+        .returning({ id: videoMetadataTable.id });
+      if (rows.length > 0) fieldsCleared.add(key);
+    };
+
+    for (const s of accepted) {
+      switch (s.type) {
+        case "field": {
+          const key = s.fieldKey ?? "";
+          if (key === "title" && video.title === s.value) {
+            await db
+              .update(videosTable)
+              .set({ title: null, updatedAt: new Date() })
+              .where(eq(videosTable.id, videoId));
+            video.title = null;
+            fieldsCleared.add("title");
+          } else if (key === "description" && video.description === s.value) {
+            await db
+              .update(videosTable)
+              .set({ description: null, updatedAt: new Date() })
+              .where(eq(videosTable.id, videoId));
+            video.description = null;
+            fieldsCleared.add("description");
+          } else if (SCENE_METADATA_FIELDS.has(key)) {
+            await clearMetadata(key, s.value);
+          }
+          break;
+        }
+        case "image":
+          await clearMetadata("cover_image_url", s.value);
+          break;
+        case "external_id": {
+          const rows = await db
+            .delete(videoExternalIdsTable)
+            .where(
+              and(
+                eq(videoExternalIdsTable.videoId, videoId),
+                eq(videoExternalIdsTable.source, s.source),
+                eq(videoExternalIdsTable.externalId, s.value)
+              )
+            )
+            .returning({ id: videoExternalIdsTable.id });
+          linksRemoved += rows.length;
+          break;
+        }
+        case "performer":
+        case "studio":
+        case "tag": {
+          const kind = RELATED_KIND_BY_TYPE[s.type];
+          if (!kind) break;
+          const raw = this.parseRaw(s);
+          const match = await this.findRelatedEntity(
+            kind,
+            s.value,
+            raw.source ?? s.source,
+            raw.external_id
+          );
+          if (!match) break;
+          if (kind === "creator") {
+            const rows = await db
+              .delete(videoCreatorsTable)
+              .where(
+                and(
+                  eq(videoCreatorsTable.videoId, videoId),
+                  eq(videoCreatorsTable.creatorId, match.id)
+                )
+              )
+              .returning({ videoId: videoCreatorsTable.videoId });
+            linksRemoved += rows.length;
+          } else if (kind === "tag") {
+            const rows = await db
+              .delete(videoTagsTable)
+              .where(
+                and(
+                  eq(videoTagsTable.videoId, videoId),
+                  eq(videoTagsTable.tagId, match.id)
+                )
+              )
+              .returning({ videoId: videoTagsTable.videoId });
+            linksRemoved += rows.length;
+          } else {
+            linksRemoved += await studioAssignmentService.unlinkMany(
+              [videoId],
+              [match.id]
+            );
+          }
+          break;
+        }
+      }
+    }
+
+    const cleared = await db
+      .delete(enrichmentSuggestionsTable)
+      .where(
+        and(
+          eq(enrichmentSuggestionsTable.entityType, "scene"),
+          eq(enrichmentSuggestionsTable.entityId, videoId)
+        )
+      )
+      .returning({ id: enrichmentSuggestionsTable.id });
+    await db
+      .delete(enrichmentRunsTable)
+      .where(
+        and(
+          eq(enrichmentRunsTable.entityType, "scene"),
+          eq(enrichmentRunsTable.entityId, videoId)
+        )
+      );
+
+    logger.info(
+      {
+        videoId,
+        suggestions: cleared.length,
+        fields: [...fieldsCleared],
+        links: linksRemoved,
+      },
+      "Reset scene enrichment"
+    );
+    return {
+      suggestions_cleared: cleared.length,
+      fields_cleared: [...fieldsCleared],
+      links_removed: linksRemoved,
+    };
   }
 
   // --- Apply: creator -----------------------------------------------------
@@ -1320,6 +1510,8 @@ export class EnrichmentService {
       confidence: row.confidence,
       face_match_score: row.faceMatchScore,
       cached_preview_path: row.cachedPreviewPath,
+      image_width: row.imageWidth || null,
+      image_height: row.imageHeight || null,
       status: row.status,
       dedup_hash: row.dedupHash,
       raw: row.raw,

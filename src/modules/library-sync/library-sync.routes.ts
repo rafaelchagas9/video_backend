@@ -284,24 +284,10 @@ export async function librarySyncRoutes(
     async (request, reply) => {
       if (!service) {
         if (!env.DEMO_MODE) return unavailable(reply);
-        // Demo mode never fingerprints, so there is nothing to review.
-        const { PERCEPTUAL_ASSESSMENT_REVISION } = await import(
-          "@/modules/copy-detection/copy-detection.relevance"
-        );
+        const { demoCopyResults } = await import("./library-sync.demo.service");
         return reply.send({
           success: true,
-          data: {
-            items: [],
-            assessment_revision: PERCEPTUAL_ASSESSMENT_REVISION,
-            diagnostics: {
-              candidate_limited_pairs: 0,
-              truncated_videos: 0,
-              suppressed_matches: 0,
-            },
-            total: 0,
-            limit: request.query.limit ?? 20,
-            offset: request.query.offset ?? 0,
-          },
+          data: demoCopyResults(request.query),
         });
       }
       return reply.send({

@@ -9,6 +9,7 @@ import {
 } from "@/database/demo";
 import { NotFoundError } from "@/utils/errors";
 import { studioAssignmentDemoService } from "@/modules/studios/studio-assignment.demo.service";
+import { storyboardAssetPaths } from "@/modules/storyboards/storyboards.pages";
 
 const {
   demoCreatorsTable,
@@ -527,11 +528,12 @@ export class VideosDemoService {
         .select({
           spritePath: demoStoryboardsTable.spritePath,
           vttPath: demoStoryboardsTable.vttPath,
+          tileCount: demoStoryboardsTable.tileCount,
         })
         .from(demoStoryboardsTable)
         .where(inArray(demoStoryboardsTable.videoId, ids))
         .all()
-        .flatMap((row) => [row.spritePath, row.vttPath]);
+        .flatMap(storyboardAssetPaths);
       const artworkPaths = getDemoDatabase()
         .select({ filePath: demoArtworkAssetsTable.filePath })
         .from(demoArtworkAssetsTable)

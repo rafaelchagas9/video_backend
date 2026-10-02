@@ -1,3 +1,5 @@
+import type { ListCreatorsOptions } from "@/modules/creators/creators.types";
+import { creatorAttributeValues, matchesAttributes, demoAttributeFacets, utcDate } from "@/modules/creators/creators.attributes";
 import { API_PREFIX } from "@/config/constants";
 import type { RandomVideoOptions } from "@/modules/videos/videos.types";
 import {
@@ -255,59 +257,82 @@ export class DemoRepository {
       linked_video_count: linkedVideoCount,
       platform_count: platforms.length,
       social_link_count: socialLinks.length,
-      has_profile_picture: row.profile_picture_path !== null,
-      has_main_picture: row.main_picture_path !== null,
-      completeness: { is_complete: true, missing_fields: [] },
+      has_profile_picture: gallery.some(item => item.is_profile_picture),
+      has_main_picture: gallery.some(item => item.is_main_picture),
+      completeness: {
+        is_complete: gallery.some(item => item.is_profile_picture) && (platforms.length > 0 || socialLinks.length > 0) && linkedVideoCount > 0,
+        missing_fields: [
+          ...(!gallery.some(item => item.is_profile_picture) ? ["picture"] : []),
+          ...(platforms.length === 0 && socialLinks.length === 0 ? ["platform_or_social"] : []),
+          ...(linkedVideoCount === 0 ? ["linked_videos"] : []),
+        ],
+      },
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
   }
 
-  getCreators(options: any = {}): DemoPage {
+  /** Lightweight directory rows: hydrate galleries and relationships only after pagination. */
+  private creatorDirectoryRows(options: ListCreatorsOptions, userId?: number) {
     this.ensureReady();
-    let list = this.rows("SELECT * FROM demo_creators ORDER BY name").map(
-      (row) => this.creatorFromRow(row)
-    );
-    if (options.search) {
-      const search = String(options.search).toLowerCase();
-      list = list.filter((creator) =>
-        creator.name.toLowerCase().includes(search)
-      );
-    }
-    const studioIds: number[] = Array.isArray(options.studioIds)
-      ? options.studioIds.map(Number)
-      : options.studioIds !== undefined
-        ? [Number(options.studioIds)]
-        : [];
-    if (studioIds.length > 0) {
-      const linked = new Set(
-        this.rows(
-          `SELECT creator_id FROM demo_creator_studios WHERE studio_id IN (${studioIds.map(() => "?").join(",")})`,
-          ...studioIds
-        ).map((row) => Number(row.creator_id))
-      );
-      list = list.filter((creator) => linked.has(creator.id));
-    }
-    // Mirrors the real service's sort keys so demo lists order the same way.
-    const sort = String(options.sort ?? "name");
-    const direction = options.order === "desc" ? -1 : 1;
-    const key = (creator: any): string | number =>
-      sort === "video_count"
-        ? creator.linked_video_count
-        : sort === "created_at" || sort === "updated_at"
-          ? String(creator[sort] ?? "")
-          : creator.name.toLowerCase();
-    list.sort((a, b) => {
-      const left = key(a);
-      const right = key(b);
-      const order = left < right ? -1 : left > right ? 1 : 0;
-      return order * direction || a.name.localeCompare(b.name);
+    let rows = this.rows(`SELECT c.*,
+      (SELECT count(*) FROM demo_video_creators v WHERE v.creator_id = c.id) AS linked_video_count,
+      (SELECT count(*) FROM demo_creator_platforms p WHERE p.creator_id = c.id) AS platform_count,
+      (SELECT count(*) FROM demo_creator_social_links s WHERE s.creator_id = c.id) AS social_link_count,
+      EXISTS(SELECT 1 FROM demo_creator_gallery g WHERE g.creator_id = c.id AND g.is_profile_picture = 1) AS has_profile_picture,
+      EXISTS(SELECT 1 FROM demo_creator_favorites f WHERE f.creator_id = c.id AND f.user_id = ?) AS is_favorite,
+      (SELECT json_group_array(a.name) FROM demo_creator_aliases a WHERE a.creator_id = c.id) AS aliases_json,
+      (SELECT json_group_array(p.username) FROM demo_creator_platforms p WHERE p.creator_id = c.id) AS usernames_json,
+      (SELECT json_group_array(s.studio_id) FROM demo_creator_studios s WHERE s.creator_id = c.id) AS studio_ids_json
+      FROM demo_creators c`, userId ?? -1).map(row => ({ ...parseJson<Record<string, unknown>>(row.extra_json, {}), ...row }));
+    rows = rows.filter(row => {
+      if (options.search) {
+        // PostgreSQL ILIKE supports % and _ wildcards; preserve that contract.
+        const escaped = options.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".");
+        const pattern = new RegExp(escaped, "i");
+        const names = [row.name, ...parseJson<string[]>(row.aliases_json, []), ...parseJson<string[]>(row.usernames_json, [])];
+        if (!names.some(name => pattern.test(name))) return false;
+      }
+      if (options.studioIds?.length && !parseJson<number[]>(row.studio_ids_json, []).some(id => options.studioIds!.includes(id))) return false;
+      const picture = Boolean(row.has_profile_picture);
+      const platforms = Number(row.platform_count);
+      const socials = Number(row.social_link_count);
+      const videos = Number(row.linked_video_count);
+      const complete = picture && (platforms > 0 || socials > 0) && videos > 0;
+      if (options.hasProfilePicture !== undefined && picture !== options.hasProfilePicture) return false;
+      if (options.isFavorite !== undefined && Boolean(row.is_favorite) !== options.isFavorite) return false;
+      if (options.minVideoCount !== undefined && videos < options.minVideoCount) return false;
+      if (options.maxVideoCount !== undefined && videos > options.maxVideoCount) return false;
+      if (options.complete !== undefined && complete !== options.complete) return false;
+      if (options.missing === "picture" && picture) return false;
+      if (options.missing === "platform" && platforms > 0) return false;
+      if (options.missing === "social" && socials > 0) return false;
+      if (options.missing === "linked" && videos > 0) return false;
+      if (options.missing === "any" && complete) return false;
+      return true;
     });
-    const page = Number(options.page || 1);
-    const limit = Number(options.limit || 20);
+    return rows;
+  }
+
+  getCreatorFacets(options: ListCreatorsOptions = {}, userId?: number, asOf = utcDate()) {
+    return demoAttributeFacets(this.creatorDirectoryRows(options, userId).map(row => creatorAttributeValues(row, asOf)), options, asOf);
+  }
+
+  getCreators(options: ListCreatorsOptions = {}, userId = DEMO_USER_ID): DemoPage {
+    const asOf = utcDate();
+    const list = this.creatorDirectoryRows(options, userId).filter(row => matchesAttributes(creatorAttributeValues(row, asOf), options));
+    const sort = options.sort ?? "name";
+    const direction = options.order === "desc" ? -1 : 1;
+    const key = (creator: any): string | number => sort === "video_count" ? Number(creator.linked_video_count) : sort === "created_at" || sort === "updated_at" ? String(creator[sort] ?? "") : creator.name;
+    list.sort((a, b) => {
+      const left = key(a); const right = key(b);
+      return (left < right ? -1 : left > right ? 1 : 0) * direction || a.id - b.id;
+    });
+    const page = options.page ?? 1;
+    const limit = options.limit ?? 20;
     const total = list.length;
     return {
-      data: list.slice((page - 1) * limit, page * limit),
+      data: list.slice((page - 1) * limit, page * limit).map(row => ({ ...this.creatorFromRow(row), is_favorite: Boolean(row.is_favorite) })),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -1503,6 +1528,25 @@ export class DemoRepository {
       match.id
     );
     return { ...match, color: look?.color ?? null, category: look?.category ?? null };
+  }
+  /** Demo data is not written back by accepts, so a reset only clears the proposals and runs. */
+  clearEnrichment(entityType: string, entityId: number): number {
+    const count = Number(
+      this.row(
+        "SELECT COUNT(*) AS n FROM demo_enrichment_suggestions WHERE entity_type=? AND entity_id=?",
+        entityType,
+        entityId
+      )?.n ?? 0
+    );
+    getDemoSqlite().run(
+      "DELETE FROM demo_enrichment_suggestions WHERE entity_type=? AND entity_id=?",
+      [entityType, entityId]
+    );
+    getDemoSqlite().run(
+      "DELETE FROM demo_enrichment_runs WHERE entity_type=? AND entity_id=?",
+      [entityType, entityId]
+    );
+    return count;
   }
   decideEnrichmentSuggestion(id: number, status: "accepted" | "rejected"): any {
     const suggestion = this.getEnrichmentSuggestionById(id);

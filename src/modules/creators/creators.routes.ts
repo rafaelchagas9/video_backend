@@ -21,6 +21,8 @@ import { creatorsMergeService } from "./creators.merge.service";
 import {
   idParamSchema,
   listCreatorsQuerySchema,
+  creatorFacetsQuerySchema,
+  creatorFacetsResponseSchema,
   createCreatorSchema,
   updateCreatorSchema,
   createCreatorPlatformSchema,
@@ -98,6 +100,27 @@ export async function creatorsRoutes(fastify: FastifyInstance): Promise<void> {
         ...result,
       });
     }
+  );
+
+  app.get(
+    "/facets",
+    {
+      schema: {
+        tags: ["creators"],
+        summary: "Get creator attribute facets",
+        description:
+          "Library-wide facet counts and ranges, retaining other filters but excluding each facet's own selection. Uses accepted creator facts only.",
+        querystring: creatorFacetsQuerySchema,
+        response: {
+          200: creatorFacetsResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
+    async (request) => ({
+      success: true as const,
+      data: await creatorsService.facets(request.query, request.user!.id),
+    })
   );
 
   // Get creator by ID

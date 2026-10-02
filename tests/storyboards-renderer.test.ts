@@ -6,6 +6,7 @@ import sharp from "sharp";
 import {
   StoryboardRenderer,
   keyframesCoverStoryboard,
+  paginateSheet,
 } from "@/modules/storyboards/storyboards.ffmpeg";
 
 let root: string;
@@ -51,22 +52,20 @@ it("fills the final partial tile and short videos using real FFmpeg", async () =
     const inputPath = await fixture(`dense-${duration}`, duration, 50);
     const before = await stat(inputPath);
     const count = Math.ceil(duration / 5);
-    const outputPath = join(root, `dense-${duration}.webp`);
     const result = await new StoryboardRenderer({
       ffmpegPath: "ffmpeg",
     }).render({
       inputPath,
-      outputPath,
+      outputPaths: [join(root, `dense-${duration}.p0.webp`)],
       durationSeconds: duration,
       tileWidth: 64,
       tileHeight: 36,
       intervalSeconds: 5,
-      cols: count,
-      rows: 1,
       format: "webp",
       quality: 80,
     });
     expect(result.sampling).toBe("keyframes");
+    const outputPath = join(root, `dense-${duration}.p0.webp`);
     const metadata = await sharp(outputPath).metadata();
     expect([metadata.width, metadata.height]).toEqual([64 * count, 36]);
     const last = await sharp(outputPath)
@@ -82,6 +81,83 @@ it("fills the final partial tile and short videos using real FFmpeg", async () =
   }
 });
 
+it("splits long videos into 5×5 pages and trims the last page to its tiles", async () => {
+  // 27 tiles: one full page, then a page holding two tiles in one row.
+  const inputPath = await fixture("paged", 27 * 2 - 0.5, 25);
+  const outputPaths = [0, 1].map((page) => join(root, `paged.p${page}.webp`));
+  await new StoryboardRenderer({ ffmpegPath: "ffmpeg" }).render({
+    inputPath,
+    outputPaths,
+    durationSeconds: 27 * 2 - 0.5,
+    tileWidth: 64,
+    tileHeight: 36,
+    intervalSeconds: 2,
+    format: "webp",
+    quality: 80,
+  });
+  const sizes = await Promise.all(
+    outputPaths.map(async (path) => {
+      const { width, height } = await sharp(path).metadata();
+      return [width, height];
+    })
+  );
+  expect(sizes).toEqual([
+    [320, 180],
+    [128, 36],
+  ]);
+});
+
+it("re-cuts a legacy sheet into pages without re-sampling the video", async () => {
+  // A 7×4 legacy sheet holding 27 tiles, each a distinct grey level.
+  const tiles = Array.from({ length: 27 }, (_, index) => index * 9);
+  const sheetPath = join(root, "legacy.png");
+  await sharp({
+    create: { width: 7 * 64, height: 4 * 36, channels: 3, background: "#000" },
+  })
+    .composite(
+      tiles.map((level, index) => ({
+        input: {
+          create: {
+            width: 64,
+            height: 36,
+            channels: 3 as const,
+            background: { r: level, g: level, b: level },
+          },
+        },
+        left: (index % 7) * 64,
+        top: Math.floor(index / 7) * 36,
+      }))
+    )
+    .png()
+    .toFile(sheetPath);
+  const outputPaths = [0, 1].map((page) => join(root, `legacy.p${page}.jpg`));
+  await paginateSheet({
+    sheetPath,
+    outputPaths,
+    cols: 7,
+    rows: 4,
+    tileWidth: 64,
+    tileHeight: 36,
+    tileCount: 27,
+    format: "jpg",
+    quality: 95,
+  });
+  // Read the centre pixel of a tile (sharp's stats() ignores extract()).
+  const level = async (path: string, index: number) => {
+    const { data, info } = await sharp(path)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const x = (index % 5) * 64 + 32;
+    const y = Math.floor(index / 5) * 36 + 18;
+    return data[(y * info.width + x) * info.channels]!;
+  };
+  expect(await level(outputPaths[0]!, 7)).toBeCloseTo(tiles[7]!, -1);
+  expect(await level(outputPaths[0]!, 24)).toBeCloseTo(tiles[24]!, -1);
+  expect(await level(outputPaths[1]!, 1)).toBeCloseTo(tiles[26]!, -1);
+  const last = await sharp(outputPaths[1]!).metadata();
+  expect([last.width, last.height]).toEqual([128, 36]);
+});
+
 it("falls back to precise sampling for sparse keyframes and recovers from unavailable VAAPI", async () => {
   const inputPath = await fixture("sparse", 10.8, 1_000);
   const result = await new StoryboardRenderer({
@@ -89,13 +165,11 @@ it("falls back to precise sampling for sparse keyframes and recovers from unavai
     vaapiDevice: "/synthetic/no-device",
   }).render({
     inputPath,
-    outputPath: join(root, "sparse.webp"),
+    outputPaths: [join(root, "sparse.p0.webp")],
     durationSeconds: 10.8,
     tileWidth: 64,
     tileHeight: 36,
     intervalSeconds: 5,
-    cols: 3,
-    rows: 1,
     format: "webp",
     quality: 80,
   });

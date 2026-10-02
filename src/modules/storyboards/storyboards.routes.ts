@@ -109,6 +109,32 @@ export async function storyboardsRoutes(
     sendSprite
   );
 
+  // One page of a paged storyboard, as referenced by the VTT cues.
+  fastify.get(
+    "/:id/storyboard/pages/:page",
+    {
+      schema: {
+        tags: ["storyboards"],
+        summary: "Get storyboard page",
+        description:
+          "Returns one page (at most 5×5 tiles) of a paged storyboard, e.g. /storyboard/pages/3.webp.",
+      },
+    },
+    async (request, reply) => {
+      const { id, page } = request.params as { id: string; page: string };
+      const match = /^(\d{1,5})\.(webp|jpg)$/.exec(page);
+      if (!match || !/^\d+$/.test(id))
+        throw new NotFoundError("Storyboard page not found");
+      const asset = await storyboardsService.getPageAsset(
+        Number(id),
+        Number(match[1])
+      );
+      reply.header("Content-Type", asset.contentType);
+      reply.header("Cache-Control", "public, max-age=86400");
+      return reply.send(asset.buffer);
+    }
+  );
+
   // ========== AUTHENTICATED ROUTES ==========
 
   // Generate storyboard for video

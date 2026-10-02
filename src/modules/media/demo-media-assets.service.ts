@@ -32,6 +32,7 @@ import type {
   ArtworkVariant,
   GenerateArtworkInput,
 } from "@/modules/artwork/artwork.types";
+import { storyboardImagePaths } from "@/modules/storyboards/storyboards.pages";
 
 const {
   demoArtworkAssetsTable,
@@ -532,8 +533,10 @@ export class DemoMediaAssetsService {
       .values(values)
       .onConflictDoUpdate({ target: demoStoryboardsTable.videoId, set: values })
       .run();
-    if (current?.spritePath !== spritePath)
-      this.removeRuntime(current?.spritePath);
+    if (current && current.spritePath !== spritePath)
+      storyboardImagePaths(current.spritePath, current.tileCount).forEach(
+        (path) => this.removeRuntime(path)
+      );
     if (current?.vttPath !== vttPath) this.removeRuntime(current?.vttPath);
     return this.storyboard(videoId);
   }
@@ -568,7 +571,9 @@ export class DemoMediaAssetsService {
       .delete(demoStoryboardsTable)
       .where(eq(demoStoryboardsTable.videoId, videoId))
       .run();
-    this.removeRuntime(story.sprite_path);
+    storyboardImagePaths(story.sprite_path, story.tile_count).forEach((path) =>
+      this.removeRuntime(path)
+    );
     this.removeRuntime(story.vtt_path);
   }
 

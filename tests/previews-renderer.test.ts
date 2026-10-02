@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildPreviewArguments,
   PreviewRenderer,
   planPreviewClips,
   type PreviewRenderOptions,
@@ -37,6 +38,68 @@ describe("planPreviewClips", () => {
   it("rejects unusable durations", () => {
     expect(() => planPreviewClips(0, plan)).toThrow();
     expect(() => planPreviewClips(Number.NaN, plan)).toThrow();
+  });
+});
+
+describe("buildPreviewArguments", () => {
+  const render: PreviewRenderOptions = {
+    inputPath: "/videos/source.mkv",
+    outputPath: "/previews/out.mp4",
+    durationSeconds: 1000,
+    hasAudio: true,
+    plan: { clipCount: 3, clipSeconds: 2, maxCoverage: 0.3 },
+    height: 480,
+    crf: 45,
+    preset: 6,
+    audioBitrateKbps: 64,
+  };
+
+  // Each input is "-an ... -i" or "-vn ... -i"; returns the flag per input.
+  function inputKinds(args: string[]) {
+    const kinds: string[] = [];
+    let current = "";
+    for (const arg of args) {
+      if (arg === "-an" || arg === "-vn") current = arg;
+      if (arg === "-i") {
+        kinds.push(current);
+        current = "";
+      }
+    }
+    return kinds;
+  }
+
+  it("reads audio through its own input so poor interleaving cannot buffer video", () => {
+    const args = buildPreviewArguments(
+      render,
+      "/tmp/out.mp4",
+      true,
+      "/dev/dri/renderD128"
+    );
+    expect(inputKinds(args)).toEqual([
+      "-an",
+      "-vn",
+      "-an",
+      "-vn",
+      "-an",
+      "-vn",
+    ]);
+    const graph = args[args.indexOf("-filter_complex") + 1]!;
+    for (const [video, audio] of [
+      [0, 1],
+      [2, 3],
+      [4, 5],
+    ]) {
+      expect(graph).toContain(`[${video}:v:0]`);
+      expect(graph).toContain(`[${audio}:a:0]`);
+    }
+    // Hardware decode applies to the video inputs only.
+    expect(args.filter((arg) => arg === "-hwaccel")).toHaveLength(3);
+  });
+
+  it("opens one video-only input per clip without audio", () => {
+    const args = buildPreviewArguments(render, "/tmp/out.mp4", false);
+    expect(inputKinds(args)).toEqual(["-an", "-an", "-an"]);
+    expect(args[args.indexOf("-filter_complex") + 1]).not.toContain(":a:0]");
   });
 });
 
@@ -166,6 +229,20 @@ it("falls back to video-only when claimed audio is missing", async () => {
   expect((await probe(output)).some((s) => s.codec_type === "audio")).toBe(
     false
   );
+});
+
+it("kills a render that exceeds its memory budget", async () => {
+  const input = await fixture("memory", false);
+  const output = join(root, "memory.preview.mp4");
+  const tight = new PreviewRenderer({
+    ffmpegPath: "ffmpeg",
+    ffprobePath: "ffprobe",
+    maxRssBytes: 1024 * 1024,
+  });
+  await expect(
+    tight.render(options(input, output, false), "interactive")
+  ).rejects.toThrow(/exceeded 1 MB of memory/);
+  expect(await Bun.file(output).exists()).toBe(false);
 });
 
 it("never overwrites an existing file and leaves no temporaries", async () => {

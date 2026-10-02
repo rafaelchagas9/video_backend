@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, stat, unlink } from "node:fs/promises";
+import { copyFile, readFile, stat, unlink } from "node:fs/promises";
 import { setPriority } from "node:os";
 import { resolve } from "node:path";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
@@ -76,27 +76,34 @@ export function buildPreviewArguments(
   const filters: string[] = [];
   let labels = "";
   starts.forEach((start, index) => {
+    const window = ["-ss", start.toFixed(3), "-t", clipSeconds.toFixed(3)];
+    // Audio gets its own input: in badly interleaved files the audio for a
+    // timestamp can sit hundreds of MB away, and one shared demuxer then
+    // queues minutes of decoded video while it reads ahead (18 GB+ seen).
+    const videoInput = withAudio ? index * 2 : index;
     inputs.push(
       // Frames are downloaded for the software encoder; decoding stays on the GPU.
       ...(vaapiDevice
         ? ["-hwaccel", "vaapi", "-hwaccel_device", vaapiDevice]
         : []),
-      "-ss",
-      start.toFixed(3),
-      "-t",
-      clipSeconds.toFixed(3),
+      "-an",
+      "-sn",
+      "-dn",
+      ...window,
       "-i",
       options.inputPath
     );
+    if (withAudio)
+      inputs.push("-vn", "-sn", "-dn", ...window, "-i", options.inputPath);
     filters.push(
-      `[${index}:v:0]scale='if(gt(iw,ih),-2,min(${h},iw))':'if(gt(iw,ih),min(${h},ih),-2)',` +
+      `[${videoInput}:v:0]scale='if(gt(iw,ih),-2,min(${h},iw))':'if(gt(iw,ih),min(${h},ih),-2)',` +
         `fps=24,format=yuv420p,setsar=1,setpts=PTS-STARTPTS[v${index}]`
     );
     labels += `[v${index}]`;
     if (withAudio) {
       // Short fades hide the click at every cut.
       filters.push(
-        `[${index}:a:0]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS,` +
+        `[${videoInput + 1}:a:0]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS,` +
           `afade=t=in:d=0.08,afade=t=out:st=${Math.max(0, clipSeconds - 0.12).toFixed(3)}:d=0.12[a${index}]`
       );
       labels += `[a${index}]`;
@@ -158,7 +165,12 @@ function runProcess(
   command: string,
   args: string[],
   timeoutMs: number,
-  options: { lowPriority?: boolean; signal?: AbortSignal } = {}
+  options: {
+    lowPriority?: boolean;
+    signal?: AbortSignal;
+    /** Kill the process once its resident memory passes this (Linux only). */
+    maxRssBytes?: number;
+  } = {}
 ): Promise<ProcessResult> {
   const { signal } = options;
   signal?.throwIfAborted();
@@ -185,8 +197,29 @@ function runProcess(
       failure = new Error("Preview generation timed out");
       terminate();
     }, timeoutMs);
+    const pid = child.pid;
+    // A pathological input must fail the job, not swap the desktop to a halt.
+    const memoryWatch =
+      options.maxRssBytes && pid
+        ? setInterval(() => {
+            readFile(`/proc/${pid}/status`, "utf8")
+              .then((status) => {
+                const kb = Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1] ?? 0);
+                if (kb * 1024 > options.maxRssBytes! && !failure) {
+                  failure = new Error(
+                    `Preview generation exceeded ${Math.round(options.maxRssBytes! / 2 ** 20)} MB of memory`
+                  );
+                  terminate();
+                }
+              })
+              .catch(() => {
+                // Exited, or no procfs on this platform.
+              });
+          }, 250)
+        : undefined;
     const cleanup = () => {
       clearTimeout(timer);
+      clearInterval(memoryWatch);
       clearTimeout(killTimer);
       signal?.removeEventListener("abort", terminate);
     };
@@ -215,6 +248,8 @@ interface RendererOptions {
   ffprobePath: string;
   vaapiDevice?: string;
   timeoutMs?: number;
+  /** Renders measured 0.7–1.6 GB, up to ~3 GB for 4K60 AV1 decoded on the CPU. */
+  maxRssBytes?: number;
 }
 
 export interface PreviewRenderResult {
@@ -255,7 +290,11 @@ export class PreviewRenderer {
                 this.options.ffmpegPath,
                 buildPreviewArguments(input, temporary, withAudio, device),
                 this.options.timeoutMs ?? 10 * 60_000,
-                { lowPriority: priority === "background", signal }
+                {
+                  lowPriority: priority === "background",
+                  signal,
+                  maxRssBytes: this.options.maxRssBytes ?? 6 * 2 ** 30,
+                }
               );
               if (result.code !== 0)
                 throw new Error(

@@ -166,6 +166,22 @@ export async function processProfilePicture(params: {
   maxSize: number;
   quality: number;
 }): Promise<Buffer> {
+  return (await processPictureWithSize(params)).buffer;
+}
+
+export interface PictureSize {
+  width: number;
+  height: number;
+}
+
+/** Like `processProfilePicture`, also reporting the stored size and the size
+ * the picture arrived at (upright, before the downscale). */
+export async function processPictureWithSize(params: {
+  input: Buffer;
+  format: "webp" | "jpg";
+  maxSize: number;
+  quality: number;
+}): Promise<{ buffer: Buffer; size: PictureSize; source: PictureSize | null }> {
   const { input, format, maxSize, quality } = params;
 
   let pipeline = sharp(input).rotate().resize({
@@ -178,5 +194,55 @@ export async function processProfilePicture(params: {
   pipeline =
     format === "webp" ? pipeline.webp({ quality }) : pipeline.jpeg({ quality });
 
-  return pipeline.toBuffer();
+  const [{ data, info }, source] = await Promise.all([
+    pipeline.toBuffer({ resolveWithObject: true }),
+    readImageSize(input),
+  ]);
+  return { buffer: data, size: { width: info.width, height: info.height }, source };
+}
+
+/** Upright pixel size from an image's header. Works on a truncated prefix for
+ * JPEG, PNG, GIF and AVIF (Sharp) and WebP (parsed here: libvips needs the
+ * whole WebP file). Null when the bytes are not a readable image header. */
+export async function readImageSize(bytes: Buffer): Promise<PictureSize | null> {
+  const webp = readWebpSize(bytes);
+  if (webp) return webp;
+  try {
+    const meta = await sharp(bytes).metadata();
+    if (!meta.width || !meta.height) return null;
+    // EXIF orientations 5–8 are quarter turns: the upright picture is transposed.
+    const turned = (meta.orientation ?? 1) >= 5;
+    return turned
+      ? { width: meta.height, height: meta.width }
+      : { width: meta.width, height: meta.height };
+  } catch {
+    return null;
+  }
+}
+
+function readWebpSize(bytes: Buffer): PictureSize | null {
+  if (
+    bytes.length < 30 ||
+    bytes.toString("ascii", 0, 4) !== "RIFF" ||
+    bytes.toString("ascii", 8, 12) !== "WEBP"
+  )
+    return null;
+  const chunk = bytes.toString("ascii", 12, 16);
+  if (chunk === "VP8X") {
+    return {
+      width: 1 + bytes.readUIntLE(24, 3),
+      height: 1 + bytes.readUIntLE(27, 3),
+    };
+  }
+  if (chunk === "VP8 ") {
+    return {
+      width: bytes.readUInt16LE(26) & 0x3fff,
+      height: bytes.readUInt16LE(28) & 0x3fff,
+    };
+  }
+  if (chunk === "VP8L") {
+    const bits = bytes.readUInt32LE(21);
+    return { width: 1 + (bits & 0x3fff), height: 1 + ((bits >> 14) & 0x3fff) };
+  }
+  return null;
 }

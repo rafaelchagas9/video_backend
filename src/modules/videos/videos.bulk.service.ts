@@ -20,6 +20,7 @@ import { videosDemoService } from "./videos.demo.service";
 import { videoRelationshipsService } from "./videos.relationships.service";
 import { editsDemoService } from "@/modules/edits/edits.demo.service";
 import { demoRepository } from "@/database/demo";
+import { storyboardAssetPaths } from "@/modules/storyboards/storyboards.pages";
 
 /**
  * Service for bulk video operations
@@ -146,6 +147,7 @@ export class VideosBulkService {
           .select({
             spritePath: storyboardsTable.spritePath,
             vttPath: storyboardsTable.vttPath,
+            tileCount: storyboardsTable.tileCount,
           })
           .from(storyboardsTable)
           .where(inArray(storyboardsTable.videoId, videoIds)),
@@ -177,8 +179,7 @@ export class VideosBulkService {
       if (thumbnail.filePath) paths.push(thumbnail.filePath);
     }
     for (const storyboard of storyboards) {
-      if (storyboard.spritePath) paths.push(storyboard.spritePath);
-      if (storyboard.vttPath) paths.push(storyboard.vttPath);
+      paths.push(...storyboardAssetPaths(storyboard).filter(Boolean));
     }
     for (const faceImage of faceImages) {
       if (faceImage.filePath) paths.push(faceImage.filePath);

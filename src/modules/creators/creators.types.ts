@@ -1,3 +1,4 @@
+import type { AttributeFilters } from "./creators.attributes";
 import { z } from "zod";
 
 export interface Creator {
@@ -57,6 +58,12 @@ export interface CreatorGalleryMedia {
   file_path: string;
   is_profile_picture: boolean;
   is_main_picture: boolean;
+  /** Stored pixel size; null when unknown. */
+  width?: number | null;
+  height?: number | null;
+  /** Size the picture arrived at, before the storage downscale; null when unknown. */
+  source_width?: number | null;
+  source_height?: number | null;
   url: string;
   created_at: string;
   updated_at: string;
@@ -132,7 +139,7 @@ export interface EnhancedCreator extends Creator {
   completeness: CompletenessInfo;
 }
 
-export interface ListCreatorsOptions {
+export interface ListCreatorsOptions extends AttributeFilters {
   page?: number;
   limit?: number;
   search?: string;

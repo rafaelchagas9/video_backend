@@ -4,6 +4,7 @@ import type {
   EntityType,
   RunDTO,
   RunEnrichmentOptions,
+  SceneResetDTO,
   SuggestionDTO,
 } from "./enrichment.types";
 import type { RelatedKind, ResolutionPreview } from "./enrichment.service";
@@ -58,6 +59,12 @@ export class EnrichmentDemoService {
       id,
       "rejected"
     ) as SuggestionDTO;
+  }
+
+  async resetScene(entityId: number): Promise<SceneResetDTO> {
+    this.assertEntityExists("scene", entityId);
+    const cleared = demoRepository.clearEnrichment("scene", entityId);
+    return { suggestions_cleared: cleared, fields_cleared: [], links_removed: 0 };
   }
 
   async previewResolution(

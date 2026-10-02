@@ -29,6 +29,7 @@ function concretePath(path: string, entityType = "creator"): string {
     .replace("{sessionId}", "a".repeat(64))
     .replace("{token}", "b".repeat(64))
     .replace("{asset}", "index.m3u8")
+    .replace("{page}", "1.webp")
     .replaceAll(/\{[^}]+\}/g, "1");
 }
 
@@ -301,8 +302,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(313);
-    expect(manifestKeys).toHaveLength(313);
+    expect(runtimeOperationKeys).toHaveLength(315);
+    expect(manifestKeys).toHaveLength(315);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -330,7 +331,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 313,
+      allowed: 315,
       blocked: 0,
       conditional: 0,
     });
@@ -338,7 +339,7 @@ describe("demo mode runtime route coverage", () => {
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(188);
+    ).toHaveLength(189);
   });
 
   it("persists cleanup review progress without deleting demo media", async () => {
@@ -427,7 +428,7 @@ describe("demo mode runtime route coverage", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(133);
+    expect(getScenarios).toHaveLength(135);
 
     for (const scenario of getScenarios) {
       expect(

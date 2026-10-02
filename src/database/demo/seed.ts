@@ -929,6 +929,27 @@ export function ensureDemoSourceMetadataCreators(): void {
     });
     attachArtwork.run(paths[0], paths[1], DEMO_TIMESTAMP, example.id, example.name);
   }
+  ensureDemoCreatorFactsSample();
+}
+
+/** Accepted facts copied from sixty real library creators, so the attribute
+ * filters and facets have a realistic spread (including the raw source
+ * spellings normalisation must fold). No pictures or videos: these records
+ * carry facts only. Regenerate from PostgreSQL rather than hand-editing. */
+function ensureDemoCreatorFactsSample(): void {
+  const file = join(process.cwd(), "demo_mode", "creator-facts-sample.json");
+  if (!existsSync(file)) return;
+  const sample = JSON.parse(readFileSync(file, "utf8")) as Array<{
+    id: number;
+    name: string;
+    facts: Record<string, unknown>;
+  }>;
+  const insert = getDemoSqlite().prepare(
+    "INSERT OR IGNORE INTO demo_creators (id,name,description,profile_picture_path,main_picture_path,face_thumbnail_path,extra_json,created_at,updated_at) VALUES (?,?,NULL,NULL,NULL,NULL,?,?,?)"
+  );
+  for (const creator of sample) {
+    insert.run(creator.id, creator.name, JSON.stringify(creator.facts), DEMO_TIMESTAMP, DEMO_TIMESTAMP);
+  }
 }
 
 export function resetDemoRuntimeState(): void {

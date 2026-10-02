@@ -92,11 +92,12 @@ mock.module("@/config/drizzle", () => ({
 let renders = 0;
 let renderBarrier: Promise<void> | undefined;
 mock.module("@/modules/storyboards/storyboards.ffmpeg", () => ({
+  assembleFramePages: async () => {},
   StoryboardRenderer: class {
-    async render(input: { outputPath: string }) {
+    async render(input: { outputPaths: string[] }) {
       renders++;
       await renderBarrier;
-      await writeFile(input.outputPath, "new-sprite");
+      for (const path of input.outputPaths) await writeFile(path, "new-sprite");
       return { sampling: "keyframes", hardware: false };
     }
   },

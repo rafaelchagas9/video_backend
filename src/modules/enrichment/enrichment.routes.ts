@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
@@ -9,6 +10,7 @@ import {
   resolveSuggestionsBodySchema,
   resolveSuggestionsResponseSchema,
   resolutionResponseSchema,
+  sceneResetResponseSchema,
   listSuggestionsQuerySchema,
   runResponseSchema,
   runListResponseSchema,
@@ -159,6 +161,36 @@ export async function enrichmentRoutes(
     async (request, reply) => {
       const result = await enrichmentService.resolveSuggestions(request.body);
       return reply.send({ success: true, data: result });
+    },
+  );
+
+  // Undo a scene's enrichment: applied metadata, links and every proposal.
+  app.post(
+    "/scene/:id/reset",
+    {
+      schema: {
+        tags: ["enrichment"],
+        summary: "Reset a scene's enrichment",
+        description:
+          "Removes what accepted proposals wrote to the scene (title and synopsis when they still match, " +
+          "release date, code, director, cover, source ids, and the cast, studio and tag links they made) " +
+          "and deletes all of the scene's proposals and runs, so a new scan starts from scratch. " +
+          "Creators, studios and tags that enrichment created stay in the library.",
+        params: z.object({ id: z.coerce.number().int().positive() }),
+        response: {
+          200: sceneResetResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const data = await enrichmentService.resetScene(request.params.id);
+      return reply.send({
+        success: true,
+        data,
+        message: `Cleared ${data.suggestions_cleared} proposals and ${data.links_removed} links`,
+      });
     },
   );
 

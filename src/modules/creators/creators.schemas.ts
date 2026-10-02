@@ -1,4 +1,65 @@
 import { z } from "zod";
+import {
+  attributeNames,
+  normalizeAttribute,
+  normalizeProvider,
+  numericAttributes,
+  rangeKeys,
+  type Category,
+} from "./creators.attributes";
+
+const queryBoolean = z
+  .preprocess(
+    (value) => (value === "true" ? true : value === "false" ? false : value),
+    z.boolean()
+  )
+  .optional();
+const queryInteger = (min: number, max: number) =>
+  z
+    .preprocess(
+      (value) =>
+        typeof value === "string" && /^\d+$/.test(value)
+          ? Number(value)
+          : value,
+      z.number().int().min(min).max(max)
+    )
+    .optional();
+const queryList = <T extends string>(item: z.ZodType<T>) =>
+  z
+    .preprocess(
+      (value) =>
+        typeof value === "string"
+          ? value.split(",")
+          : Array.isArray(value)
+            ? value.flatMap((part) =>
+                typeof part === "string" ? part.split(",") : [part]
+              )
+            : value,
+      z
+        .array(item)
+        .min(1)
+        .max(50)
+        .transform((values) => [...new Set(values)])
+    )
+    .optional();
+const categoryQuery = (field: Category) =>
+  queryList(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .transform((value) => normalizeAttribute(field, value) ?? "unknown")
+  );
+const attributeQuery = () =>
+  queryList(
+    z.enum(
+      attributeNames as [
+        (typeof attributeNames)[number],
+        ...(typeof attributeNames)[number][],
+      ]
+    )
+  );
 
 // Re-export from types for consistency
 export {
@@ -13,20 +74,6 @@ export {
   createCreatorPlatformSchema,
   updateCreatorPlatformSchema,
 } from "@/modules/platforms/platforms.types";
-
-// Helper to parse comma-separated IDs
-const parseCommaSeparatedIds = (val: unknown) => {
-  if (typeof val === "string" && val.trim().length > 0) {
-    return val
-      .split(",")
-      .map((id) => parseInt(id.trim()))
-      .filter((id) => !isNaN(id));
-  }
-  if (Array.isArray(val)) {
-    return val;
-  }
-  return undefined;
-};
 
 const parseNullableNumber = (val: unknown) => {
   if (val === null || val === undefined) {
@@ -54,27 +101,127 @@ export const mergeCreatorSchema = z.object({
 
 export const listCreatorsQuerySchema = z
   .object({
-    page: z.coerce.number().int().positive().default(1),
-    limit: z.coerce.number().int().positive().max(100).default(20),
-    search: z.string().optional(),
+    page: queryInteger(1, 2147483647).default(1),
+    limit: queryInteger(1, 100).default(20),
+    search: z.string().max(500).optional(),
     sort: z
       .enum(["name", "created_at", "updated_at", "video_count"])
       .default("name"),
     order: z.enum(["asc", "desc"]).default("asc"),
-    minVideoCount: z.coerce.number().int().min(0).optional(),
-    maxVideoCount: z.coerce.number().int().min(0).optional(),
-    hasProfilePicture: z.coerce.boolean().optional(),
-    isFavorite: z.coerce.boolean().optional(),
+    minVideoCount: queryInteger(0, 2147483647),
+    maxVideoCount: queryInteger(0, 2147483647),
+    hasProfilePicture: queryBoolean,
+    isFavorite: queryBoolean,
     studioIds: z
       .preprocess(
-        parseCommaSeparatedIds,
-        z.array(z.number().int().positive()).optional()
+        (value) => (typeof value === "string" ? value.split(",") : value),
+        z
+          .array(
+            z.preprocess(
+              (value) =>
+                typeof value === "string" && /^\d+$/.test(value.trim())
+                  ? Number(value)
+                  : value,
+              z.number().int().positive()
+            )
+          )
+          .min(1)
+          .max(100)
       )
       .optional(),
     missing: z
       .enum(["picture", "platform", "social", "linked", "any"])
       .optional(),
-    complete: z.coerce.boolean().optional(),
+    complete: queryBoolean,
+    country: categoryQuery("country"),
+    gender: categoryQuery("gender"),
+    ethnicity: categoryQuery("ethnicity"),
+    hairColor: categoryQuery("hairColor"),
+    eyeColor: categoryQuery("eyeColor"),
+    cupSize: categoryQuery("cupSize"),
+    breastType: categoryQuery("breastType"),
+    minHeightCm: queryInteger(1, 2147483647),
+    maxHeightCm: queryInteger(1, 2147483647),
+    minAge: queryInteger(0, 9999),
+    maxAge: queryInteger(0, 9999),
+    minBandSize: queryInteger(1, 2147483647),
+    maxBandSize: queryInteger(1, 2147483647),
+    minWaistSize: queryInteger(1, 2147483647),
+    maxWaistSize: queryInteger(1, 2147483647),
+    minHipSize: queryInteger(1, 2147483647),
+    maxHipSize: queryInteger(1, 2147483647),
+    minCareerStartYear: queryInteger(1, 9999),
+    maxCareerStartYear: queryInteger(1, 9999),
+    minCareerEndYear: queryInteger(1, 9999),
+    maxCareerEndYear: queryInteger(1, 9999),
+    providers: queryList(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .transform((value, ctx) => {
+          const provider = normalizeProvider(value);
+          if (!provider) {
+            ctx.addIssue({
+              code: "custom",
+              message: "Provider must be theporndb, stashdb or unlinked",
+            });
+            return z.NEVER;
+          }
+          return provider;
+        })
+    ),
+    providerMatch: z.enum(["any", "all"]).optional(),
+    missingAttributes: attributeQuery(),
+    knownAttributes: attributeQuery(),
+  })
+  .superRefine((data, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: "custom", path: [path], message });
+    for (const field of Object.keys(
+      numericAttributes
+    ) as (keyof typeof numericAttributes)[]) {
+      const [min, max] = rangeKeys(field);
+      if (
+        data[min] !== undefined &&
+        data[max] !== undefined &&
+        data[min]! > data[max]!
+      )
+        issue(min, `${min} cannot be greater than ${max}`);
+      if (
+        data.missingAttributes?.includes(field) &&
+        (data[min] !== undefined || data[max] !== undefined)
+      )
+        issue(
+          "missingAttributes",
+          `Missing ${field} cannot be combined with a range`
+        );
+    }
+    for (const field of data.missingAttributes ?? []) {
+      if (data.knownAttributes?.includes(field))
+        issue("knownAttributes", `${field} cannot be both known and missing`);
+      const selected = data[field as Category];
+      if (
+        Array.isArray(selected) &&
+        selected.some((value) => value !== "unknown")
+      )
+        issue(field, `Missing ${field} cannot be combined with a known value`);
+    }
+    for (const field of data.knownAttributes ?? []) {
+      if (data[field as Category]?.includes("unknown"))
+        issue(field, `Known ${field} cannot include unknown`);
+    }
+    if (data.providerMatch && !data.providers?.length)
+      issue("providerMatch", "providerMatch requires providers");
+    if (
+      data.providerMatch === "all" &&
+      data.providers?.includes("unlinked") &&
+      data.providers.length > 1
+    )
+      issue(
+        "providers",
+        "Unlinked cannot be combined with a provider in all mode"
+      );
   })
   .refine(
     (data) => {
@@ -106,6 +253,10 @@ const creatorGalleryMediaSchema = z.object({
   file_path: z.string(),
   is_profile_picture: z.boolean(),
   is_main_picture: z.boolean(),
+  width: z.number().int().nullable().optional(),
+  height: z.number().int().nullable().optional(),
+  source_width: z.number().int().nullable().optional(),
+  source_height: z.number().int().nullable().optional(),
   url: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -507,4 +658,48 @@ export const quickCreateResponseSchema = z.object({
   success: z.literal(true),
   data: creatorSchema,
   message: z.string(),
+});
+
+/** Facets accept the list query; pagination and ordering do not affect counts. */
+export const creatorFacetsQuerySchema = listCreatorsQuerySchema;
+const categoryFacetSchema = z.object({
+  type: z.literal("categorical"),
+  options: z.array(
+    z.object({
+      value: z.string(),
+      label: z.string(),
+      count: z.number().int().nonnegative(),
+    })
+  ),
+});
+const rangeFacetSchema = z.object({
+  type: z.literal("range"),
+  min: z.number().nullable(),
+  max: z.number().nullable(),
+  knownCount: z.number().int().nonnegative(),
+  unknownCount: z.number().int().nonnegative(),
+});
+export const creatorFacetsResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    asOf: z.string(),
+    total: z.number().int().nonnegative(),
+    facets: z.object({
+      country: categoryFacetSchema,
+      gender: categoryFacetSchema,
+      ethnicity: categoryFacetSchema,
+      hairColor: categoryFacetSchema,
+      eyeColor: categoryFacetSchema,
+      cupSize: categoryFacetSchema,
+      breastType: categoryFacetSchema,
+      providers: categoryFacetSchema,
+      heightCm: rangeFacetSchema,
+      age: rangeFacetSchema,
+      bandSize: rangeFacetSchema,
+      waistSize: rangeFacetSchema,
+      hipSize: rangeFacetSchema,
+      careerStartYear: rangeFacetSchema,
+      careerEndYear: rangeFacetSchema,
+    }),
+  }),
 });

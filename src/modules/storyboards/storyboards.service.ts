@@ -1,7 +1,6 @@
 import { join, dirname, resolve, basename } from "path";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "fs";
-import ffmpeg from "fluent-ffmpeg";
 import { db } from "@/config/drizzle";
 import { storyboardsTable } from "@/database/schema";
 import { eq } from "drizzle-orm";
@@ -25,8 +24,16 @@ import { captureTelemetryException } from "@/utils/telemetry";
 
 import {
   StoryboardRenderer,
+  assembleFramePages,
   type StoryboardRenderOptions,
 } from "./storyboards.ffmpeg";
+import {
+  buildPagedStoryboardVtt,
+  isPagedSpritePath,
+  storyboardAssetPaths,
+  storyboardImagePaths,
+  storyboardPagePaths,
+} from "./storyboards.pages";
 
 interface SpriteSheetOptions extends StoryboardRenderOptions {
   videoId: number;
@@ -351,31 +358,25 @@ export class StoryboardsService {
       );
     }
 
-    // Calculate number of tiles needed
     const tileCount = Math.ceil(video.duration_seconds / intervalSeconds);
 
-    // Calculate grid dimensions (prefer wider grids)
-    const cols = Math.ceil(Math.sqrt(tileCount * 2)); // Favor more columns
-    const rows = Math.ceil(tileCount / cols);
-
-    // Generate unique filenames
-    const timestamp = `${Date.now()}_${randomUUID()}`;
-    const spriteFilename = `storyboard_${videoId}_${timestamp}.${storyboardFormat}`;
-    const vttFilename = `storyboard_${videoId}_${timestamp}.vtt`;
-    const spritePath = join(env.STORYBOARDS_DIR, spriteFilename);
-    const vttPath = join(env.STORYBOARDS_DIR, vttFilename);
+    const base = join(
+      env.STORYBOARDS_DIR,
+      `storyboard_${videoId}_${Date.now()}_${randomUUID()}`
+    );
+    const pagePaths = storyboardPagePaths(base, storyboardFormat, tileCount);
+    const spritePath = pagePaths[0]!;
+    const vttPath = `${base}.vtt`;
 
     const options: SpriteSheetOptions = {
       videoId,
       inputPath: video.file_path,
       durationSeconds: video.duration_seconds,
       sampling: input?.sampling ?? env.STORYBOARD_SAMPLING,
-      outputPath: spritePath,
+      outputPaths: pagePaths,
       tileWidth,
       tileHeight,
       intervalSeconds,
-      cols,
-      rows,
       format: storyboardFormat,
       quality: storyboardQuality,
     };
@@ -393,33 +394,27 @@ export class StoryboardsService {
           tileCount,
           intervalSeconds,
           requestedIntervalSeconds,
-          cols,
-          rows,
+          pages: pagePaths.length,
         }
       );
 
-      // Get sprite file size
-      const stats = await stat(spritePath);
-      const spriteSizeBytes = stats.size;
+      const spriteSizeBytes = await this.totalSize(pagePaths);
 
-      // Generate VTT file
-      const vttStart = Date.now();
-      await this.generateVttFile(
+      const duration = video.duration_seconds;
+      await writeFile(
         vttPath,
-        videoId,
-        tileWidth,
-        tileHeight,
-        intervalSeconds,
-        tileCount,
-        cols,
-        video.duration_seconds,
-        storyboardFormat
-      );
-      await recordPerfStage(
-        { scenario: "storyboard", videoId, mode: "generate" },
-        "vtt_file",
-        Date.now() - vttStart,
-        { tileCount, intervalSeconds, cols }
+        buildPagedStoryboardVtt({
+          videoId,
+          vttPath,
+          format: storyboardFormat,
+          tileWidth,
+          tileHeight,
+          cues: Array.from({ length: tileCount }, (_, index) => ({
+            start: index * intervalSeconds,
+            end: Math.min((index + 1) * intervalSeconds, duration),
+          })),
+        }),
+        "utf-8"
       );
 
       // Insert into database
@@ -451,13 +446,13 @@ export class StoryboardsService {
         .returning();
       published = true;
 
+      const current = new Set([...pagePaths, vttPath]);
       for (const previous of existing) {
-        for (const path of [previous.spritePath, previous.vttPath]) {
+        for (const path of storyboardAssetPaths(previous)) {
           if (
             resolve(dirname(path)) === resolve(env.STORYBOARDS_DIR) &&
             basename(path).startsWith(`storyboard_${videoId}_`) &&
-            path !== spritePath &&
-            path !== vttPath
+            !current.has(path)
           )
             await unlink(path).catch(() => {});
         }
@@ -474,14 +469,14 @@ export class StoryboardsService {
     } finally {
       if (!published) {
         await Promise.all(
-          [spritePath, vttPath].map((path) => unlink(path).catch(() => {}))
+          [...pagePaths, vttPath].map((path) => unlink(path).catch(() => {}))
         );
       }
     }
   }
 
   /**
-   * Assemble a storyboard sprite sheet from pre-extracted frames
+   * Assemble storyboard pages from pre-extracted frames
    * Used by unified frame extraction workflow
    */
   async assembleFromFrames(
@@ -508,7 +503,6 @@ export class StoryboardsService {
       env.STORYBOARD_TILE_HEIGHT
     );
     const storyboardFormat = env.STORYBOARD_FORMAT;
-    const storyboardQuality = env.STORYBOARD_QUALITY;
     const tileCount = frames.length;
 
     if (tileCount === 0) {
@@ -523,42 +517,34 @@ export class StoryboardsService {
         ? frames[1].timestampSeconds - frames[0].timestampSeconds
         : 10; // fallback
 
-    // Calculate grid dimensions (prefer wider grids)
-    const cols = Math.ceil(Math.sqrt(tileCount * 2));
-    const rows = Math.ceil(tileCount / cols);
+    const base = join(env.STORYBOARDS_DIR, `storyboard_${videoId}_${Date.now()}`);
+    const pagePaths = storyboardPagePaths(base, storyboardFormat, tileCount);
+    const vttPath = `${base}.vtt`;
 
-    // Generate unique filenames
-    const timestamp = Date.now();
-    const spriteFilename = `storyboard_${videoId}_${timestamp}.${storyboardFormat}`;
-    const vttFilename = `storyboard_${videoId}_${timestamp}.vtt`;
-    const spritePath = join(env.STORYBOARDS_DIR, spriteFilename);
-    const vttPath = join(env.STORYBOARDS_DIR, vttFilename);
-
-    // Assemble frames into sprite sheet using FFmpeg
-    await this.assembleSprite(frames, spritePath, {
-      cols,
-      rows,
+    await assembleFramePages(frames.map((frame) => frame.filePath), {
+      outputPaths: pagePaths,
       tileWidth,
       tileHeight,
       format: storyboardFormat,
-      quality: storyboardQuality,
+      quality: env.STORYBOARD_QUALITY,
     });
 
-    // Get sprite file size
-    const stats = await stat(spritePath);
-    const spriteSizeBytes = stats.size;
+    const spriteSizeBytes = await this.totalSize(pagePaths);
 
-    // Generate VTT file
-    await this.generateVttFile(
+    await writeFile(
       vttPath,
-      videoId,
-      tileWidth,
-      tileHeight,
-      intervalSeconds,
-      tileCount,
-      cols,
-      videoDuration,
-      storyboardFormat
+      buildPagedStoryboardVtt({
+        videoId,
+        vttPath,
+        format: storyboardFormat,
+        tileWidth,
+        tileHeight,
+        cues: Array.from({ length: tileCount }, (_, index) => ({
+          start: index * intervalSeconds,
+          end: Math.min((index + 1) * intervalSeconds, videoDuration),
+        })),
+      }),
+      "utf-8"
     );
 
     // Insert into database
@@ -566,7 +552,7 @@ export class StoryboardsService {
       .insert(storyboardsTable)
       .values({
         videoId,
-        spritePath,
+        spritePath: pagePaths[0]!,
         vttPath,
         tileWidth,
         tileHeight,
@@ -579,72 +565,9 @@ export class StoryboardsService {
     return this.mapToApiFormat(result[0]);
   }
 
-  /**
-   * Assemble individual frames into a sprite sheet using FFmpeg tile filter
-   */
-  private async assembleSprite(
-    frames: ExtractedFrame[],
-    outputPath: string,
-    options: {
-      cols: number;
-      rows: number;
-      tileWidth: number;
-      tileHeight: number;
-      format: "webp" | "jpg";
-      quality: number;
-    }
-  ): Promise<void> {
-    const { cols, rows, tileWidth, tileHeight, format, quality } = options;
-
-    // Create input file list for FFmpeg concat demuxer
-    const inputListPath = `${outputPath}.txt`;
-    const inputListContent = frames
-      .map((frame) => `file '${frame.filePath}'`)
-      .join("\n");
-    await writeFile(inputListPath, inputListContent, "utf-8");
-
-    const qualityOptions = this.getQualityOptions(format, quality);
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        ffmpeg()
-          .input(inputListPath)
-          .inputOptions(["-f", "concat", "-safe", "0"])
-          .outputOptions([
-            "-vf",
-            `${this.getScaleFilter(tileWidth, tileHeight)},tile=${cols}x${rows}`,
-            "-frames:v",
-            "1",
-            "-an",
-            "-sn",
-            "-dn",
-            ...qualityOptions,
-          ])
-          .output(outputPath)
-          .on("end", () => {
-            logger.debug({ outputPath }, "Sprite sheet assembled from frames");
-            resolve();
-          })
-          .on("error", (err) => {
-            logger.error(
-              { error: err, outputPath },
-              "Failed to assemble sprite sheet"
-            );
-            reject(err);
-          })
-          .run();
-      });
-    } finally {
-      // Clean up input list file
-      try {
-        await unlink(inputListPath);
-      } catch (error) {
-        logger.warn(
-          { path: inputListPath },
-          "Failed to clean up input list file"
-        );
-      }
-    }
+  private async totalSize(paths: string[]): Promise<number> {
+    const sizes = await Promise.all(paths.map(async (path) => (await stat(path)).size));
+    return sizes.reduce((sum, size) => sum + size, 0);
   }
 
   /**
@@ -665,22 +588,6 @@ export class StoryboardsService {
       Date.now() - start,
       { ...result }
     );
-  }
-
-  private getQualityOptions(
-    format: SpriteSheetOptions["format"],
-    quality: number
-  ): string[] {
-    if (format === "webp") {
-      return ["-q:v", quality.toString()];
-    }
-
-    const jpegQuality = Math.round(2 + ((100 - quality) / 100) * 29);
-    return ["-qscale:v", jpegQuality.toString()];
-  }
-
-  private getScaleFilter(tileWidth: number, tileHeight: number): string {
-    return `scale=w=${tileWidth}:h=${tileHeight}:force_original_aspect_ratio=decrease,pad=${tileWidth}:${tileHeight}:(ow-iw)/2:(oh-ih)/2`;
   }
 
   private getTileDimensions(
@@ -710,59 +617,6 @@ export class StoryboardsService {
     const maxTiles = Math.max(1, env.STORYBOARD_MAX_TILES);
     const intervalByTileLimit = Math.ceil(durationSeconds / maxTiles);
     return Math.max(1, requestedIntervalSeconds, intervalByTileLimit);
-  }
-
-  /**
-   * Generate WebVTT file with sprite coordinates.
-   */
-  private async generateVttFile(
-    vttPath: string,
-    videoId: number,
-    tileWidth: number,
-    tileHeight: number,
-    intervalSeconds: number,
-    tileCount: number,
-    cols: number,
-    duration: number,
-    spriteFormat: string
-  ): Promise<void> {
-    let vttContent = "WEBVTT\n\n";
-    const spriteExtension = spriteFormat.startsWith(".")
-      ? spriteFormat.slice(1)
-      : spriteFormat;
-
-    for (let i = 0; i < tileCount; i++) {
-      const startTime = i * intervalSeconds;
-      const endTime = Math.min((i + 1) * intervalSeconds, duration);
-
-      // Calculate tile position in sprite
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const x = col * tileWidth;
-      const y = row * tileHeight;
-
-      // Format timestamps as HH:MM:SS.mmm
-      const startFormatted = this.formatVttTime(startTime);
-      const endFormatted = this.formatVttTime(endTime);
-
-      // Use relative URL for the sprite (same endpoint path)
-      vttContent += `${startFormatted} --> ${endFormatted}\n`;
-      vttContent += `/api/videos/${videoId}/storyboard.${spriteExtension}?v=${encodeURIComponent(basename(vttPath))}#xywh=${x},${y},${tileWidth},${tileHeight}\n\n`;
-    }
-
-    await writeFile(vttPath, vttContent, "utf-8");
-  }
-
-  /**
-   * Format seconds to VTT timestamp format (HH:MM:SS.mmm).
-   */
-  private formatVttTime(seconds: number): string {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    const millis = Math.round((seconds % 1) * 1000);
-
-    return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${millis.toString().padStart(3, "0")}`;
   }
 
   /**
@@ -836,6 +690,7 @@ export class StoryboardsService {
   ): Promise<{ buffer: Buffer; contentType: string }> {
     if (env.DEMO_MODE) {
       const storyboard = demoMediaAssetsService.storyboard(videoId);
+      this.assertSingleSheet(storyboard);
       const spritePath = resolveDemoAssetPath(storyboard.sprite_path, {
         mustExist: true,
       });
@@ -855,6 +710,7 @@ export class StoryboardsService {
     if (!storyboard) {
       throw new NotFoundError(`Storyboard not found for video: ${videoId}`);
     }
+    this.assertSingleSheet(storyboard);
 
     if (!existsSync(storyboard.sprite_path)) {
       throw new NotFoundError(
@@ -866,6 +722,49 @@ export class StoryboardsService {
     const contentType = extension === ".webp" ? "image/webp" : "image/jpeg";
 
     return { buffer: await readFile(storyboard.sprite_path), contentType };
+  }
+
+  /**
+   * The whole-sheet route only serves legacy storyboards. A client holding a
+   * cached legacy VTT for a since-paged storyboard would otherwise crop page 0
+   * with whole-sheet coordinates; a 404 shows no thumbnail instead.
+   */
+  private assertSingleSheet(storyboard: Storyboard): void {
+    if (isPagedSpritePath(storyboard.sprite_path))
+      throw new NotFoundError(
+        "Storyboard is paged; use the pages referenced by its VTT"
+      );
+  }
+
+  /**
+   * One page of a paged storyboard. Legacy single-sheet storyboards only
+   * have page 0, which is the whole sheet.
+   */
+  async getPageAsset(
+    videoId: number,
+    page: number
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const storyboard = await this.findByVideoId(videoId);
+    if (!storyboard)
+      throw new NotFoundError(`Storyboard not found for video: ${videoId}`);
+    const path = storyboardImagePaths(
+      storyboard.sprite_path,
+      storyboard.tile_count
+    )[page];
+    if (!path) throw new NotFoundError(`Storyboard page not found: ${page}`);
+    const resolved = env.DEMO_MODE
+      ? resolveDemoAssetPath(path, { mustExist: false })
+      : path;
+    if (!existsSync(resolved))
+      throw new NotFoundError(`Storyboard page file not found: ${path}`);
+    return {
+      buffer: await readFile(resolved),
+      contentType: resolved.endsWith(".webp")
+        ? "image/webp"
+        : resolved.endsWith(".png")
+          ? "image/png"
+          : "image/jpeg",
+    };
   }
 
   /**
@@ -892,14 +791,15 @@ export class StoryboardsService {
 
     // Delete files
     try {
-      await Promise.all([
-        existsSync(storyboard.sprite_path)
-          ? unlink(storyboard.sprite_path)
-          : Promise.resolve(),
-        existsSync(storyboard.vtt_path)
-          ? unlink(storyboard.vtt_path)
-          : Promise.resolve(),
-      ]);
+      await Promise.all(
+        storyboardAssetPaths({
+          spritePath: storyboard.sprite_path,
+          vttPath: storyboard.vtt_path,
+          tileCount: storyboard.tile_count,
+        }).map((path) =>
+          existsSync(path) ? unlink(path) : Promise.resolve()
+        )
+      );
     } catch (error) {
       logger.error(
         { videoId, error },

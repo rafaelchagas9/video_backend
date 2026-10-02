@@ -112,6 +112,8 @@ const suggestionSchema = z.object({
   confidence: z.number().nullable(),
   face_match_score: z.number().nullable(),
   cached_preview_path: z.string().nullable(),
+  image_width: z.number().int().nullable().optional(),
+  image_height: z.number().int().nullable().optional(),
   status: z.string(),
   dedup_hash: z.string(),
   raw: z.any().nullable(),
@@ -161,4 +163,14 @@ export const suggestionResponseSchema = z.object({
 export const suggestionListResponseSchema = z.object({
   success: z.literal(true),
   data: z.array(suggestionSchema),
+});
+
+export const sceneResetResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    suggestions_cleared: z.number(),
+    fields_cleared: z.array(z.string()),
+    links_removed: z.number(),
+  }),
+  message: z.string().optional(),
 });

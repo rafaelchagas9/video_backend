@@ -82,6 +82,9 @@ export interface SuggestionDTO {
   confidence: number | null;
   face_match_score: number | null;
   cached_preview_path: string | null;
+  /** Pixel size of an image proposal; null until measured or when unmeasurable. */
+  image_width?: number | null;
+  image_height?: number | null;
   status: string;
   dedup_hash: string;
   raw: unknown;
@@ -108,4 +111,14 @@ export interface RelationalRaw {
   source?: string | null;
   as?: string | null;
   group?: string | null;
+}
+
+/** What a scene reset undid. */
+export interface SceneResetDTO {
+  /** Proposals deleted (pending, accepted and rejected), so a rescan starts clean. */
+  suggestions_cleared: number
+  /** Fields put back to empty: title, description, release_date, code, director, cover_image_url. */
+  fields_cleared: string[]
+  /** Cast, studio, tag and source-id links removed. */
+  links_removed: number
 }

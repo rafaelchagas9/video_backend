@@ -406,6 +406,12 @@ export const creatorGalleryMediaTable = pgTable(
     filePath: text("file_path").notNull(),
     isProfilePicture: boolean("is_profile_picture").default(false).notNull(),
     isMainPicture: boolean("is_main_picture").default(false).notNull(),
+    // Pixel size of the stored file, and of the picture as it arrived before
+    // the storage downscale. Null on rows added before sizes were recorded.
+    width: integer("width"),
+    height: integer("height"),
+    sourceWidth: integer("source_width"),
+    sourceHeight: integer("source_height"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

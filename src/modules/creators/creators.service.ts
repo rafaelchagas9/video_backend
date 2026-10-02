@@ -1,3 +1,11 @@
+import { creatorVideoCountsSql } from "./creators.video-counts";
+import { utcDate, activeAttributeFacets } from "./creators.attributes";
+import {
+  creatorCandidatesQuery,
+  attributeWhereSql,
+  creatorFacetsSql,
+} from "./creators.attributes-query";
+import { assembleFacets } from "./creators.attributes";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
@@ -26,6 +34,7 @@ import type {
 } from "./creators.types";
 import { externalProfileUrl } from "@/modules/enrichment/enrichment.reference";
 import { creatorsDemoService } from "./creators.demo.service";
+import { gallerySizeFields, withGallerySizes } from "./creators.gallery-sizes";
 
 export class CreatorsService {
   async list(
@@ -34,174 +43,32 @@ export class CreatorsService {
   ): Promise<PaginatedCreators> {
     if (env.DEMO_MODE) {
       const { demoRepository } = await import("@/database/demo/repository");
-      return demoRepository.getCreators(options) as PaginatedCreators;
+      return demoRepository.getCreators(options, userId) as PaginatedCreators;
     }
-    const {
-      page = 1,
-      limit = 20,
-      search,
-      sort = "name",
-      order = "asc",
-      minVideoCount,
-      maxVideoCount,
-      hasProfilePicture,
-      isFavorite,
-      studioIds,
-      missing,
-      complete,
-    } = options;
+    const { page = 1, limit = 20, sort = "name", order = "asc" } = options;
 
     const offsetValue = (page - 1) * limit;
 
-    // Build WHERE conditions as SQL fragments
-    const whereConditions: any[] = [];
-
-    // Search filter (name OR platform username OR alias)
-    if (search) {
-      const searchPattern = `%${search}%`;
-      whereConditions.push(
-        sql`(c.name ILIKE ${searchPattern} OR cp_search.username ILIKE ${searchPattern} OR EXISTS (
-          SELECT 1 FROM creator_aliases ca_search
-          WHERE ca_search.creator_id = c.id AND ca_search.name ILIKE ${searchPattern}
-        ))`
-      );
-    }
-
-    // Profile picture presence
-    if (hasProfilePicture === true) {
-      whereConditions.push(sql`EXISTS (
-        SELECT 1 FROM creator_gallery_media cgm_profile
-        WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
-      )`);
-    } else if (hasProfilePicture === false) {
-      whereConditions.push(sql`NOT EXISTS (
-        SELECT 1 FROM creator_gallery_media cgm_profile
-        WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
-      )`);
-    }
-
-    if (isFavorite === true && userId) {
-      whereConditions.push(sql`EXISTS (
-        SELECT 1
-        FROM creator_favorites cf_only
-        WHERE cf_only.user_id = ${userId}
-          AND cf_only.creator_id = c.id
-      )`);
-    } else if (isFavorite === true) {
-      whereConditions.push(sql`false`);
-    }
-
-    // Video count filters
-    if (minVideoCount !== undefined) {
-      whereConditions.push(
-        sql`COALESCE(vc.video_count, 0) >= ${minVideoCount}`
-      );
-    }
-    if (maxVideoCount !== undefined) {
-      whereConditions.push(
-        sql`COALESCE(vc.video_count, 0) <= ${maxVideoCount}`
-      );
-    }
-
-    // Studio filter
-    if (studioIds && studioIds.length > 0) {
-      whereConditions.push(sql`cs.studio_id IN ${studioIds}`);
-    }
-
-    // Missing filter
-    if (missing) {
-      switch (missing) {
-        case "picture":
-          whereConditions.push(sql`NOT EXISTS (
-            SELECT 1 FROM creator_gallery_media cgm_profile
-            WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
-          )`);
-          break;
-        case "platform":
-          whereConditions.push(sql`COALESCE(pc.platform_count, 0) = 0`);
-          break;
-        case "social":
-          whereConditions.push(sql`COALESCE(sc.social_link_count, 0) = 0`);
-          break;
-        case "linked":
-          whereConditions.push(sql`COALESCE(vc.video_count, 0) = 0`);
-          break;
-        case "any":
-          whereConditions.push(sql`(
-            NOT EXISTS (
-              SELECT 1 FROM creator_gallery_media cgm_profile
-              WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
-            )
-            OR (COALESCE(pc.platform_count, 0) = 0 AND COALESCE(sc.social_link_count, 0) = 0)
-            OR COALESCE(vc.video_count, 0) = 0
-          )`);
-          break;
-      }
-    }
-
-    // Complete filter
-    if (complete !== undefined) {
-      const completenessCondition = sql`(
-        EXISTS (
-          SELECT 1 FROM creator_gallery_media cgm_profile
-          WHERE cgm_profile.creator_id = c.id AND cgm_profile.is_profile_picture = true
-        )
-        AND (COALESCE(pc.platform_count, 0) > 0 OR COALESCE(sc.social_link_count, 0) > 0)
-        AND COALESCE(vc.video_count, 0) > 0
-      )`;
-
-      if (complete) {
-        whereConditions.push(completenessCondition);
-      } else {
-        whereConditions.push(sql`NOT ${completenessCondition}`);
-      }
-    }
-
-    const needsStudioJoin = studioIds && studioIds.length > 0;
-    const needsPlatformSearchJoin = !!search;
-
-    // Build the complete query with conditional JOINs
-    const baseFrom = sql`
-      FROM creators c
-      LEFT JOIN (
-        SELECT creator_id, COUNT(*) as video_count
-        FROM video_creators
-        GROUP BY creator_id
-      ) vc ON c.id = vc.creator_id
-      LEFT JOIN (
-        SELECT creator_id, COUNT(*) as platform_count
-        FROM creator_platforms
-        GROUP BY creator_id
-      ) pc ON c.id = pc.creator_id
-      LEFT JOIN (
-        SELECT creator_id, COUNT(*) as social_link_count
-        FROM creator_social_links
-        GROUP BY creator_id
-      ) sc ON c.id = sc.creator_id
-    `;
-
-    const studioJoin = needsStudioJoin
-      ? sql`INNER JOIN creator_studios cs ON c.id = cs.creator_id`
-      : sql``;
-
-    const platformSearchJoin = needsPlatformSearchJoin
-      ? sql`LEFT JOIN creator_platforms cp_search ON c.id = cp_search.creator_id`
-      : sql``;
-
-    const whereClause =
-      whereConditions.length > 0
-        ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
-        : sql``;
+    const asOf = utcDate();
+    const candidates = creatorCandidatesQuery(
+      options,
+      userId,
+      asOf,
+      activeAttributeFacets(options)
+    );
+    const attributeWhere = attributeWhereSql(options);
+    const baseFrom = sql`FROM creators c JOIN candidates a ON a.id = c.id
+      LEFT JOIN (${creatorVideoCountsSql()}) vc ON vc.creator_id = c.id
+      LEFT JOIN (SELECT creator_id, COUNT(*) AS platform_count FROM creator_platforms GROUP BY creator_id) pc ON pc.creator_id = c.id
+      LEFT JOIN (SELECT creator_id, COUNT(*) AS social_link_count FROM creator_social_links GROUP BY creator_id) sc ON sc.creator_id = c.id`;
+    const whereClause = sql`WHERE ${attributeWhere}`;
 
     const groupByClause = sql`GROUP BY c.id, profile_media.file_path, main_media.file_path`;
 
     // Get total count
     const countQuery = sql`
-      SELECT COUNT(DISTINCT c.id) as count
-      ${baseFrom}
-      ${studioJoin}
-      ${platformSearchJoin}
-      ${whereClause}
+      WITH candidates AS (${candidates})
+      SELECT COUNT(*) as count FROM candidates a WHERE ${attributeWhere}
     `;
 
     const countResult = await db.execute(countQuery);
@@ -232,6 +99,7 @@ export class CreatorsService {
 
     // Get creators with sorting and pagination
     const selectQuery = sql`
+      WITH candidates AS (${candidates})
       SELECT
         c.*,
         profile_media.file_path as unified_profile_picture_path,
@@ -253,11 +121,9 @@ export class CreatorsService {
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
       ) main_media ON true
-      ${studioJoin}
-      ${platformSearchJoin}
       ${whereClause}
       ${groupByClause}
-      ORDER BY ${sortExpression} ${sortDir}
+      ORDER BY ${sortExpression} ${sortDir}, c.id ASC
       LIMIT ${limit} OFFSET ${offsetValue}
     `;
 
@@ -295,6 +161,23 @@ export class CreatorsService {
         totalPages,
       },
     };
+  }
+
+  async facets(options: ListCreatorsOptions = {}, userId?: number) {
+    const asOf = utcDate();
+    if (env.DEMO_MODE) {
+      const { demoRepository } = await import("@/database/demo/repository");
+      return demoRepository.getCreatorFacets(options, userId, asOf);
+    }
+    const rows = await db.execute(creatorFacetsSql(options, userId, asOf));
+    const total = Number(
+      rows.find((row) => row.field === "_total")?.count ?? 0
+    );
+    return assembleFacets(
+      rows as unknown as Parameters<typeof assembleFacets>[0],
+      total,
+      asOf
+    );
   }
 
   async findById(id: number, userId?: number): Promise<Creator> {
@@ -500,8 +383,7 @@ export class CreatorsService {
         LIMIT 1
       ) main_media ON true
       LEFT JOIN (
-        SELECT creator_id, COUNT(*) as video_count
-        FROM video_creators GROUP BY creator_id
+        ${creatorVideoCountsSql()}
       ) vc ON c.id = vc.creator_id
       LEFT JOIN (
         SELECT creator_id, COUNT(*) as platform_count
@@ -575,8 +457,7 @@ export class CreatorsService {
         LIMIT 1
       ) main_media ON true
       LEFT JOIN (
-        SELECT creator_id, COUNT(*) as video_count
-        FROM video_creators GROUP BY creator_id
+        ${creatorVideoCountsSql()}
       ) vc ON c.id = vc.creator_id
       LEFT JOIN (
         SELECT creator_id, COUNT(*) as platform_count
@@ -651,7 +532,7 @@ export class CreatorsService {
         sql`${creatorGalleryMediaTable.id} DESC`
       );
 
-    return media.map((item) => ({
+    return (await withGallerySizes(media)).map((item) => ({
       id: item.id,
       creator_id: item.creatorId,
       label: item.label,
@@ -659,6 +540,7 @@ export class CreatorsService {
       file_path: item.filePath,
       is_profile_picture: item.isProfilePicture,
       is_main_picture: item.isMainPicture,
+      ...gallerySizeFields(item),
       url: `/api/creators/${creatorId}/gallery/${item.id}/image`,
       created_at:
         item.createdAt instanceof Date

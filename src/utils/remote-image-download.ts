@@ -4,6 +4,7 @@ import { request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { BadRequestError } from "./errors";
 import { imageDownloadRateLimiter } from "./async-rate-limiter";
+import { readImageSize, type PictureSize } from "./image-processing";
 
 const MAX_BYTES = 20 * 1024 * 1024;
 const TIMEOUT_MS = 15_000;
@@ -53,7 +54,9 @@ function assertPublicAddress(address: string): void {
 async function download(
   url: URL,
   signal: AbortSignal,
-  redirects = 0
+  redirects = 0,
+  /** Stop after this many bytes and resolve with the prefix (for header probes). */
+  headBytes?: number
 ): Promise<Buffer> {
   if (
     !["http:", "https:"].includes(url.protocol) ||
@@ -100,6 +103,7 @@ async function download(
           Host: url.host,
           Accept: "image/*",
           "Accept-Encoding": "identity",
+          ...(headBytes ? { Range: `bytes=0-${headBytes - 1}` } : {}),
         },
         // Connect directly to the validated IP, keeping the original hostname for
         // TLS certificate validation and SNI. Bun's custom lookup callback is not
@@ -125,7 +129,8 @@ async function download(
               download(
                 new URL(response.headers.location, url),
                 signal,
-                redirects + 1
+                redirects + 1,
+                headBytes
               )
             );
           } catch (error) {
@@ -151,7 +156,7 @@ async function download(
           return;
         }
         const declaredSize = Number(response.headers["content-length"]);
-        if (declaredSize > MAX_BYTES) {
+        if (!headBytes && declaredSize > MAX_BYTES) {
           response.destroy();
           reject(new BadRequestError("Downloaded image exceeds 20 MiB limit"));
           return;
@@ -167,6 +172,11 @@ async function download(
             return;
           }
           chunks.push(chunk);
+          // A probe has what it needs: hang up rather than read the rest.
+          if (headBytes && size >= headBytes) {
+            response.destroy();
+            resolve(Buffer.concat(chunks, size));
+          }
         });
         response.on("error", reject);
         response.on("end", () => {
@@ -202,4 +212,32 @@ export async function downloadRemoteImage(input: string): Promise<Buffer> {
       clearTimeout(timer);
     }
   });
+}
+
+const PROBE_BYTES = 64 * 1024;
+
+/** Pixel size of a public image, read from its first bytes (the whole file only
+ * when the header does not fit). Null when it cannot be fetched or decoded. */
+export async function probeRemoteImageSize(
+  input: string
+): Promise<PictureSize | null> {
+  // Not behind the download limiter: probes run in bulk and must never queue
+  // ahead of a picture someone is waiting to add. Callers bound concurrency.
+  const attempt = async (headBytes?: number) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      return await download(new URL(input), controller.signal, 0, headBytes);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  try {
+    const head = await attempt(PROBE_BYTES);
+    const size = await readImageSize(head);
+    if (size || head.length < PROBE_BYTES) return size;
+    return await readImageSize(await attempt());
+  } catch {
+    return null;
+  }
 }

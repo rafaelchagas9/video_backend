@@ -337,6 +337,13 @@
       "when": 1790433095389,
       "tag": "0047_copy_detection",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1790603583809,
+      "tag": "0048_picture_dimensions",
+      "breakpoints": true
     }
   ]
 }

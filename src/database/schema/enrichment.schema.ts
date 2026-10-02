@@ -42,6 +42,10 @@ export const enrichmentSuggestionsTable = pgTable(
     confidence: real("confidence"),
     faceMatchScore: real("face_match_score"),
     cachedPreviewPath: text("cached_preview_path"),
+    // Pixel size of an `image` proposal, probed from the remote file. Null until
+    // probed; 0 when the probe failed (so it is not retried on every read).
+    imageWidth: integer("image_width"),
+    imageHeight: integer("image_height"),
     // pending | accepted | rejected | superseded
     status: text("status").default("pending").notNull(),
     dedupHash: text("dedup_hash").notNull(),

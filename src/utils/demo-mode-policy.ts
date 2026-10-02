@@ -141,7 +141,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:thumbnails\\.vtt|storyboard\\.(?:jpg|webp)|preview\\.mp4)$`
+      `^${API_PREFIX}/videos/\\d+/(?:thumbnails\\.vtt|storyboard\\.(?:jpg|webp)|storyboard/pages/\\d+\\.(?:jpg|webp)|preview\\.mp4)$`
     ),
   },
   {
@@ -222,7 +222,7 @@ const SAFE_API_REQUESTS: Array<{
   },
   {
     methods: new Set(["GET"]),
-    path: new RegExp(`^${API_PREFIX}/creators/(?:autocomplete|recent)$`),
+    path: new RegExp(`^${API_PREFIX}/creators/(?:autocomplete|recent|facets)$`),
   },
   {
     methods: new Set(["POST"]),

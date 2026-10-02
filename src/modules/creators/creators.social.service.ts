@@ -18,7 +18,7 @@ import {
 } from "@/modules/face-recognition";
 import {
   cropFaceThumbnail,
-  processProfilePicture,
+  processPictureWithSize,
 } from "@/utils/image-processing";
 import { logger } from "@/utils/logger";
 import { downloadRemoteImage } from "@/utils/remote-image-download";
@@ -32,6 +32,7 @@ import type {
 } from "./creators.types";
 import type { Creator } from "./creators.types";
 import { creatorsDemoService } from "./creators.demo.service";
+import { gallerySizeFields, withGallerySizes } from "./creators.gallery-sizes";
 import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 
 type CreatorPictureVariant = "portrait" | "main";
@@ -277,7 +278,7 @@ export class CreatorsSocialService {
         variant
       );
     await this.findCreatorById(id);
-    const filePath = await this.storeProcessedImage({
+    const stored = await this.storeProcessedImage({
       input: fileBuffer,
       namePrefix: variant === "main" ? `creator_main_${id}` : `creator_${id}`,
       maxSize:
@@ -285,6 +286,7 @@ export class CreatorsSocialService {
           ? env.PROFILE_PICTURE_MAX_SIZE * 2
           : env.PROFILE_PICTURE_MAX_SIZE,
     });
+    const filePath = stored.filePath;
     const faceThumbnailPath =
       variant === "portrait"
         ? await this.generateFaceThumbnail(filePath, id)
@@ -303,6 +305,7 @@ export class CreatorsSocialService {
         await transaction.insert(creatorGalleryMediaTable).values({
           creatorId: id,
           filePath,
+          ...stored.sizes,
           label: variant === "main" ? "Main picture" : "Profile picture",
           isMainPicture: variant === "main",
           isProfilePicture: variant === "portrait",
@@ -388,7 +391,7 @@ export class CreatorsSocialService {
       .where(eq(creatorGalleryMediaTable.creatorId, creatorId))
       .orderBy(creatorGalleryMediaTable.createdAt, creatorGalleryMediaTable.id);
 
-    return media
+    return (await withGallerySizes(media))
       .slice()
       .reverse()
       .map((item) => this.mapGalleryMediaToSnakeCase(item));
@@ -409,7 +412,7 @@ export class CreatorsSocialService {
       );
     await this.findCreatorById(creatorId);
 
-    const filePath = await this.storeProcessedImage({
+    const { filePath, sizes } = await this.storeProcessedImage({
       input: fileBuffer,
       namePrefix: `creator_gallery_${creatorId}`,
       maxSize: env.PROFILE_PICTURE_MAX_SIZE * 2,
@@ -423,6 +426,7 @@ export class CreatorsSocialService {
           label: this.normalizeOptionalText(label),
           description: this.normalizeOptionalText(description),
           filePath,
+          ...sizes,
         })
         .returning();
 
@@ -716,6 +720,7 @@ export class CreatorsSocialService {
       file_path: media.filePath,
       is_profile_picture: media.isProfilePicture,
       is_main_picture: media.isMainPicture,
+      ...gallerySizeFields(media),
       url: `/api/creators/${media.creatorId}/gallery/${media.id}/image`,
       created_at:
         media.createdAt instanceof Date
@@ -772,7 +777,7 @@ export class CreatorsSocialService {
       `${params.namePrefix}_${randomUUID()}.${env.PROFILE_PICTURE_FORMAT}`
     );
 
-    const processedBuffer = await processProfilePicture({
+    const processed = await processPictureWithSize({
       input: params.input,
       format: env.PROFILE_PICTURE_FORMAT,
       maxSize: params.maxSize,
@@ -781,14 +786,22 @@ export class CreatorsSocialService {
 
     const candidate = await open(filePath, "wx");
     try {
-      await candidate.writeFile(processedBuffer);
+      await candidate.writeFile(processed.buffer);
     } catch (error) {
       await this.deleteFileIfExists(filePath);
       throw error;
     } finally {
       await candidate.close();
     }
-    return filePath;
+    return {
+      filePath,
+      sizes: {
+        width: processed.size.width,
+        height: processed.size.height,
+        sourceWidth: processed.source?.width ?? null,
+        sourceHeight: processed.source?.height ?? null,
+      },
+    };
   }
 
   private async generateFaceThumbnail(
