@@ -1,3 +1,4 @@
+import { getDemoSqlite } from "@/database/demo/client";
 import { demoRepository } from "@/database/demo/repository";
 import { ConflictError } from "@/utils/errors";
 import type {
@@ -15,12 +16,27 @@ type DemoReview = {
 const reviews = new Map<string, DemoReview>();
 const key = (userId: number, videoId: number) => `${userId}:${videoId}`;
 
+function allDemoVideos() {
+  const first = demoRepository.getVideos({ limit: 500, page: 1 });
+  const videos = [...first.data];
+  for (let page = 2; page <= first.pagination.totalPages; page++)
+    videos.push(...demoRepository.getVideos({ limit: 500, page }).data);
+  return videos;
+}
+
 class CleanupDemoService {
   async listCandidates(
     userId: number,
-    options: { disposition: CleanupDisposition; limit: number; offset: number }
+    options: {
+      disposition: CleanupDisposition;
+      limit: number;
+      offset: number;
+      creator_id?: number;
+      studio_id?: number;
+      directory_id?: number;
+    }
   ) {
-    const videos = demoRepository.getVideos({ limit: 100 }).data;
+    const videos = allDemoVideos();
     const mapped: CleanupCandidate[] = videos
       .map((video) => {
         const review = reviews.get(key(userId, video.id));
@@ -64,6 +80,29 @@ class CleanupDemoService {
         };
       })
       .filter((item) => item.disposition === options.disposition)
+      .filter(
+        (item) =>
+          !options.creator_id ||
+          item.creators.some(
+            (creator: { id: number }) => creator.id === options.creator_id
+          )
+      )
+      .filter(
+        (item) =>
+          !options.studio_id ||
+          !!getDemoSqlite()
+            .query(
+              "SELECT 1 FROM demo_video_studios WHERE video_id=? AND studio_id=?"
+            )
+            .get(item.id, options.studio_id)
+      )
+      .filter(
+        (item) =>
+          !options.directory_id ||
+          !!getDemoSqlite()
+            .query("SELECT 1 FROM demo_videos WHERE id=? AND directory_id=?")
+            .get(item.id, options.directory_id)
+      )
       .sort((a, b) => b.file_size_bytes - a.file_size_bytes);
     return {
       data: mapped.slice(options.offset, options.offset + options.limit),
@@ -73,10 +112,10 @@ class CleanupDemoService {
   async overview(userId: number): Promise<CleanupOverview> {
     const unreviewed = await this.listCandidates(userId, {
       disposition: "unreviewed",
-      limit: 100,
+      limit: Number.MAX_SAFE_INTEGER,
       offset: 0,
     });
-    const videos = demoRepository.getVideos({ limit: 100 }).data;
+    const videos = allDemoVideos();
     const videoBytes = new Map(
       videos.map((video) => [video.id, video.file_size_bytes])
     );

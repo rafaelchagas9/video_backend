@@ -34,6 +34,7 @@ import {
 } from "@/database/schema";
 import { BadRequestError, ConflictError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
+import { mergeProductionCollections } from "@/modules/creator-collections/creator-collections.storage";
 import { creatorsMergeDemoService } from "./creators.merge.demo.service";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -262,6 +263,12 @@ export class CreatorsMergeService {
       );
       await this.normalizePrimaryFace(tx, intoId, targetPrimaryFace?.id);
 
+      const collectionMerge = await mergeProductionCollections(
+        tx,
+        fromId,
+        intoId
+      );
+
       // The audit stores every value that is intentionally collapsed. Rows that
       // are reassigned remain live on the survivor and do not need duplication.
       await tx.insert(creatorMergesTable).values({
@@ -273,6 +280,7 @@ export class CreatorsMergeService {
           auditVersion: 2,
           targetBefore,
           discardedConflicts,
+          collectionMerge,
         },
         reason: reason ?? null,
       });

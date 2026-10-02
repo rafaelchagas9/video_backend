@@ -22,8 +22,20 @@ const CREATOR_CANDIDATES = [
     confidence: 0.95,
     raw: { id: "tpdb-uuid-123" },
   },
-  { type: "field", field_key: "gender", value: "FEMALE", source: "theporndb", confidence: 0.95 },
-  { type: "field", field_key: "height_cm", value: "170", source: "theporndb", confidence: 0.95 },
+  {
+    type: "field",
+    field_key: "gender",
+    value: "FEMALE",
+    source: "theporndb",
+    confidence: 0.95,
+  },
+  {
+    type: "field",
+    field_key: "height_cm",
+    value: "170",
+    source: "theporndb",
+    confidence: 0.95,
+  },
   { type: "alias", value: "Test Alias", source: "theporndb", confidence: 0.6 },
   {
     type: "social",
@@ -36,8 +48,20 @@ const CREATOR_CANDIDATES = [
 ];
 
 const STUDIO_CANDIDATES = [
-  { type: "external_id", value: "studio-uuid-1", source: "stashdb", confidence: 0.95, raw: { id: "studio-uuid-1" } },
-  { type: "field", field_key: "description", value: "A great studio", source: "stashdb", confidence: 0.9 },
+  {
+    type: "external_id",
+    value: "studio-uuid-1",
+    source: "stashdb",
+    confidence: 0.95,
+    raw: { id: "studio-uuid-1" },
+  },
+  {
+    type: "field",
+    field_key: "description",
+    value: "A great studio",
+    source: "stashdb",
+    confidence: 0.9,
+  },
   { type: "alias", value: "Studio Alias", source: "stashdb", confidence: 0.7 },
   {
     type: "social",
@@ -57,8 +81,20 @@ const STUDIO_CANDIDATES = [
 ];
 
 const TAG_CANDIDATES = [
-  { type: "external_id", value: "tag-uuid-1", source: "stashdb", confidence: 0.95, raw: { id: "tag-uuid-1" } },
-  { type: "field", field_key: "description", value: "Tag description", source: "stashdb", confidence: 0.9 },
+  {
+    type: "external_id",
+    value: "tag-uuid-1",
+    source: "stashdb",
+    confidence: 0.95,
+    raw: { id: "tag-uuid-1" },
+  },
+  {
+    type: "field",
+    field_key: "description",
+    value: "Tag description",
+    source: "stashdb",
+    confidence: 0.9,
+  },
   { type: "alias", value: "Tag Alias", source: "stashdb", confidence: 0.7 },
   {
     type: "category",
@@ -70,10 +106,34 @@ const TAG_CANDIDATES = [
 ];
 
 const SCENE_CANDIDATES = [
-  { type: "external_id", value: "scene-uuid-1", source: "stashdb", confidence: 0.95, raw: { id: "scene-uuid-1" } },
-  { type: "field", field_key: "title", value: "Real Scene Title", source: "stashdb", confidence: 0.95 },
-  { type: "field", field_key: "description", value: "Scene details", source: "stashdb", confidence: 0.95 },
-  { type: "field", field_key: "release_date", value: "2021-05-01", source: "stashdb", confidence: 0.95 },
+  {
+    type: "external_id",
+    value: "scene-uuid-1",
+    source: "stashdb",
+    confidence: 0.95,
+    raw: { id: "scene-uuid-1" },
+  },
+  {
+    type: "field",
+    field_key: "title",
+    value: "Real Scene Title",
+    source: "stashdb",
+    confidence: 0.95,
+  },
+  {
+    type: "field",
+    field_key: "description",
+    value: "Scene details",
+    source: "stashdb",
+    confidence: 0.95,
+  },
+  {
+    type: "field",
+    field_key: "release_date",
+    value: "2021-05-01",
+    source: "stashdb",
+    confidence: 0.95,
+  },
   {
     type: "performer",
     value: "Scene Performer",
@@ -104,27 +164,95 @@ const CANDIDATES_BY_ENTITY: Record<string, unknown[]> = {
   scene: SCENE_CANDIDATES,
 };
 
-const EXACT_ID_CANDIDATES_BY_ENTITY: Record<string, (externalId: string) => unknown[]> = {
+const EXACT_ID_CANDIDATES_BY_ENTITY: Record<
+  string,
+  (externalId: string) => unknown[]
+> = {
   creator: (externalId) => [
-    { type: "external_id", value: externalId, source: "stashdb", confidence: 1 },
-    { type: "field", field_key: "gender", value: "FEMALE", source: "stashdb", confidence: 1 },
-    { type: "alias", value: "Auto Performer Alias", source: "stashdb", confidence: 1 },
+    {
+      type: "external_id",
+      value: externalId,
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "field",
+      field_key: "gender",
+      value: "FEMALE",
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "alias",
+      value: "Auto Performer Alias",
+      source: "stashdb",
+      confidence: 1,
+    },
   ],
   studio: (externalId) => [
-    { type: "external_id", value: externalId, source: "stashdb", confidence: 1 },
-    { type: "field", field_key: "description", value: "Auto studio details", source: "stashdb", confidence: 1 },
-    { type: "alias", value: "Auto Studio Alias", source: "stashdb", confidence: 1 },
+    {
+      type: "external_id",
+      value: externalId,
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "field",
+      field_key: "description",
+      value: "Auto studio details",
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "alias",
+      value: "Auto Studio Alias",
+      source: "stashdb",
+      confidence: 1,
+    },
   ],
   tag: (externalId) => [
-    { type: "external_id", value: externalId, source: "stashdb", confidence: 1 },
-    { type: "field", field_key: "description", value: "Auto tag details", source: "stashdb", confidence: 1 },
-    { type: "alias", value: "Auto Tag Alias", source: "stashdb", confidence: 1 },
+    {
+      type: "external_id",
+      value: externalId,
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "field",
+      field_key: "description",
+      value: "Auto tag details",
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "alias",
+      value: "Auto Tag Alias",
+      source: "stashdb",
+      confidence: 1,
+    },
   ],
   scene: (externalId) => [
-    { type: "external_id", value: externalId, source: "stashdb", confidence: 1 },
-    { type: "field", field_key: "title", value: "Exact scene", source: "stashdb", confidence: 1 },
+    {
+      type: "external_id",
+      value: externalId,
+      source: "stashdb",
+      confidence: 1,
+    },
+    {
+      type: "field",
+      field_key: "title",
+      value: "Exact scene",
+      source: "stashdb",
+      confidence: 1,
+    },
   ],
 };
+
+let responseOverride: {
+  candidates: unknown[];
+  sources_used: string[];
+  errors: string[];
+} | null = null;
 
 const enrichmentRequests: Array<{
   entity_type: string;
@@ -155,12 +283,13 @@ describe("enrichment loop (all entity types)", () => {
           external_ids?: Array<{ source: string; external_id: string }>;
         }) => {
           enrichmentRequests.push(req);
+          if (responseOverride) return responseOverride;
           return {
             candidates: req.external_ids?.[0]
-              ? EXACT_ID_CANDIDATES_BY_ENTITY[req.entity_type]?.(
-                  req.external_ids[0].external_id,
-                ) ?? []
-              : CANDIDATES_BY_ENTITY[req.entity_type] ?? [],
+              ? (EXACT_ID_CANDIDATES_BY_ENTITY[req.entity_type]?.(
+                  req.external_ids[0].external_id
+                ) ?? [])
+              : (CANDIDATES_BY_ENTITY[req.entity_type] ?? []),
             sources_used: req.external_ids?.[0]
               ? [req.external_ids[0].source]
               : (req.sources ?? ["stashdb"]),
@@ -182,8 +311,11 @@ describe("enrichment loop (all entity types)", () => {
   async function runAndList(
     entityType: string,
     entityId: number,
-    expectedCount: number,
-  ): Promise<{ suggestions: Suggestion[]; pick: (t: string, key?: string) => Suggestion }> {
+    expectedCount: number
+  ): Promise<{
+    suggestions: Suggestion[];
+    pick: (t: string, key?: string) => Suggestion;
+  }> {
     const runRes = await ctx!.authInject({
       method: "POST",
       url: `/api/enrichment/${entityType}/${entityId}/run`,
@@ -300,7 +432,7 @@ describe("enrichment loop (all entity types)", () => {
 
     expect(runRes.statusCode).toBe(400);
     expect(runRes.json().error.message).toContain(
-      "Enrichment URL targets creator, not scene",
+      "Enrichment URL targets creator, not scene"
     );
     expect(enrichmentRequests).toHaveLength(requestCount);
   });
@@ -314,7 +446,11 @@ describe("enrichment loop (all entity types)", () => {
     expect(created.statusCode).toBe(201);
     const creatorId = created.json().data.id as number;
 
-    const { pick } = await runAndList("creator", creatorId, CREATOR_CANDIDATES.length);
+    const { pick } = await runAndList(
+      "creator",
+      creatorId,
+      CREATOR_CANDIDATES.length
+    );
 
     await accept(pick("field", "gender").id);
     await accept(pick("external_id").id);
@@ -329,10 +465,17 @@ describe("enrichment loop (all entity types)", () => {
     expect(rejectRes.json().data.status).toBe("rejected");
 
     const { db } = await import("@/config/drizzle");
-    const { creatorsTable, creatorExternalIdsTable, creatorAliasesTable, creatorSocialLinksTable } =
-      await import("@/database/schema");
+    const {
+      creatorsTable,
+      creatorExternalIdsTable,
+      creatorAliasesTable,
+      creatorSocialLinksTable,
+    } = await import("@/database/schema");
 
-    const [creator] = await db.select().from(creatorsTable).where(eq(creatorsTable.id, creatorId));
+    const [creator] = await db
+      .select()
+      .from(creatorsTable)
+      .where(eq(creatorsTable.id, creatorId));
     expect(creator.gender).toBe("FEMALE");
     expect(creator.heightCm).toBeNull();
 
@@ -357,8 +500,12 @@ describe("enrichment loop (all entity types)", () => {
 
   it("studio: accepts description, alias, social, external id and parent", async () => {
     const { db } = await import("@/config/drizzle");
-    const { studiosTable, studioAliasesTable, studioExternalIdsTable, studioSocialLinksTable } =
-      await import("@/database/schema");
+    const {
+      studiosTable,
+      studioAliasesTable,
+      studioExternalIdsTable,
+      studioSocialLinksTable,
+    } = await import("@/database/schema");
 
     const [studio] = await db
       .insert(studiosTable)
@@ -366,14 +513,21 @@ describe("enrichment loop (all entity types)", () => {
       .returning({ id: studiosTable.id });
     const studioId = studio.id;
 
-    const { pick } = await runAndList("studio", studioId, STUDIO_CANDIDATES.length);
+    const { pick } = await runAndList(
+      "studio",
+      studioId,
+      STUDIO_CANDIDATES.length
+    );
     await accept(pick("field", "description").id);
     await accept(pick("alias").id);
     await accept(pick("social").id);
     await accept(pick("external_id").id);
     await accept(pick("parent").id);
 
-    const [updated] = await db.select().from(studiosTable).where(eq(studiosTable.id, studioId));
+    const [updated] = await db
+      .select()
+      .from(studiosTable)
+      .where(eq(studiosTable.id, studioId));
     expect(updated.description).toBe("A great studio");
     expect(updated.parentStudioId).not.toBeNull();
 
@@ -404,8 +558,12 @@ describe("enrichment loop (all entity types)", () => {
 
   it("tag: accepts description, alias, external id and category", async () => {
     const { db } = await import("@/config/drizzle");
-    const { tagsTable, tagAliasesTable, tagExternalIdsTable, tagCategoriesTable } =
-      await import("@/database/schema");
+    const {
+      tagsTable,
+      tagAliasesTable,
+      tagExternalIdsTable,
+      tagCategoriesTable,
+    } = await import("@/database/schema");
 
     const [tag] = await db
       .insert(tagsTable)
@@ -419,7 +577,10 @@ describe("enrichment loop (all entity types)", () => {
     await accept(pick("external_id").id);
     await accept(pick("category").id);
 
-    const [updated] = await db.select().from(tagsTable).where(eq(tagsTable.id, tagId));
+    const [updated] = await db
+      .select()
+      .from(tagsTable)
+      .where(eq(tagsTable.id, tagId));
     expect(updated.description).toBe("Tag description");
     expect(updated.categoryId).not.toBeNull();
 
@@ -446,7 +607,11 @@ describe("enrichment loop (all entity types)", () => {
   it("scene: accepts fields and links performer/studio/tag (creating missing)", async () => {
     const { videoId } = await seedVideoFixture();
 
-    const { pick } = await runAndList("scene", videoId, SCENE_CANDIDATES.length);
+    const { pick } = await runAndList(
+      "scene",
+      videoId,
+      SCENE_CANDIDATES.length
+    );
     await accept(pick("field", "title").id);
     await accept(pick("field", "description").id);
     await accept(pick("field", "release_date").id);
@@ -474,14 +639,22 @@ describe("enrichment loop (all entity types)", () => {
       tagExternalIdsTable,
     } = await import("@/database/schema");
 
-    const [video] = await db.select().from(videosTable).where(eq(videosTable.id, videoId));
+    const [video] = await db
+      .select()
+      .from(videosTable)
+      .where(eq(videosTable.id, videoId));
     expect(video.title).toBe("Real Scene Title");
     expect(video.description).toBe("Scene details");
 
     const [releaseDate] = await db
       .select()
       .from(videoMetadataTable)
-      .where(and(eq(videoMetadataTable.videoId, videoId), eq(videoMetadataTable.key, "release_date")));
+      .where(
+        and(
+          eq(videoMetadataTable.videoId, videoId),
+          eq(videoMetadataTable.key, "release_date")
+        )
+      );
     expect(releaseDate.value).toBe("2021-05-01");
 
     const externalIds = await db
@@ -507,7 +680,9 @@ describe("enrichment loop (all entity types)", () => {
       .select()
       .from(creatorAliasesTable)
       .where(eq(creatorAliasesTable.creatorId, performer.id));
-    expect(performerAliases.map((a) => a.name)).toContain("Auto Performer Alias");
+    expect(performerAliases.map((a) => a.name)).toContain(
+      "Auto Performer Alias"
+    );
 
     const performerExternalIds = await db
       .select()
@@ -546,7 +721,10 @@ describe("enrichment loop (all entity types)", () => {
       .from(videoTagsTable)
       .where(eq(videoTagsTable.videoId, videoId));
     expect(tagLinks).toHaveLength(1);
-    const [tag] = await db.select().from(tagsTable).where(eq(tagsTable.id, tagLinks[0].tagId));
+    const [tag] = await db
+      .select()
+      .from(tagsTable)
+      .where(eq(tagsTable.id, tagLinks[0].tagId));
     expect(tag.name).toBe("Scene Tag");
     expect(tag.description).toBe("Auto tag details");
 
@@ -564,36 +742,140 @@ describe("enrichment loop (all entity types)", () => {
   });
   it("scene: previews links by external id, name ignoring case, then alias — and never creates", async () => {
     const { db } = await import("@/config/drizzle");
-    const { creatorsTable, creatorAliasesTable, tagsTable } = await import("@/database/schema");
-    const { enrichmentService } = await import("@/modules/enrichment/enrichment.service");
+    const { creatorsTable, creatorAliasesTable, tagsTable } =
+      await import("@/database/schema");
+    const { enrichmentService } =
+      await import("@/modules/enrichment/enrichment.service");
 
-    const [tag] = await db.insert(tagsTable).values({ name: "Mixed Case Tag" }).returning();
-    const [creator] = await db.insert(creatorsTable).values({ name: "Canonical Person" }).returning();
-    await db.insert(creatorAliasesTable).values({ creatorId: creator.id, name: "Stage Name" });
+    const [tag] = await db
+      .insert(tagsTable)
+      .values({ name: "Mixed Case Tag" })
+      .returning();
+    const [creator] = await db
+      .insert(creatorsTable)
+      .values({ name: "Canonical Person" })
+      .returning();
+    await db
+      .insert(creatorAliasesTable)
+      .values({ creatorId: creator.id, name: "Stage Name" });
 
-    expect(await enrichmentService.findRelatedEntity("tag", "mixed CASE tag")).toMatchObject({ id: tag.id, via: "name" });
-    expect(await enrichmentService.findRelatedEntity("creator", "stage name")).toMatchObject({ id: creator.id, via: "alias" });
-    expect(await enrichmentService.findRelatedEntity("tag", "Nobody Has This")).toBeNull();
+    expect(
+      await enrichmentService.findRelatedEntity("tag", "mixed CASE tag")
+    ).toMatchObject({ id: tag.id, via: "name" });
+    expect(
+      await enrichmentService.findRelatedEntity("creator", "stage name")
+    ).toMatchObject({ id: creator.id, via: "alias" });
+    expect(
+      await enrichmentService.findRelatedEntity("tag", "Nobody Has This")
+    ).toBeNull();
 
     // The earlier scene test created and linked these, so they now resolve by source id.
     const { videoId } = await seedVideoFixture();
     await runAndList("scene", videoId, SCENE_CANDIDATES.length);
     const tagsBefore = await db.select().from(tagsTable);
-    const res = await ctx!.authInject({ method: "GET", url: `/api/enrichment/scene/${videoId}/resolution` });
+    const res = await ctx!.authInject({
+      method: "GET",
+      url: `/api/enrichment/scene/${videoId}/resolution`,
+    });
     expect(res.statusCode).toBe(200);
-    const previews = res.json().data as Array<{ kind: string; match: { via: string } | null }>;
-    expect(previews.map((item) => item.kind).sort()).toEqual(["creator", "studio", "tag"]);
-    expect(previews.every((item) => item.match?.via === "external_id")).toBe(true);
+    const previews = res.json().data as Array<{
+      kind: string;
+      match: { via: string } | null;
+    }>;
+    expect(previews.map((item) => item.kind).sort()).toEqual([
+      "creator",
+      "studio",
+      "tag",
+    ]);
+    expect(previews.every((item) => item.match?.via === "external_id")).toBe(
+      true
+    );
     expect(await db.select().from(tagsTable)).toHaveLength(tagsBefore.length);
+  });
+
+  it("persists failed and partial provider results without claiming a successful empty search", async () => {
+    const { db } = await import("@/config/drizzle");
+    const { creatorsTable } = await import("@/database/schema");
+    const [creator] = await db
+      .insert(creatorsTable)
+      .values({ name: "Provider audit fixture" })
+      .returning();
+    const scenarios = [
+      {
+        sources_used: [],
+        errors: ["fansdb: permission denied"],
+        candidates: [],
+        status: "error",
+      },
+      {
+        sources_used: ["stashdb"],
+        errors: ["fansdb: timeout"],
+        candidates: [
+          {
+            type: "alias",
+            value: "Audit alias",
+            source: "stashdb",
+            confidence: 0.8,
+          },
+        ],
+        status: "success",
+      },
+      {
+        sources_used: ["stashdb"],
+        errors: [],
+        candidates: [],
+        status: "success",
+      },
+    ];
+    try {
+      for (const scenario of scenarios) {
+        responseOverride = scenario;
+        const response = await ctx!.authInject({
+          method: "POST",
+          url: `/api/enrichment/creator/${creator!.id}/run`,
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().data.status).toBe(scenario.status);
+        expect(response.json().data.errors).toEqual(
+          scenario.errors.length ? scenario.errors : null
+        );
+        expect(response.json().data.suggestion_count).toBe(
+          scenario.candidates.length
+        );
+        const history = await ctx!.authInject({
+          method: "GET",
+          url: `/api/enrichment/creator/${creator!.id}/runs`,
+        });
+        expect(history.statusCode).toBe(200);
+        const persisted = history
+          .json()
+          .data.find(
+            (run: { id: number }) => run.id === response.json().data.id
+          );
+        expect(persisted.status).toBe(scenario.status);
+        expect(persisted.errors).toEqual(
+          scenario.errors.length ? scenario.errors : null
+        );
+      }
+    } finally {
+      responseOverride = null;
+    }
   });
 
   it("resolves a review pass in one request: accepts write, rejects only mark", async () => {
     const { videoId } = await seedVideoFixture();
-    const { pick } = await runAndList("scene", videoId, SCENE_CANDIDATES.length);
+    const { pick } = await runAndList(
+      "scene",
+      videoId,
+      SCENE_CANDIDATES.length
+    );
     const res = await ctx!.authInject({
       method: "POST",
       url: "/api/enrichment/suggestions/resolve",
-      payload: { accept: [pick("field", "title").id], reject: [pick("tag").id, pick("performer").id] },
+      payload: {
+        accept: [pick("field", "title").id],
+        reject: [pick("tag").id, pick("performer").id],
+      },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().data).toEqual({
@@ -606,6 +888,8 @@ describe("enrichment loop (all entity types)", () => {
       url: "/api/enrichment/suggestions/resolve",
       payload: { reject: [pick("tag").id] },
     });
-    expect(again.json().data.failed).toEqual([{ id: pick("tag").id, message: "Not pending" }]);
+    expect(again.json().data.failed).toEqual([
+      { id: pick("tag").id, message: "Not pending" },
+    ]);
   });
 });

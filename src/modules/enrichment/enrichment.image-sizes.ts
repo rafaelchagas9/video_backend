@@ -9,7 +9,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { enrichmentSuggestionsTable } from "@/database/schema";
 import { logger } from "@/utils/logger";
-import { probeRemoteImageSize } from "@/utils/remote-image-download";
+import { probeEnrichmentImage } from "./enrichment.images";
 
 const LANES = 4;
 
@@ -34,7 +34,11 @@ class ImageSizeProbe {
   }
 
   private async lane(): Promise<void> {
-    for (let id = this.waiting.shift(); id !== undefined; id = this.waiting.shift()) {
+    for (
+      let id = this.waiting.shift();
+      id !== undefined;
+      id = this.waiting.shift()
+    ) {
       try {
         await this.measureOne(id);
       } catch (error) {
@@ -57,7 +61,7 @@ class ImageSizeProbe {
         )
       );
     if (!row) return;
-    const size = await probeRemoteImageSize(row.value);
+    const size = await probeEnrichmentImage(row.value);
     await db
       .update(enrichmentSuggestionsTable)
       .set({ imageWidth: size?.width ?? 0, imageHeight: size?.height ?? 0 })

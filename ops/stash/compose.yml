@@ -1,0 +1,22 @@
+services:
+  stash:
+    image: stashapp/stash:v0.31.1
+    container_name: kura-stash
+    restart: unless-stopped
+    ports:
+      - "9999:9999"
+    environment:
+      STASH_PORT: "9999"
+    volumes:
+      - ../../data/stash/config:/root/.stash
+      - ../../data/stash/generated:/generated
+      - ../../data/stash/metadata:/metadata
+      - ../../data/stash/cache:/cache
+      - ../../data/stash/blobs:/blobs
+      - ../../demo_mode:/demo:ro
+      - /mnt:/mnt:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

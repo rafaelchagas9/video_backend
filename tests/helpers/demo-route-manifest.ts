@@ -66,6 +66,28 @@ allowed DELETE /api/videos/{id}
 allowed POST /api/videos/{id}/verify http-contract
 allowed POST /api/videos/{id}/refresh http-contract
 allowed GET /api/videos/{id}/stream
+allowed POST /api/vr/access
+allowed GET /api/vr/heresphere
+allowed POST /api/vr/heresphere
+allowed GET /api/vr/heresphere/videos/{id}
+allowed POST /api/vr/heresphere/videos/{id}
+allowed GET /api/vr/deovr
+allowed POST /api/vr/deovr
+allowed GET /api/vr/deovr/videos/{id}
+allowed POST /api/vr/deovr/videos/{id}
+allowed GET /api/vr/stream/{id}
+allowed GET /api/vr/thumbnail/{id}
+allowed GET /api/creator-collections/{creatorId}
+allowed POST /api/creator-collections/{creatorId}
+allowed PATCH /api/creator-collections/{creatorId}/{id}
+allowed DELETE /api/creator-collections/{creatorId}/{id}
+allowed POST /api/enrichment/scene/{id}/reset
+allowed GET /api/enrichment/providers
+allowed PATCH /api/enrichment/providers/{id}
+allowed GET /api/enrichment/stash/scrapers
+allowed POST /api/enrichment/stash/contributions/prepare
+allowed POST /api/enrichment/stash/contributions/submit
+allowed GET /api/cleanup/focus
 allowed GET /api/cleanup/overview http-contract
 allowed GET /api/cleanup/candidates http-contract
 allowed PUT /api/cleanup/reviews/{videoId} http-contract

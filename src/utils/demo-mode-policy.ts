@@ -7,6 +7,41 @@ const SAFE_API_REQUESTS: Array<{
   path: RegExp;
 }> = [
   {
+    methods: new Set(["GET", "POST"]),
+    path: new RegExp(
+      `^${API_PREFIX}/vr/(?:heresphere|deovr)(?:/videos/\\d+)?$`
+    ),
+  },
+  { methods: new Set(["POST"]), path: new RegExp(`^${API_PREFIX}/vr/access$`) },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/vr/(?:stream|thumbnail)/\\d+$`),
+  },
+  {
+    methods: new Set(["GET", "POST"]),
+    path: new RegExp(`^${API_PREFIX}/creator-collections/\\d+$`),
+  },
+  {
+    methods: new Set(["PATCH", "DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/creator-collections/\\d+/[a-f0-9-]{36}$`),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/(?:providers|stash/scrapers)$`),
+  },
+  {
+    methods: new Set(["PATCH"]),
+    path: new RegExp(
+      `^${API_PREFIX}/enrichment/providers/[a-z][a-z0-9_-]{0,63}$`
+    ),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(
+      `^${API_PREFIX}/enrichment/stash/contributions/(?:prepare|submit)$`
+    ),
+  },
+  {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/saved-views/?$`),
   },
@@ -56,7 +91,7 @@ const SAFE_API_REQUESTS: Array<{
   },
   {
     methods: new Set(["GET"]),
-    path: new RegExp(`^${API_PREFIX}/cleanup/(?:overview|candidates)$`),
+    path: new RegExp(`^${API_PREFIX}/cleanup/(?:overview|candidates|focus)$`),
   },
   {
     methods: new Set(["PUT"]),
@@ -517,7 +552,9 @@ const SAFE_API_REQUESTS: Array<{
   },
   {
     methods: new Set(["POST", "DELETE"]),
-    path: new RegExp(`^${API_PREFIX}/videos/\\d+/(?:artwork|storyboard|preview)$`),
+    path: new RegExp(
+      `^${API_PREFIX}/videos/\\d+/(?:artwork|storyboard|preview)$`
+    ),
   },
   {
     methods: new Set(["POST"]),
@@ -632,6 +669,10 @@ const SAFE_API_REQUESTS: Array<{
     path: new RegExp(
       `^${API_PREFIX}/multiplayer-remote/sessions/\\d+/(?:close|trusted-connect|join-requests/\\d+/(?:approve|reject))$`
     ),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/scene/\\d+/reset$`),
   },
 ];
 

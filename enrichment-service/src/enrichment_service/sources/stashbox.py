@@ -134,9 +134,9 @@ TPDB_REST_PATHS: dict[str, str] = {
 }
 
 
-def _name_confidence(candidate_name: str, term: str) -> float:
+def _name_confidence(candidate_name: str | None, term: str) -> float:
     """High confidence on an exact (case-insensitive) name match, else moderate."""
-    if candidate_name.strip().lower() == term.strip().lower():
+    if (candidate_name or "").strip().lower() == term.strip().lower():
         return 0.95
     return 0.6
 
@@ -416,7 +416,7 @@ class StashBoxSource(Source):
             self.endpoint,
             headers=self._headers(),
             json={
-                "query": ID_QUERIES[entity],
+                "query": ID_QUERIES[entity].replace("  death_date\n", "") if self.dialect == "standard" else ID_QUERIES[entity],
                 "variables": {"id": external_id},
             },
         )
@@ -687,6 +687,19 @@ class StashBoxSource(Source):
     async def _search_scene(
         self, request: EnrichRequest, client: httpx.AsyncClient
     ) -> list[Candidate]:
+        if request.fingerprint:
+            fp = request.fingerprint
+            response = await client.post(self.endpoint, headers=self._headers(), json={
+                "query": "query($fingerprints:[[FingerprintQueryInput!]!]!) { findScenesBySceneFingerprints(fingerprints:$fingerprints) { " + SCENE_FIELDS + " } }",
+                "variables": {"fingerprints": [[{"algorithm": fp.algorithm, "hash": fp.hash}]]},
+            })
+            response.raise_for_status()
+            body = response.json()
+            if body.get("errors"):
+                raise RuntimeError("Provider rejected fingerprint lookup")
+            batches = (body.get("data") or {}).get("findScenesBySceneFingerprints") or []
+            return [candidate for scene in (batches[0] if batches else [])[:request.limit]
+                    for candidate in self._map_scene(scene, 0.95)]
         external_id = self._external_id_for_request(request)
         if external_id:
             results = await self._query_by_id(client, "scene", external_id)
@@ -910,3 +923,13 @@ class StashBoxSource(Source):
             )
 
         return candidates
+
+# Current Stash-box upstream schema (FansDB/custom installations). Legacy StashDB
+# search roots remain selectable because deployed versions differ.
+STANDARD_PERFORMER_FIELDS = PERFORMER_FIELDS.replace("  death_date\n", "")
+QUERIES["standard"] = {
+    "performer": f"query($term:String!){{ searchPerformer(term:$term){{ {STANDARD_PERFORMER_FIELDS} }} }}",
+    "studio": f"query($term:String!){{ findStudio(name:$term){{ {STUDIO_FIELDS} }} }}",
+    "scene": f"query($term:String!){{ searchScene(term:$term){{ {SCENE_FIELDS} }} }}",
+    "tag": f"query($term:String!){{ findTag(name:$term){{ {TAG_FIELDS} }} }}",
+}

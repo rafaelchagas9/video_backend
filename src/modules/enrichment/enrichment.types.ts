@@ -33,7 +33,16 @@ export interface Candidate {
 }
 
 /** Discovery input sent to the Python service. */
+export interface FingerprintInput {
+  algorithm: "OSHASH" | "PHASH";
+  hash: string;
+  duration?: number;
+}
+
 export interface EnrichRequest {
+  scraper_url?: string;
+  fingerprint?: FingerprintInput;
+  stash_scene_id?: string;
   name: string;
   entity_type: EntityType;
   aliases: string[];
@@ -62,6 +71,10 @@ export interface EnrichmentHealthResponse {
 }
 
 export interface RunEnrichmentOptions {
+  scraper_url?: string;
+  fingerprint?: FingerprintInput;
+  stash_scene_id?: string;
+  identify_by_hash?: boolean;
   sources?: string[];
   search_name?: string;
   limit?: number;
@@ -100,7 +113,7 @@ export interface RunDTO {
   status: string;
   sources_used: unknown;
   suggestion_count: number;
-  errors: unknown;
+  errors: string[] | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -116,9 +129,9 @@ export interface RelationalRaw {
 /** What a scene reset undid. */
 export interface SceneResetDTO {
   /** Proposals deleted (pending, accepted and rejected), so a rescan starts clean. */
-  suggestions_cleared: number
+  suggestions_cleared: number;
   /** Fields put back to empty: title, description, release_date, code, director, cover_image_url. */
-  fields_cleared: string[]
+  fields_cleared: string[];
   /** Cast, studio, tag and source-id links removed. */
-  links_removed: number
+  links_removed: number;
 }

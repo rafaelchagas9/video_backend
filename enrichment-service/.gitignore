@@ -6,3 +6,6 @@ __pycache__/
 # API exploration dumps
 tmp/
 *.dump.json
+
+# Private write-only metadata source credentials
+data/providers.json

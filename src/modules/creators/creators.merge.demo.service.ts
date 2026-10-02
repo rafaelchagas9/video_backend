@@ -3,6 +3,7 @@ import {
   getDemoSqlite,
   withDemoTransaction,
 } from "@/database/demo";
+import { mergeDemoCollections } from "@/modules/creator-collections/creator-collections.storage";
 import { BadRequestError, ConflictError, NotFoundError } from "@/utils/errors";
 
 type DemoRow = Record<string, unknown>;
@@ -91,8 +92,9 @@ function copyScopedRows(
   fromId: number,
   intoId: number,
   transform: (row: DemoRow, index: number) => DemoRow = (row) => row
-): void {
+): Map<number, number> {
   const sqlite = getDemoSqlite();
+  const idMap = new Map<number, number>();
   const sourceRows = rows(table, fromId);
   const maxRow = sqlite
     .query(
@@ -106,6 +108,7 @@ function copyScopedRows(
       { ...sourceRow, id: ++nextId, creator_id: intoId },
       nextId
     );
+    idMap.set(Number(sourceRow.id), Number(copied.id));
     const columns = Object.keys(copied);
     const placeholders = columns.map(() => "?").join(", ");
     sqlite
@@ -116,13 +119,12 @@ function copyScopedRows(
   }
 
   sqlite.query(`DELETE FROM ${table} WHERE creator_id = ?`).run(fromId);
+  return idMap;
 }
 
 function moveJunction(
   table:
-    | "demo_video_creators"
-    | "demo_creator_studios"
-    | "demo_creator_favorites",
+    "demo_video_creators" | "demo_creator_studios" | "demo_creator_favorites",
   scopeColumn: "video_id" | "studio_id" | "user_id",
   fromId: number,
   intoId: number
@@ -358,9 +360,16 @@ export class CreatorsMergeDemoService {
           .get(intoId) as { id: number } | null
       )?.id;
 
+      let galleryIdMap = new Map<number, number>();
       for (const table of SCOPED_CHILD_TABLES) {
-        copyScopedRows(table, fromId, intoId);
+        const movedIds = copyScopedRows(table, fromId, intoId);
+        if (table === "demo_creator_gallery") galleryIdMap = movedIds;
       }
+      const collectionMerge = mergeDemoCollections(
+        fromId,
+        intoId,
+        galleryIdMap
+      );
       movePlatforms(fromId, intoId);
 
       const existingSourceNameAlias = sqlite
@@ -433,6 +442,7 @@ export class CreatorsMergeDemoService {
         sourceSuggestions,
         sourceRuns,
         sourceFaceResources,
+        collectionMerge,
       });
 
       for (const table of SOURCE_REFERENCE_TABLES) {

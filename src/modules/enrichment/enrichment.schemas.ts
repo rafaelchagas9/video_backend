@@ -7,19 +7,25 @@ export const entityParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
-export const enrichmentSourceEnum = z.enum(["theporndb", "stashdb"]);
+export const enrichmentSourceEnum = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 
 export const runEnrichmentBodySchema = z
   .object({
-    sources: z
-      .array(enrichmentSourceEnum)
-      .min(1)
-      .max(2)
-      .optional(),
+    sources: z.array(enrichmentSourceEnum).min(1).max(20).optional(),
     source: enrichmentSourceEnum.optional(),
     search_name: z.string().trim().min(1).max(255).optional(),
     limit: z.coerce.number().int().min(1).max(25).optional(),
     external_ref: z.string().trim().min(1).max(2048).optional(),
+    scraper_url: z.httpUrl().max(2048).optional(),
+    fingerprint: z
+      .object({
+        algorithm: z.enum(["OSHASH", "PHASH"]),
+        hash: z.string().regex(/^[0-9a-fA-F]{16}$/),
+        duration: z.number().nonnegative().optional(),
+      })
+      .optional(),
+    stash_scene_id: z.string().min(1).max(255).optional(),
+    identify_by_hash: z.boolean().optional(),
   })
   .strict()
   .nullish();
@@ -67,10 +73,9 @@ export const resolveSuggestionsBodySchema = z
   .refine((body) => body.accept.length + body.reject.length > 0, {
     message: "Nothing to resolve",
   })
-  .refine(
-    (body) => !body.accept.some((id) => body.reject.includes(id)),
-    { message: "An id cannot be both accepted and rejected" }
-  );
+  .refine((body) => !body.accept.some((id) => body.reject.includes(id)), {
+    message: "An id cannot be both accepted and rejected",
+  });
 
 export const resolveSuggestionsResponseSchema = z.object({
   success: z.literal(true),
@@ -128,7 +133,7 @@ const runSchema = z.object({
   status: z.string(),
   sources_used: z.any().nullable(),
   suggestion_count: z.number(),
-  errors: z.any().nullable(),
+  errors: z.array(z.string()).nullable(),
   started_at: z.string(),
   finished_at: z.string().nullable(),
 });

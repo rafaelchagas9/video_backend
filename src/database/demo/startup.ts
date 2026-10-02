@@ -10,6 +10,7 @@ import {
   hasDemoSeed,
 } from "./seed";
 import { resetDemoRuntimeAssets } from "./assets";
+import { applyDemoMetadataOverlay } from "./metadata-overlay";
 
 /** Prepare demo state without ever consulting the legacy JSON fixture. */
 export function prepareDemoDatabaseForStartup(
@@ -33,4 +34,5 @@ export function prepareDemoDatabaseForStartup(
   }
   ensureDemoSourceMetadataCreators();
   ensureDemoMissingVideoExamples();
+  applyDemoMetadataOverlay();
 }

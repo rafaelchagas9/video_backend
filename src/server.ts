@@ -581,6 +581,10 @@ export async function buildServer() {
       const { librarySyncRoutes } =
         await import("./modules/library-sync/library-sync.routes");
 
+      const { vrRoutes } = await import("./modules/vr/vr.routes");
+      const { creatorCollectionsRoutes } = await import("./modules/creator-collections/creator-collections.routes");
+      await instance.register(vrRoutes, { prefix: "/vr" });
+      await instance.register(creatorCollectionsRoutes, { prefix: "/creator-collections" });
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
       await instance.register(videosRoutes, { prefix: "/videos" });

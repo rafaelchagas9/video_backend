@@ -1,7 +1,7 @@
 import { BadRequestError } from "@/utils/errors";
 import type { EntityType } from "./enrichment.types";
 
-export type EnrichmentSource = "theporndb" | "stashdb";
+export type EnrichmentSource = string;
 
 export interface ExactExternalReference {
   source: EnrichmentSource;
@@ -11,6 +11,7 @@ export interface ExactExternalReference {
 const SOURCE_BY_HOST: Record<string, EnrichmentSource> = {
   "theporndb.net": "theporndb",
   "stashdb.org": "stashdb",
+  "fansdb.cc": "fansdb",
 };
 
 const ENTITY_BY_PATH_SEGMENT: Record<string, EntityType> = {
@@ -31,6 +32,7 @@ const ENTITY_BY_PATH_SEGMENT: Record<string, EntityType> = {
 const PROFILE_BASE: Record<EnrichmentSource, string> = {
   theporndb: "https://theporndb.net",
   stashdb: "https://stashdb.org",
+  fansdb: "https://fansdb.cc",
 };
 
 const PROFILE_SEGMENT: Record<EntityType, string> = {
@@ -44,7 +46,7 @@ const PROFILE_SEGMENT: Record<EntityType, string> = {
 export function externalProfileUrl(
   source: string,
   externalId: string,
-  entityType: EntityType = "creator",
+  entityType: EntityType = "creator"
 ): string | null {
   const base = PROFILE_BASE[source as EnrichmentSource];
   if (!base) return null;
@@ -68,11 +70,10 @@ function validateExternalId(value: string): string {
 }
 
 function asKnownUrl(reference: string): URL | null {
-  const withScheme = /^(?:www\.)?(?:theporndb\.net|stashdb\.org)\//i.test(
-    reference,
-  )
-    ? `https://${reference}`
-    : reference;
+  const withScheme =
+    /^(?:www\.)?(?:theporndb\.net|stashdb\.org|fansdb\.cc)\//i.test(reference)
+      ? `https://${reference}`
+      : reference;
 
   if (!/^https?:\/\//i.test(withScheme)) return null;
 
@@ -99,7 +100,7 @@ function decodePathSegment(segment: string): string {
 export function parseExactExternalReference(
   reference: string,
   entityType: EntityType,
-  requestedSources?: string[],
+  requestedSources?: string[]
 ): ExactExternalReference {
   const trimmed = reference.trim();
   if (!trimmed) {
@@ -111,11 +112,11 @@ export function parseExactExternalReference(
     const sources = [...new Set(requestedSources ?? [])];
     if (sources.length !== 1) {
       throw new BadRequestError(
-        "Select exactly one enrichment source when using a raw external ID",
+        "Select exactly one enrichment source when using a raw external ID"
       );
     }
     const source = sources[0];
-    if (source !== "theporndb" && source !== "stashdb") {
+    if (!source || !/^[a-z][a-z0-9_-]{0,63}$/.test(source)) {
       throw new BadRequestError("Unsupported enrichment source");
     }
     return { source, externalId: validateExternalId(trimmed) };
@@ -128,7 +129,7 @@ export function parseExactExternalReference(
   const source = SOURCE_BY_HOST[normalizeHost(url.hostname)];
   if (!source) {
     throw new BadRequestError(
-      "External URL must be from theporndb.net or stashdb.org",
+      "External URL must be from theporndb.net, stashdb.org or fansdb.cc; use a raw ID for custom sources"
     );
   }
 
@@ -137,11 +138,11 @@ export function parseExactExternalReference(
     .filter(Boolean)
     .map(decodePathSegment);
   const entityIndex = segments.findIndex(
-    (segment) => ENTITY_BY_PATH_SEGMENT[segment.toLowerCase()] !== undefined,
+    (segment) => ENTITY_BY_PATH_SEGMENT[segment.toLowerCase()] !== undefined
   );
   if (entityIndex < 0) {
     throw new BadRequestError(
-      "Enrichment URL does not identify a supported entity",
+      "Enrichment URL does not identify a supported entity"
     );
   }
 
@@ -149,7 +150,7 @@ export function parseExactExternalReference(
     ENTITY_BY_PATH_SEGMENT[segments[entityIndex]!.toLowerCase()];
   if (referencedEntity !== entityType) {
     throw new BadRequestError(
-      `Enrichment URL targets ${referencedEntity}, not ${entityType}`,
+      `Enrichment URL targets ${referencedEntity}, not ${entityType}`
     );
   }
 

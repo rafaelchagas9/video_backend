@@ -59,3 +59,13 @@ export interface CleanupOverview {
     activity: Array<{ date: string; count: number; bytes: number }>;
   };
 }
+
+export type CleanupFocusKind = "creator" | "studio" | "directory";
+export interface CleanupFocusGroup {
+  kind: CleanupFocusKind;
+  id: number;
+  name: string;
+  remaining_count: number;
+  remaining_bytes: number;
+  reviewed_count: number;
+}

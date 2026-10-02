@@ -16,6 +16,19 @@ export async function cleanupRoutes(fastify: FastifyInstance): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook("preHandler", authenticateUser);
   app.get(
+    "/focus",
+    {
+      schema: {
+        tags: ["cleanup"],
+        summary: "Rank creator, studio and directory groups for storage review",
+      },
+    },
+    async (request) => ({
+      success: true,
+      data: await cleanupService.focus(request.user!.id),
+    })
+  );
+  app.get(
     "/overview",
     {
       schema: {

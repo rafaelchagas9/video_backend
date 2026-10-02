@@ -21,6 +21,12 @@ type ServerModule = typeof import("@/server");
 type AppInstance = Awaited<ReturnType<ServerModule["buildServer"]>>;
 
 function concretePath(path: string, entityType = "creator"): string {
+  if (path.startsWith("/api/enrichment/providers/"))
+    return path.replace("{id}", "fansdb");
+  if (path.startsWith("/api/creator-collections/"))
+    return path
+      .replace("{creatorId}", "1")
+      .replace("{id}", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   if (path.startsWith("/api/saved-views/")) {
     return path.replace("{id}", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   }
@@ -291,7 +297,7 @@ describe("demo mode runtime route coverage", () => {
     });
   });
 
-  it("requires an explicit manifest record for all 313 primary operations", () => {
+  it("requires an explicit manifest record for all 337 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -302,8 +308,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(315);
-    expect(manifestKeys).toHaveLength(315);
+    expect(runtimeOperationKeys).toHaveLength(337);
+    expect(manifestKeys).toHaveLength(337);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -331,7 +337,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 315,
+      allowed: 337,
       blocked: 0,
       conditional: 0,
     });
@@ -340,6 +346,31 @@ describe("demo mode runtime route coverage", () => {
         (scenario) => scenario.verification === "http-contract"
       )
     ).toHaveLength(189);
+  });
+
+  it("filters storage review by a ranked creator group", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/cleanup/focus",
+    });
+    expect(response.statusCode).toBe(200);
+    const group = response
+      .json()
+      .data.find((item: { kind: string }) => item.kind === "creator");
+    expect(group.remaining_count).toBeGreaterThan(0);
+    const filtered = await app.inject({
+      method: "GET",
+      url: `/api/cleanup/candidates?limit=100&creator_id=${group.id}`,
+    });
+    expect(filtered.statusCode).toBe(200);
+    const result = filtered.json();
+    expect(result.data.length).toBeGreaterThan(0);
+    for (const candidate of result.data)
+      expect(
+        candidate.creators.some(
+          (creator: { id: number }) => creator.id === group.id
+        )
+      ).toBe(true);
   });
 
   it("persists cleanup review progress without deleting demo media", async () => {
@@ -424,11 +455,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 133 generated HEAD counterparts", () => {
+  it("registers and classifies all 145 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(135);
+    expect(getScenarios).toHaveLength(145);
 
     for (const scenario of getScenarios) {
       expect(
@@ -808,8 +839,13 @@ describe("demo mode runtime route coverage", () => {
       url: "/api/enrichment/scene/1/resolution",
     });
     expect(preview.statusCode).toBe(200);
-    const previews = preview.json().data as Array<{ kind: string; match: unknown }>;
-    expect(previews.filter((item) => item.kind === "tag").length).toBeGreaterThanOrEqual(40);
+    const previews = preview.json().data as Array<{
+      kind: string;
+      match: unknown;
+    }>;
+    expect(
+      previews.filter((item) => item.kind === "tag").length
+    ).toBeGreaterThanOrEqual(40);
     expect(previews.some((item) => item.kind === "creator")).toBe(true);
   });
 

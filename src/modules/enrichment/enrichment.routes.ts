@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import { registerProviderRoutes } from "./enrichment.providers";
 import { enrichmentService } from "./enrichment.service";
 import {
   entityParamSchema,
@@ -20,11 +21,13 @@ import {
 } from "./enrichment.schemas";
 
 export async function enrichmentRoutes(
-  fastify: FastifyInstance,
+  fastify: FastifyInstance
 ): Promise<void> {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   app.addHook("preHandler", authenticateUser);
+
+  registerProviderRoutes(app);
 
   // Run discovery for an entity (creator | studio | scene | tag)
   app.post(
@@ -53,18 +56,23 @@ export async function enrichmentRoutes(
         request.params.id,
         {
           sources:
-            body.sources ?? (body.source !== undefined ? [body.source] : undefined),
+            body.sources ??
+            (body.source !== undefined ? [body.source] : undefined),
           search_name: body.search_name,
           limit: body.limit,
           external_ref: body.external_ref,
-        },
+          scraper_url: body.scraper_url,
+          fingerprint: body.fingerprint,
+          stash_scene_id: body.stash_scene_id,
+          identify_by_hash: body.identify_by_hash,
+        }
       );
       return reply.send({
         success: true,
         data: run,
         message: `Enrichment ${run.status}: ${run.suggestion_count} new suggestions`,
       });
-    },
+    }
   );
 
   // List enrichment runs for an entity
@@ -84,10 +92,10 @@ export async function enrichmentRoutes(
     async (request, reply) => {
       const runs = await enrichmentService.listRuns(
         request.params.entityType,
-        request.params.id,
+        request.params.id
       );
       return reply.send({ success: true, data: runs });
-    },
+    }
   );
 
   // List suggestions (filterable)
@@ -107,9 +115,11 @@ export async function enrichmentRoutes(
       },
     },
     async (request, reply) => {
-      const suggestions = await enrichmentService.listSuggestions(request.query);
+      const suggestions = await enrichmentService.listSuggestions(
+        request.query
+      );
       return reply.send({ success: true, data: suggestions });
-    },
+    }
   );
 
   // What each pending performer / studio / tag proposal would link to (read-only).
@@ -134,10 +144,10 @@ export async function enrichmentRoutes(
     async (request, reply) => {
       const data = await enrichmentService.previewResolution(
         request.params.entityType,
-        request.params.id,
+        request.params.id
       );
       return reply.send({ success: true, data });
-    },
+    }
   );
 
   // Decide many suggestions in one request — a whole review pass at once.
@@ -161,7 +171,7 @@ export async function enrichmentRoutes(
     async (request, reply) => {
       const result = await enrichmentService.resolveSuggestions(request.body);
       return reply.send({ success: true, data: result });
-    },
+    }
   );
 
   // Undo a scene's enrichment: applied metadata, links and every proposal.
@@ -191,7 +201,7 @@ export async function enrichmentRoutes(
         data,
         message: `Cleared ${data.suggestions_cleared} proposals and ${data.links_removed} links`,
       });
-    },
+    }
   );
 
   // Accept a suggestion (writes through existing entity writers)
@@ -215,14 +225,14 @@ export async function enrichmentRoutes(
     },
     async (request, reply) => {
       const suggestion = await enrichmentService.acceptSuggestion(
-        request.params.id,
+        request.params.id
       );
       return reply.send({
         success: true,
         data: suggestion,
         message: "Suggestion accepted",
       });
-    },
+    }
   );
 
   // Reject a suggestion
@@ -242,13 +252,13 @@ export async function enrichmentRoutes(
     },
     async (request, reply) => {
       const suggestion = await enrichmentService.rejectSuggestion(
-        request.params.id,
+        request.params.id
       );
       return reply.send({
         success: true,
         data: suggestion,
         message: "Suggestion rejected",
       });
-    },
+    }
   );
 }

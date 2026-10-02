@@ -8,6 +8,9 @@ export const cleanupDispositionSchema = z.enum([
 ]);
 
 export const cleanupCandidatesQuerySchema = z.object({
+  creator_id: z.coerce.number().int().positive().optional(),
+  studio_id: z.coerce.number().int().positive().optional(),
+  directory_id: z.coerce.number().int().positive().optional(),
   disposition: cleanupDispositionSchema.default("unreviewed"),
   limit: z.coerce.number().int().positive().max(100).default(24),
   offset: z.coerce.number().int().nonnegative().default(0),

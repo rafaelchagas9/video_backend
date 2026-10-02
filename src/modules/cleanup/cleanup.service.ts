@@ -1,3 +1,9 @@
+import { basename, dirname } from "node:path";
+import { getDemoSqlite } from "@/database/demo/client";
+import {
+  buildCleanupFocusGroups,
+  type CleanupFocusMembership,
+} from "./cleanup.focus";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
@@ -15,6 +21,47 @@ const MIN_AGE_DAYS = 30;
 const MAX_WATCH_SECONDS = 300;
 const MAX_WATCH_FRACTION = 0.1;
 const DAILY_GOAL = 10;
+
+function candidateRankingSql(userId: number) {
+  return sql`
+      WITH engagement AS (
+        SELECT v.id,
+          COALESCE(SUM(vs.play_count), 0)::int AS play_count,
+          COALESCE(SUM(vs.total_watch_seconds), 0)::real AS total_watch_seconds,
+          MAX(COALESCE(vs.last_watch_at, vs.last_played_at)) AS last_watched_at
+        FROM videos v
+        LEFT JOIN video_stats vs ON vs.video_id = v.id AND vs.user_id = ${userId}
+        GROUP BY v.id
+      ), signals AS (
+        SELECT v.id, v.directory_id, v.title, v.file_name, v.file_size_bytes, v.duration_seconds,
+          v.indexed_at, v.codec, v.bitrate, t.id AS thumbnail_id,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name) ORDER BY c.name)
+            FROM video_creators vc JOIN creators c ON c.id = vc.creator_id WHERE vc.video_id = v.id), '[]'::jsonb) creators,
+          e.play_count, e.total_watch_seconds, e.last_watched_at,
+          EXISTS(SELECT 1 FROM favorites f WHERE f.video_id=v.id AND f.user_id=${userId}) favorite,
+          EXISTS(SELECT 1 FROM video_creators vc JOIN creator_favorites cf ON cf.creator_id=vc.creator_id AND cf.user_id=${userId} WHERE vc.video_id=v.id) favorited_creator,
+          EXISTS(SELECT 1 FROM ratings r WHERE r.video_id=v.id AND r.rating>=4) high_rating,
+          EXISTS(SELECT 1 FROM bookmarks b WHERE b.video_id=v.id AND b.user_id=${userId}) bookmark,
+          EXISTS(SELECT 1 FROM playlist_videos pv JOIN playlists p ON p.id=pv.playlist_id AND p.user_id=${userId} WHERE pv.video_id=v.id) playlist,
+          EXISTS(SELECT 1 FROM video_collection_entries vce WHERE vce.video_id=v.id) collection,
+          (EXISTS(SELECT 1 FROM conversion_jobs cj WHERE cj.video_id=v.id AND cj.status IN ('pending','processing'))
+            OR EXISTS(SELECT 1 FROM edit_jobs ej WHERE ej.active_video_id=v.id)) active_job,
+          cr.disposition, cr.revision, cr.updated_at reviewed_at
+        FROM videos v
+        JOIN engagement e ON e.id=v.id
+        LEFT JOIN thumbnails t ON t.video_id=v.id
+        LEFT JOIN cleanup_reviews cr ON cr.video_id=v.id AND cr.user_id=${userId}
+        WHERE v.is_available=true
+      ), ranked AS (
+        SELECT *,
+          (indexed_at <= NOW() - INTERVAL '30 days'
+            AND total_watch_seconds < GREATEST(${MAX_WATCH_SECONDS}::real, COALESCE(duration_seconds,0)*${MAX_WATCH_FRACTION}::real)
+            AND NOT favorite AND NOT favorited_creator AND NOT high_rating
+            AND NOT bookmark AND NOT playlist AND NOT active_job) AS eligible
+        FROM signals
+      )
+`;
+}
 
 type RawCandidate = {
   id: number | string;
@@ -129,53 +176,28 @@ function mapCandidate(row: RawCandidate): CleanupCandidate {
 export class CleanupService {
   async listCandidates(
     userId: number,
-    options: { disposition: CleanupDisposition; limit: number; offset: number }
+    options: {
+      disposition: CleanupDisposition;
+      limit: number;
+      offset: number;
+      creator_id?: number;
+      studio_id?: number;
+      directory_id?: number;
+    }
   ): Promise<{ data: CleanupCandidate[]; total: number }> {
     if (env.DEMO_MODE)
       return cleanupDemoService.listCandidates(userId, options);
     const rows = (await db.execute(sql`
-      WITH engagement AS (
-        SELECT v.id,
-          COALESCE(SUM(vs.play_count), 0)::int AS play_count,
-          COALESCE(SUM(vs.total_watch_seconds), 0)::real AS total_watch_seconds,
-          MAX(COALESCE(vs.last_watch_at, vs.last_played_at)) AS last_watched_at
-        FROM videos v
-        LEFT JOIN video_stats vs ON vs.video_id = v.id AND vs.user_id = ${userId}
-        GROUP BY v.id
-      ), signals AS (
-        SELECT v.id, v.title, v.file_name, v.file_size_bytes, v.duration_seconds,
-          v.indexed_at, v.codec, v.bitrate, t.id AS thumbnail_id,
-          COALESCE((SELECT jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name) ORDER BY c.name)
-            FROM video_creators vc JOIN creators c ON c.id = vc.creator_id WHERE vc.video_id = v.id), '[]'::jsonb) creators,
-          e.play_count, e.total_watch_seconds, e.last_watched_at,
-          EXISTS(SELECT 1 FROM favorites f WHERE f.video_id=v.id AND f.user_id=${userId}) favorite,
-          EXISTS(SELECT 1 FROM video_creators vc JOIN creator_favorites cf ON cf.creator_id=vc.creator_id AND cf.user_id=${userId} WHERE vc.video_id=v.id) favorited_creator,
-          EXISTS(SELECT 1 FROM ratings r WHERE r.video_id=v.id AND r.rating>=4) high_rating,
-          EXISTS(SELECT 1 FROM bookmarks b WHERE b.video_id=v.id AND b.user_id=${userId}) bookmark,
-          EXISTS(SELECT 1 FROM playlist_videos pv JOIN playlists p ON p.id=pv.playlist_id AND p.user_id=${userId} WHERE pv.video_id=v.id) playlist,
-          EXISTS(SELECT 1 FROM video_collection_entries vce WHERE vce.video_id=v.id) collection,
-          (EXISTS(SELECT 1 FROM conversion_jobs cj WHERE cj.video_id=v.id AND cj.status IN ('pending','processing'))
-            OR EXISTS(SELECT 1 FROM edit_jobs ej WHERE ej.active_video_id=v.id)) active_job,
-          cr.disposition, cr.revision, cr.updated_at reviewed_at
-        FROM videos v
-        JOIN engagement e ON e.id=v.id
-        LEFT JOIN thumbnails t ON t.video_id=v.id
-        LEFT JOIN cleanup_reviews cr ON cr.video_id=v.id AND cr.user_id=${userId}
-        WHERE v.is_available=true
-      ), ranked AS (
-        SELECT *,
-          (indexed_at <= NOW() - INTERVAL '30 days'
-            AND total_watch_seconds < GREATEST(${MAX_WATCH_SECONDS}::real, COALESCE(duration_seconds,0)*${MAX_WATCH_FRACTION}::real)
-            AND NOT favorite AND NOT favorited_creator AND NOT high_rating
-            AND NOT bookmark AND NOT playlist AND NOT active_job) AS eligible
-        FROM signals
-      )
+      ${candidateRankingSql(userId)}
       SELECT *, COUNT(*) OVER() AS total_rows
       FROM ranked
       WHERE CASE
         WHEN ${options.disposition} = 'unreviewed' THEN disposition IS NULL AND eligible
         ELSE disposition = ${options.disposition}
       END
+      AND (${options.creator_id ?? null}::int IS NULL OR EXISTS(SELECT 1 FROM video_creators vc JOIN creators c ON c.id=vc.creator_id WHERE vc.video_id=ranked.id AND vc.creator_id=${options.creator_id ?? null}))
+      AND (${options.studio_id ?? null}::int IS NULL OR EXISTS(SELECT 1 FROM video_studios vs JOIN studios s ON s.id=vs.studio_id WHERE vs.video_id=ranked.id AND vs.studio_id=${options.studio_id ?? null}))
+      AND (${options.directory_id ?? null}::int IS NULL OR directory_id=${options.directory_id ?? null})
       ORDER BY file_size_bytes DESC, id DESC
       LIMIT ${options.limit} OFFSET ${options.offset}
     `)) as unknown as RawCandidate[];
@@ -183,6 +205,99 @@ export class CleanupService {
       data: rows.map(mapCandidate),
       total: Number(rows[0]?.total_rows ?? 0),
     };
+  }
+
+  async focus(userId: number) {
+    if (!env.DEMO_MODE) {
+      const rows = await db.execute(sql`
+        ${candidateRankingSql(userId)}, memberships AS (
+          SELECT DISTINCT r.id video_id, 'creator' kind, c.id, c.name
+          FROM ranked r JOIN video_creators vc ON vc.video_id=r.id JOIN creators c ON c.id=vc.creator_id
+          UNION
+          SELECT DISTINCT r.id video_id, 'studio' kind, s.id, s.name
+          FROM ranked r JOIN video_studios vs ON vs.video_id=r.id JOIN studios s ON s.id=vs.studio_id
+          UNION
+          SELECT r.id video_id, 'directory' kind, d.id, d.path name
+          FROM ranked r JOIN watched_directories d ON d.id=r.directory_id
+        )
+        SELECT m.kind,m.id,m.name,
+          COUNT(*) FILTER (WHERE r.disposition IS NULL AND r.eligible)::int remaining_count,
+          COALESCE(SUM(r.file_size_bytes) FILTER (WHERE r.disposition IS NULL AND r.eligible),0)::bigint remaining_bytes,
+          COUNT(*) FILTER (WHERE r.disposition IS NOT NULL)::int reviewed_count
+        FROM memberships m JOIN ranked r ON r.id=m.video_id
+        GROUP BY m.kind,m.id,m.name
+        HAVING COUNT(*) FILTER (WHERE r.disposition IS NULL AND r.eligible)>0
+            OR COUNT(*) FILTER (WHERE r.disposition IS NOT NULL)>0
+        ORDER BY remaining_bytes DESC,m.name,m.id
+      `);
+      return rows.map((row) => ({
+        kind: row.kind as CleanupFocusMembership["kind"],
+        id: Number(row.id),
+        name: String(row.name),
+        remaining_count: Number(row.remaining_count),
+        remaining_bytes: Number(row.remaining_bytes),
+        reviewed_count: Number(row.reviewed_count),
+      }));
+    }
+    const candidates: CleanupCandidate[] = [];
+    for (const disposition of [
+      "unreviewed",
+      "keep",
+      "delete",
+      "later",
+    ] as const) {
+      let offset = 0;
+      for (;;) {
+        const page = await this.listCandidates(userId, {
+          disposition,
+          limit: 500,
+          offset,
+        });
+        candidates.push(...page.data);
+        if (page.data.length < 500) break;
+        offset += 500;
+      }
+    }
+    const memberships: CleanupFocusMembership[] = candidates.flatMap((video) =>
+      video.creators.map((creator) => ({
+        video_id: video.id,
+        kind: "creator" as const,
+        id: creator.id,
+        name: creator.name,
+      }))
+    );
+    const rows = getDemoSqlite()
+      .query<
+        {
+          video_id: number;
+          directory_id: number;
+          file_path: string;
+          studio_id: number | null;
+          studio_name: string | null;
+        },
+        []
+      >(
+        `SELECT v.id video_id,v.directory_id,v.file_path,s.id studio_id,s.name studio_name FROM demo_videos v LEFT JOIN demo_video_studios vs ON vs.video_id=v.id LEFT JOIN demo_studios s ON s.id=vs.studio_id`
+      )
+      .all();
+    for (const row of rows) {
+      memberships.push({
+        video_id: row.video_id,
+        kind: "directory",
+        id: row.directory_id,
+        name:
+          basename(env.DEMO_MODE ? dirname(row.file_path) : row.file_path) ||
+          "Directory",
+      });
+      if (row.studio_id != null)
+        memberships.push({
+          video_id: row.video_id,
+          kind: "studio",
+          id: row.studio_id,
+          name: row.studio_name ?? "Studio",
+        });
+    }
+    return buildCleanupFocusGroups(candidates, memberships);
   }
 
   async overview(userId: number): Promise<CleanupOverview> {

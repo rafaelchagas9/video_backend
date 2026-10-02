@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     enable_theporndb: bool = True
     enable_stashdb: bool = False
 
+    fansdb_api_key: str = ""
+    fansdb_endpoint: str = "https://fansdb.cc/graphql"
+    enable_fansdb: bool = False
+    stash_endpoint: str = ""
+    stash_api_key: str = ""
+    enable_stash: bool = False
+    provider_config_path: str = str(_SERVICE_DIR / "data" / "providers.json")
+
     # HTTP
     request_timeout_seconds: float = 30.0
 

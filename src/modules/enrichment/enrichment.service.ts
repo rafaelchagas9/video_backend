@@ -7,6 +7,8 @@
  * is ever auto-applied.
  */
 
+import { computeVideoOshash } from "./enrichment.fingerprint";
+import { loadEnrichmentImage } from "./enrichment.images";
 import { createHash } from "crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
@@ -220,6 +222,16 @@ export class EnrichmentService {
       return enrichmentDemoService.runEnrichment(entityType, entityId, options);
     }
 
+    if (
+      (options.identify_by_hash ||
+        options.fingerprint ||
+        options.stash_scene_id) &&
+      entityType !== "scene"
+    ) {
+      throw new BadRequestError(
+        "Fingerprints identify videos; use a creator profile URL for creator metadata"
+      );
+    }
     const request = await this.gatherInputs(entityType, entityId, options);
 
     const [run] = await db
@@ -273,7 +285,10 @@ export class EnrichmentService {
         .update(enrichmentRunsTable)
         .set({
           entityId: canonicalEntityId,
-          status: "success",
+          status:
+            result.errors.length > 0 && result.sources_used.length === 0
+              ? "error"
+              : "success",
           sourcesUsed: result.sources_used,
           suggestionCount: inserted,
           errors: result.errors.length > 0 ? result.errors : null,
@@ -367,6 +382,16 @@ export class EnrichmentService {
           ? { sources: options.sources }
           : {}),
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(options.scraper_url
+        ? {
+            scraper_url: options.scraper_url,
+            sources: options.sources ?? ["stash"],
+          }
+        : {}),
+      ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
+      ...(options.stash_scene_id
+        ? { stash_scene_id: options.stash_scene_id }
+        : {}),
     });
 
     switch (entityType) {
@@ -387,8 +412,18 @@ export class EnrichmentService {
           .select({ username: creatorPlatformsTable.username })
           .from(creatorPlatformsTable)
           .where(eq(creatorPlatformsTable.creatorId, entityId));
+        const externalIds = options.search_name
+          ? []
+          : await db
+              .select({
+                source: creatorExternalIdsTable.source,
+                external_id: creatorExternalIdsTable.externalId,
+              })
+              .from(creatorExternalIdsTable)
+              .where(eq(creatorExternalIdsTable.creatorId, entityId));
         return applyRunOptions({
           entity_type: "creator",
+          external_ids: externalIds,
           name: creator.name,
           aliases: aliasRows.map((a) => a.name),
           handles: handleRows.map((h) => h.username),
@@ -407,8 +442,18 @@ export class EnrichmentService {
           .select({ name: studioAliasesTable.name })
           .from(studioAliasesTable)
           .where(eq(studioAliasesTable.studioId, entityId));
+        const externalIds = options.search_name
+          ? []
+          : await db
+              .select({
+                source: studioExternalIdsTable.source,
+                external_id: studioExternalIdsTable.externalId,
+              })
+              .from(studioExternalIdsTable)
+              .where(eq(studioExternalIdsTable.studioId, entityId));
         return applyRunOptions({
           entity_type: "studio",
+          external_ids: externalIds,
           name: studio.name,
           aliases: aliasRows.map((a) => a.name),
           handles: [],
@@ -427,8 +472,18 @@ export class EnrichmentService {
           .select({ name: tagAliasesTable.name })
           .from(tagAliasesTable)
           .where(eq(tagAliasesTable.tagId, entityId));
+        const externalIds = options.search_name
+          ? []
+          : await db
+              .select({
+                source: tagExternalIdsTable.source,
+                external_id: tagExternalIdsTable.externalId,
+              })
+              .from(tagExternalIdsTable)
+              .where(eq(tagExternalIdsTable.tagId, entityId));
         return applyRunOptions({
           entity_type: "tag",
+          external_ids: externalIds,
           name: tag.name,
           aliases: aliasRows.map((a) => a.name),
           handles: [],
@@ -443,8 +498,27 @@ export class EnrichmentService {
         if (!video) {
           throw new NotFoundError(`Video not found with id: ${entityId}`);
         }
+        const externalIds = options.search_name
+          ? []
+          : await db
+              .select({
+                source: videoExternalIdsTable.source,
+                external_id: videoExternalIdsTable.externalId,
+              })
+              .from(videoExternalIdsTable)
+              .where(eq(videoExternalIdsTable.videoId, entityId));
         return applyRunOptions({
           entity_type: "scene",
+          external_ids: externalIds,
+          ...(options.identify_by_hash
+            ? {
+                fingerprint: {
+                  algorithm: "OSHASH" as const,
+                  hash: await computeVideoOshash(video.filePath),
+                  duration: video.durationSeconds ?? undefined,
+                },
+              }
+            : {}),
           name: video.title || video.fileName,
           title: video.title,
           file_name: video.fileName,
@@ -640,7 +714,11 @@ export class EnrichmentService {
       await accept(id);
     }
     const images = body.accept.filter((id) => types.get(id) === "image");
-    for (let index = 0; index < images.length; index += RESOLVE_IMAGE_CONCURRENCY) {
+    for (
+      let index = 0;
+      index < images.length;
+      index += RESOLVE_IMAGE_CONCURRENCY
+    ) {
       await Promise.all(
         images.slice(index, index + RESOLVE_IMAGE_CONCURRENCY).map(accept)
       );
@@ -887,9 +965,9 @@ export class EnrichmentService {
     const creatorId = s.entityId;
     switch (s.type) {
       case "image":
-        await creatorsSocialService.addGalleryMediaFromUrl(
+        await creatorsSocialService.addGalleryMedia(
           creatorId,
-          s.value,
+          await loadEnrichmentImage(s.value),
           `From ${s.source}`
         );
         break;
@@ -1231,7 +1309,10 @@ export class EnrichmentService {
         )
       );
     const previews: ResolutionPreview[] = [];
-    const tagLooks = new Map<number, { color: string | null; category: string | null }>();
+    const tagLooks = new Map<
+      number,
+      { color: string | null; category: string | null }
+    >();
     for (const row of rows) {
       const kind = RELATED_KIND_BY_TYPE[row.type];
       if (!kind) continue;
@@ -1246,9 +1327,15 @@ export class EnrichmentService {
         let look = tagLooks.get(match.id);
         if (!look) {
           const [tag] = await db
-            .select({ color: tagsTable.color, category: tagCategoriesTable.name })
+            .select({
+              color: tagsTable.color,
+              category: tagCategoriesTable.name,
+            })
             .from(tagsTable)
-            .leftJoin(tagCategoriesTable, eq(tagCategoriesTable.id, tagsTable.categoryId))
+            .leftJoin(
+              tagCategoriesTable,
+              eq(tagCategoriesTable.id, tagsTable.categoryId)
+            )
             .where(eq(tagsTable.id, match.id))
             .limit(1);
           look = { color: tag?.color ?? null, category: tag?.category ?? null };
@@ -1272,7 +1359,11 @@ export class EnrichmentService {
     await db
       .insert(t.ext)
       .values({
-        [kind === "creator" ? "creatorId" : kind === "studio" ? "studioId" : "tagId"]: id,
+        [kind === "creator"
+          ? "creatorId"
+          : kind === "studio"
+            ? "studioId"
+            : "tagId"]: id,
         source,
         externalId,
         lastSyncedAt: new Date(),
@@ -1285,7 +1376,12 @@ export class EnrichmentService {
     source: string,
     externalId?: string | null
   ): Promise<number> {
-    const found = await this.findRelatedEntity("creator", name, source, externalId);
+    const found = await this.findRelatedEntity(
+      "creator",
+      name,
+      source,
+      externalId
+    );
     if (found) return found.id;
     const created = await creatorsService.quickCreate(name);
     await this.linkExternalId("creator", created.id, source, externalId);
@@ -1297,7 +1393,12 @@ export class EnrichmentService {
     source: string,
     externalId?: string | null
   ): Promise<number> {
-    const found = await this.findRelatedEntity("studio", name, source, externalId);
+    const found = await this.findRelatedEntity(
+      "studio",
+      name,
+      source,
+      externalId
+    );
     if (found) return found.id;
     const created = await studiosService.create({ name });
     await this.linkExternalId("studio", created.id, source, externalId);
@@ -1312,7 +1413,8 @@ export class EnrichmentService {
     const found = await this.findRelatedEntity("tag", name, source, externalId);
     if (found) {
       // Remember the source's id so the next scene resolves without guessing.
-      if (found.via !== "external_id") await this.linkExternalId("tag", found.id, source, externalId);
+      if (found.via !== "external_id")
+        await this.linkExternalId("tag", found.id, source, externalId);
       return found.id;
     }
     const created = await tagsService.create({ name: name.slice(0, 255) });
@@ -1528,7 +1630,11 @@ export class EnrichmentService {
       status: row.status,
       sources_used: row.sourcesUsed,
       suggestion_count: row.suggestionCount,
-      errors: row.errors,
+      errors: Array.isArray(row.errors)
+        ? row.errors.filter(
+            (value): value is string => typeof value === "string"
+          )
+        : null,
       started_at: row.startedAt.toISOString(),
       finished_at: row.finishedAt ? row.finishedAt.toISOString() : null,
     };

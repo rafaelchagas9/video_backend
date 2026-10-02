@@ -39,6 +39,12 @@ class Candidate(BaseModel):
     raw: dict[str, Any] | None = None
 
 
+class Fingerprint(BaseModel):
+    algorithm: Literal["OSHASH", "PHASH"]
+    hash: str = Field(pattern=r"^[0-9a-fA-F]{16}$")
+    duration: float | None = Field(default=None, ge=0)
+
+
 class EnrichRequest(BaseModel):
     """Discovery input for a single entity (creator / studio / scene / tag)."""
 
@@ -49,6 +55,9 @@ class EnrichRequest(BaseModel):
     # Exact external IDs to fetch, scoped by source name.
     external_ids: list[dict[str, str]] = Field(default_factory=list)
     # Scene (video) matching hints.
+    scraper_url: str | None = None
+    fingerprint: Fingerprint | None = None
+    stash_scene_id: str | None = None
     title: str | None = None
     file_name: str | None = None
     duration_seconds: float | None = None
