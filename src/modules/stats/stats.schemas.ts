@@ -39,8 +39,14 @@ const currentStorageStatsSchema = z.object({
   storyboards_size_bytes: z.number(),
   profile_pictures_size_bytes: z.number(),
   converted_size_bytes: z.number(),
+  faces_size_bytes: z.number(),
   database_size_bytes: z.number(),
   directory_breakdown: z.array(directoryStorageInfoSchema),
+  asset_breakdown: z.array(z.object({
+    key: z.string(),
+    label: z.string(),
+    size_bytes: z.number(),
+  })),
   total_managed_size_bytes: z.number(),
 });
 

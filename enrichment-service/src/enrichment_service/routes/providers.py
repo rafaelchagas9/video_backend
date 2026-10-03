@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..providers import configured_providers, save_provider, ProviderPatch
 from ..sources.stash import StashSource
+from ..stash_client import StashClient, StashError
 
 router = APIRouter(tags=["providers"])
 
@@ -18,9 +19,26 @@ async def providers():
 @router.patch("/providers/{provider_id}")
 async def update_provider(provider_id: str, patch: ProviderPatch):
     try:
-        return save_provider(get_settings(), provider_id, patch).public()
+        provider = save_provider(get_settings(), provider_id, patch)
     except ValueError:
         raise HTTPException(400, "Invalid provider configuration") from None
+    result = provider.public()
+    # Stash runs stash-box discovery, so it holds the same endpoint and key.
+    if provider.kind == "stashbox" and provider.endpoint and provider.api_key and (patch.api_key or patch.endpoint):
+        result["stash_synced"] = await sync_to_stash(provider)
+    return result
+
+
+async def sync_to_stash(provider) -> bool:
+    bridge = next((p for p in configured_providers(get_settings()) if p.kind == "stash" and p.endpoint), None)
+    if bridge is None:
+        return False
+    async with httpx.AsyncClient(timeout=get_settings().request_timeout_seconds) as client:
+        try:
+            await StashClient(bridge, client).upsert_stash_box(provider.endpoint, provider.name, provider.api_key)
+            return True
+        except (StashError, httpx.HTTPError):
+            return False
 
 
 def bridge():

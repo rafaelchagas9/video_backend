@@ -1,3 +1,4 @@
+import { watchHeatService } from "@/modules/discovery/watch-heat.service";
 import { db } from "@/config/drizzle";
 import { eq, and, sql, desc, isNotNull, inArray, isNull } from "drizzle-orm";
 import { videoStatsTable, videosTable, thumbnailsTable } from "@/database/schema";
@@ -243,6 +244,12 @@ export class VideoStatsService {
       stats.updatedAt = now;
       video.stats = stats;
 
+      if (input.last_position_seconds !== undefined)
+        void watchHeatService.record(
+          videoId,
+          input.last_position_seconds - input.watched_seconds,
+          input.last_position_seconds
+        );
       const mappedStats = this.mapDemoStats(userId, video);
       return {
         stats: mappedStats,
@@ -356,6 +363,14 @@ export class VideoStatsService {
           updatedAt: now,
         },
       });
+
+    // Clients report contiguous watching that ended at the position, so the pass is known.
+    if (input.last_position_seconds !== undefined)
+      void watchHeatService.record(
+        videoId,
+        input.last_position_seconds - input.watched_seconds,
+        input.last_position_seconds,
+      );
 
     const statsResults = await db
       .select()

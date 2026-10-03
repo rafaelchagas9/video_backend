@@ -65,3 +65,15 @@ export * from "./copy-detection.schema";
 export * from "./relations";
 
 export * from "./saved-views.schema";
+
+// Stash bridge: fingerprints, scene links and batch identify
+export * from "./stash.schema";
+
+// SigLIP2 frame embeddings for natural-language visual search
+export * from "./visual-search.schema";
+
+// Replay heat ("most replayed") per video
+export * from "./discovery.schema";
+
+// Live-recording highlight reviews (goondvr)
+export * from "./recordings.schema";

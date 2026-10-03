@@ -32,6 +32,8 @@ import {
   videoExternalIdsTable,
   enrichmentSuggestionsTable,
   enrichmentRunsTable,
+  stashSceneLinksTable,
+  videoFingerprintsTable,
   type EnrichmentSuggestion,
   type EnrichmentRun,
   type EnrichmentEntityType,
@@ -58,7 +60,13 @@ import { getEnrichmentClient } from "./enrichment.client";
 import { enrichmentDemoService } from "./enrichment.demo.service";
 import { imageSizeProbe } from "./enrichment.image-sizes";
 import { parseExactExternalReference } from "./enrichment.reference";
+import { stashLinkService } from "@/modules/stash/stash-link.service";
+import {
+  applyCandidatePolicy,
+  loadEnrichmentPolicy,
+} from "./enrichment.policy";
 import type {
+  AcceptChoice,
   Candidate,
   EnrichRequest,
   EntityType,
@@ -117,7 +125,12 @@ const CREATOR_FIELD_SETTERS: Record<
 };
 
 /** Scene `field` keys that are stored in `video_metadata` (key/value). */
-const SCENE_METADATA_FIELDS = new Set(["release_date", "code", "director"]);
+const SCENE_METADATA_FIELDS = new Set([
+  "release_date",
+  "code",
+  "director",
+  "url",
+]);
 
 function toInt(value: string, field: string): number {
   const n = Number.parseInt(value, 10);
@@ -132,7 +145,10 @@ export type RelatedKind = "creator" | "studio" | "tag";
 export interface RelatedMatch {
   id: number;
   name: string;
-  via: "external_id" | "name" | "alias";
+  /** `merged_id`: the library holds an older stash-box ID merged into this one. */
+  via: "external_id" | "merged_id" | "name" | "alias";
+  /** The stored ID that `merged_id` matched; accepting replaces it. */
+  stale_external_id?: string;
   /** Tags only: how the library shows it. */
   color?: string | null;
   category?: string | null;
@@ -142,6 +158,15 @@ export interface ResolutionPreview {
   suggestion_id: number;
   kind: RelatedKind;
   match: RelatedMatch | null;
+  /** Several library entities share the name: accepting needs a choice. */
+  ambiguous: Array<{ id: number; name: string }>;
+  /** Why accepting needs a choice even without a match ("single_name"). */
+  requires_choice: string | null;
+}
+
+export interface RelatedResolution {
+  match: RelatedMatch | null;
+  ambiguous: Array<{ id: number; name: string }>;
 }
 
 const RELATED_KIND_BY_TYPE: Record<string, RelatedKind> = {
@@ -252,6 +277,10 @@ export class EnrichmentService {
       throw new AppError(502, `Enrichment service error: ${message}`);
     }
 
+    if (entityType === "scene") {
+      result = { ...result, candidates: await this.prepareSceneCandidates(result.candidates) };
+    }
+
     // A creator can be merged while the remote enrichment call is in flight.
     // Lock the live/canonical creator while persisting so merge either moves
     // these rows afterward or we resolve the already-completed merge first.
@@ -313,6 +342,199 @@ export class EnrichmentService {
     );
 
     return this.toRunDTO(persisted.updated);
+  }
+
+  /**
+   * Scene proposals pass the Stash-style policy (performer genders, excluded
+   * tags, single names), and performers the library does not know by ID learn
+   * the older IDs their stash-box merged into them, so an accept finds the
+   * creator stored under a merged ID instead of creating a duplicate.
+   */
+  async prepareSceneCandidates(candidates: Candidate[]): Promise<Candidate[]> {
+    const outcome = applyCandidatePolicy(candidates, await loadEnrichmentPolicy());
+    if (outcome.droppedPerformers.length || outcome.droppedTags.length) {
+      logger.info(
+        { performers: outcome.droppedPerformers, tags: outcome.droppedTags },
+        "Enrichment policy dropped proposals"
+      );
+    }
+    const unknownBySource = new Map<string, Set<string>>();
+    for (const candidate of outcome.kept) {
+      const raw = (candidate.raw ?? {}) as RelationalRaw;
+      const source = raw.source ?? candidate.source;
+      if (candidate.type !== "performer" || !raw.external_id) continue;
+      const [known] = await db
+        .select({ id: creatorExternalIdsTable.id })
+        .from(creatorExternalIdsTable)
+        .where(
+          and(
+            eq(creatorExternalIdsTable.source, source),
+            eq(creatorExternalIdsTable.externalId, raw.external_id)
+          )
+        )
+        .limit(1);
+      if (!known) {
+        const ids = unknownBySource.get(source) ?? new Set<string>();
+        ids.add(raw.external_id);
+        unknownBySource.set(source, ids);
+      }
+    }
+    const mergedIds = new Map<string, string[]>();
+    for (const [source, ids] of unknownBySource) {
+      try {
+        const { results } = await getEnrichmentClient().performerIdentity(
+          source,
+          [...ids]
+        );
+        for (const identity of results) {
+          if (identity.merged_ids?.length) {
+            mergedIds.set(`${source}:${identity.requested_id}`, identity.merged_ids);
+          }
+        }
+      } catch (error) {
+        logger.warn({ source, error }, "Merged performer lookup failed");
+      }
+    }
+    if (mergedIds.size === 0) return outcome.kept;
+    return outcome.kept.map((candidate) => {
+      const raw = (candidate.raw ?? {}) as RelationalRaw;
+      const merged =
+        candidate.type === "performer" && raw.external_id
+          ? mergedIds.get(`${raw.source ?? candidate.source}:${raw.external_id}`)
+          : undefined;
+      return merged ? { ...candidate, raw: { ...raw, merged_ids: merged } } : candidate;
+    });
+  }
+
+  /**
+   * Check every stored stash-box performer ID against its server and follow
+   * merges, as Stash's batch tag task does (task_stash_box_tag.go). Merged IDs
+   * are replaced; deleted ones are reported, never removed automatically.
+   */
+  async refreshCreatorExternalIds(): Promise<{
+    checked: number;
+    merged: Array<{ creator_id: number; source: string; from: string; to: string }>;
+    deleted: Array<{ creator_id: number; source: string; external_id: string }>;
+    duplicates: Array<{ source: string; external_id: string; creator_ids: number[] }>;
+    unsupported: string[];
+    errors: string[];
+  }> {
+    const report = {
+      checked: 0,
+      merged: [] as Array<{ creator_id: number; source: string; from: string; to: string }>,
+      deleted: [] as Array<{ creator_id: number; source: string; external_id: string }>,
+      duplicates: [] as Array<{ source: string; external_id: string; creator_ids: number[] }>,
+      unsupported: [] as string[],
+      errors: [] as string[],
+    };
+    const rows = await db
+      .select({
+        creatorId: creatorExternalIdsTable.creatorId,
+        source: creatorExternalIdsTable.source,
+        externalId: creatorExternalIdsTable.externalId,
+      })
+      .from(creatorExternalIdsTable)
+      .orderBy(creatorExternalIdsTable.source, creatorExternalIdsTable.id);
+    const bySource = new Map<string, typeof rows>();
+    for (const row of rows) {
+      bySource.set(row.source, [...(bySource.get(row.source) ?? []), row]);
+    }
+    for (const [source, entries] of bySource) {
+      for (let start = 0; start < entries.length; start += 100) {
+        const chunk = entries.slice(start, start + 100);
+        let results;
+        try {
+          ({ results } = await getEnrichmentClient().performerIdentity(
+            source,
+            chunk.map((entry) => entry.externalId)
+          ));
+        } catch (error) {
+          report.errors.push(
+            `${source}: ${error instanceof Error ? error.message : "lookup failed"}`
+          );
+          break;
+        }
+        for (const identity of results) {
+          const entry = chunk.find((row) => row.externalId === identity.requested_id);
+          if (!entry) continue;
+          if (identity.supported === false) {
+            if (!report.unsupported.includes(source)) report.unsupported.push(source);
+            continue;
+          }
+          if (identity.error) {
+            report.errors.push(`${source} ${identity.requested_id}: ${identity.error}`);
+            continue;
+          }
+          report.checked += 1;
+          if (identity.found === false || identity.deleted) {
+            report.deleted.push({ creator_id: entry.creatorId, source, external_id: entry.externalId });
+            continue;
+          }
+          if (!identity.merged || !identity.id) continue;
+          const [holder] = await db
+            .select({ creatorId: creatorExternalIdsTable.creatorId })
+            .from(creatorExternalIdsTable)
+            .where(
+              and(
+                eq(creatorExternalIdsTable.source, source),
+                eq(creatorExternalIdsTable.externalId, identity.id)
+              )
+            )
+            .limit(1);
+          if (holder) {
+            // Two library creators are now the same performer: a merge for a human.
+            if (holder.creatorId !== entry.creatorId) {
+              report.duplicates.push({
+                source,
+                external_id: identity.id,
+                creator_ids: [holder.creatorId, entry.creatorId],
+              });
+            }
+            continue;
+          }
+          await this.repointExternalId("creator", source, entry.externalId, identity.id);
+          report.merged.push({ creator_id: entry.creatorId, source, from: entry.externalId, to: identity.id });
+        }
+      }
+    }
+    return report;
+  }
+
+  /** Store a finished discovery result as a run plus pending proposals. */
+  async recordRun(
+    entityType: EntityType,
+    entityId: number,
+    result: { candidates: Candidate[]; sources_used: string[]; errors: string[] }
+  ): Promise<RunDTO> {
+    return db.transaction(async (tx) => {
+      const inserted = result.candidates.length
+        ? await tx
+            .insert(enrichmentSuggestionsTable)
+            .values(
+              result.candidates.map((candidate) =>
+                this.toSuggestionRow(entityType, entityId, candidate)
+              )
+            )
+            .onConflictDoNothing()
+            .returning({ id: enrichmentSuggestionsTable.id })
+        : [];
+      const [run] = await tx
+        .insert(enrichmentRunsTable)
+        .values({
+          entityType,
+          entityId,
+          status:
+            result.errors.length > 0 && result.sources_used.length === 0
+              ? "error"
+              : "success",
+          sourcesUsed: result.sources_used,
+          suggestionCount: inserted.length,
+          errors: result.errors.length > 0 ? result.errors : null,
+          finishedAt: new Date(),
+        })
+        .returning();
+      return this.toRunDTO(run!);
+    });
   }
 
   private async lockCanonicalCreatorForWrite(
@@ -388,7 +610,15 @@ export class EnrichmentService {
             sources: options.sources ?? ["stash"],
           }
         : {}),
-      ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
+      ...(options.scraper_id
+        ? {
+            scraper_id: options.scraper_id,
+            sources: options.sources ?? ["stash"],
+          }
+        : {}),
+      ...(options.fingerprint
+        ? { fingerprint: options.fingerprint, fingerprint_only: true }
+        : {}),
       ...(options.stash_scene_id
         ? { stash_scene_id: options.stash_scene_id }
         : {}),
@@ -507,11 +737,46 @@ export class EnrichmentService {
               })
               .from(videoExternalIdsTable)
               .where(eq(videoExternalIdsTable.videoId, entityId));
+        // A manual title search asks for exactly that: no fingerprints.
+        const byTitle = options.search_name !== undefined;
+        const [link] = byTitle
+          ? []
+          : await db
+              .select({ stashSceneId: stashSceneLinksTable.stashSceneId })
+              .from(stashSceneLinksTable)
+              .where(eq(stashSceneLinksTable.videoId, entityId))
+              .limit(1);
+        const original = byTitle
+          ? []
+          : await db
+              .select({
+                algorithm: videoFingerprintsTable.algorithm,
+                hash: videoFingerprintsTable.hash,
+                duration: videoFingerprintsTable.durationSeconds,
+              })
+              .from(videoFingerprintsTable)
+              .where(
+                and(
+                  eq(videoFingerprintsTable.videoId, entityId),
+                  eq(videoFingerprintsTable.origin, "pre_conversion")
+                )
+              );
         return applyRunOptions({
           entity_type: "scene",
           external_ids: externalIds,
+          ...(link ? { stash_scene_id: link.stashSceneId } : {}),
+          ...(original.length > 0
+            ? {
+                fingerprints: original.map((fp) => ({
+                  algorithm: fp.algorithm as "OSHASH" | "MD5" | "PHASH",
+                  hash: fp.hash,
+                  ...(fp.duration ? { duration: fp.duration } : {}),
+                })),
+              }
+            : {}),
           ...(options.identify_by_hash
             ? {
+                fingerprint_only: true,
                 fingerprint: {
                   algorithm: "OSHASH" as const,
                   hash: await computeVideoOshash(video.filePath),
@@ -603,7 +868,10 @@ export class EnrichmentService {
    * Accept a pending suggestion: write it through the existing entity writers,
    * then mark it accepted.
    */
-  async acceptSuggestion(id: number): Promise<SuggestionDTO> {
+  async acceptSuggestion(
+    id: number,
+    choice?: AcceptChoice
+  ): Promise<SuggestionDTO> {
     if (env.DEMO_MODE) {
       return enrichmentDemoService.acceptSuggestion(id);
     }
@@ -615,6 +883,7 @@ export class EnrichmentService {
       );
     }
 
+    let appliedEntityId: number | undefined;
     switch (suggestion.entityType as EnrichmentEntityType) {
       case "creator":
         await this.applyCreator(suggestion);
@@ -623,7 +892,7 @@ export class EnrichmentService {
         await this.applyStudio(suggestion);
         break;
       case "scene":
-        await this.applyScene(suggestion);
+        appliedEntityId = await this.applyScene(suggestion, choice);
         break;
       case "tag":
         await this.applyTag(suggestion);
@@ -634,9 +903,18 @@ export class EnrichmentService {
         );
     }
 
+    // Remember which creator / studio / tag the accept linked, so a reset
+    // undoes exactly that link even when the name matched several.
+    const raw = (suggestion.raw as Record<string, unknown> | null) ?? {};
     const [updated] = await db
       .update(enrichmentSuggestionsTable)
-      .set({ status: "accepted", updatedAt: new Date() })
+      .set({
+        status: "accepted",
+        updatedAt: new Date(),
+        ...(appliedEntityId !== undefined
+          ? { raw: { ...raw, applied_entity_id: appliedEntityId } }
+          : {}),
+      })
       .where(eq(enrichmentSuggestionsTable.id, id))
       .returning();
 
@@ -662,6 +940,8 @@ export class EnrichmentService {
   async resolveSuggestions(body: {
     accept: number[];
     reject: number[];
+    /** Per suggestion id: link to an existing entity, or create a new one. */
+    choices?: Record<string, AcceptChoice>;
   }): Promise<ResolveResult> {
     const result: ResolveResult = { accepted: [], rejected: [], failed: [] };
 
@@ -706,7 +986,7 @@ export class EnrichmentService {
     }
     const accept = async (id: number) =>
       this.settle(result, id, async () => {
-        await this.acceptSuggestion(id);
+        await this.acceptSuggestion(id, body.choices?.[String(id)]);
         result.accepted.push(id);
       });
 
@@ -884,13 +1164,18 @@ export class EnrichmentService {
         case "tag": {
           const kind = RELATED_KIND_BY_TYPE[s.type];
           if (!kind) break;
-          const raw = this.parseRaw(s);
-          const match = await this.findRelatedEntity(
-            kind,
-            s.value,
-            raw.source ?? s.source,
-            raw.external_id
-          );
+          const raw = this.parseRaw(s) as RelationalRaw & {
+            applied_entity_id?: number;
+          };
+          const match =
+            typeof raw.applied_entity_id === "number"
+              ? { id: raw.applied_entity_id }
+              : await this.findRelatedEntity(
+                  kind,
+                  s.value,
+                  raw.source ?? s.source,
+                  raw.external_id
+                );
           if (!match) break;
           if (kind === "creator") {
             const rows = await db
@@ -1138,7 +1423,11 @@ export class EnrichmentService {
 
   // --- Apply: scene (video) ----------------------------------------------
 
-  private async applyScene(s: EnrichmentSuggestion): Promise<void> {
+  /** Returns the creator / studio / tag a relational proposal linked. */
+  private async applyScene(
+    s: EnrichmentSuggestion,
+    choice?: AcceptChoice
+  ): Promise<number | undefined> {
     const videoId = s.entityId;
     switch (s.type) {
       case "field": {
@@ -1177,14 +1466,12 @@ export class EnrichmentService {
             lastSyncedAt: new Date(),
           })
           .onConflictDoNothing();
+        // Stash submits fingerprints only for scenes holding the target's ID.
+        await stashLinkService.recordStashId(videoId, s.source, s.value);
         break;
       case "performer": {
         const raw = this.parseRaw(s);
-        const creatorId = await this.resolveCreatorId(
-          s.value,
-          s.source,
-          raw.external_id
-        );
+        const creatorId = await this.resolveForAccept("creator", s, choice);
         await db
           .insert(videoCreatorsTable)
           .values({ videoId, creatorId })
@@ -1195,31 +1482,28 @@ export class EnrichmentService {
           raw.source ?? s.source,
           raw.external_id
         );
-        break;
+        return creatorId;
       }
       case "studio": {
         const raw = this.parseRaw(s);
-        const studioId = await this.resolveStudioId(
-          s.value,
-          s.source,
-          raw.external_id
-        );
+        const studioId = await this.resolveForAccept("studio", s, choice);
         await studioAssignmentService.linkMany([videoId], [studioId]);
+        await this.ensureStudioParents(
+          studioId,
+          raw.parents ?? [],
+          raw.source ?? s.source
+        );
         await this.autoEnrichRelatedEntity(
           "studio",
           studioId,
           raw.source ?? s.source,
           raw.external_id
         );
-        break;
+        return studioId;
       }
       case "tag": {
         const raw = this.parseRaw(s);
-        const tagId = await this.resolveTagId(
-          s.value,
-          raw.source ?? s.source,
-          raw.external_id
-        );
+        const tagId = await this.resolveForAccept("tag", s, choice);
         await db
           .insert(videoTagsTable)
           .values({ videoId, tagId })
@@ -1230,7 +1514,7 @@ export class EnrichmentService {
           raw.source ?? s.source,
           raw.external_id
         );
-        break;
+        return tagId;
       }
       case "image":
         // Scenes have no gallery; cache the cover as metadata for later use.
@@ -1247,47 +1531,217 @@ export class EnrichmentService {
           `Unsupported scene suggestion type: ${s.type}`
         );
     }
+    return undefined;
+  }
+
+  /**
+   * The creator / studio / tag a relational proposal links to on accept: the
+   * caller's choice, else the unique match, else a new entity. Ambiguous names
+   * and single-name performers are never guessed.
+   */
+  private async resolveForAccept(
+    kind: RelatedKind,
+    s: EnrichmentSuggestion,
+    choice?: AcceptChoice
+  ): Promise<number> {
+    const raw = this.parseRaw(s);
+    const source = raw.source ?? s.source;
+    const t = RELATED_TABLES[kind];
+    if (choice?.target_id !== undefined) {
+      const [target] = await db
+        .select({ id: t.id })
+        .from(t.table)
+        .where(eq(t.id, choice.target_id))
+        .limit(1);
+      if (!target) {
+        throw new NotFoundError(`No ${kind} with id ${choice.target_id}`);
+      }
+      await this.linkExternalId(kind, target.id, source, raw.external_id);
+      return target.id;
+    }
+    if (!choice?.create) {
+      const { match, ambiguous } = await this.resolveRelated(
+        kind,
+        s.value,
+        source,
+        raw.external_id,
+        raw.merged_ids
+      );
+      if (match) {
+        if (match.via === "merged_id" && match.stale_external_id && raw.external_id) {
+          await this.repointExternalId(
+            kind,
+            source,
+            match.stale_external_id,
+            raw.external_id
+          );
+        } else if (kind === "tag" && match.via !== "external_id") {
+          // Remember the source's id so the next scene resolves without guessing.
+          await this.linkExternalId(kind, match.id, source, raw.external_id);
+        }
+        return match.id;
+      }
+      if (ambiguous.length > 0) {
+        throw new ConflictError(
+          `${ambiguous.length} library ${kind}s are named "${s.value}"; choose one or create a new one`
+        );
+      }
+      if (raw.requires_choice === "single_name") {
+        throw new ConflictError(
+          `"${s.value}" is a single name with no disambiguation; choose a library creator or create a new one`
+        );
+      }
+    }
+    const created =
+      kind === "creator"
+        ? await creatorsService.quickCreate(s.value)
+        : kind === "studio"
+          ? await studiosService.create({ name: s.value })
+          : await tagsService.create({ name: s.value.slice(0, 255) });
+    await this.linkExternalId(kind, created.id, source, raw.external_id);
+    return created.id;
+  }
+
+  /** Replace a stored stash-box ID the source merged into a newer one. */
+  private async repointExternalId(
+    kind: RelatedKind,
+    source: string,
+    staleId: string,
+    currentId: string
+  ): Promise<void> {
+    const t = RELATED_TABLES[kind];
+    await db
+      .update(t.ext)
+      .set({ externalId: currentId, lastSyncedAt: new Date() } as never)
+      .where(and(eq(t.extSource, source), eq(t.extId, staleId)));
+    logger.info(
+      { kind, source, from: staleId, to: currentId },
+      "Replaced merged stash-box ID"
+    );
+  }
+
+  /**
+   * Give a studio the network chain its source reports (nearest parent first),
+   * stopping at the first studio that already has a parent, as Stash does when
+   * it creates a missing studio hierarchy.
+   */
+  private async ensureStudioParents(
+    studioId: number,
+    parents: Array<{ name: string; external_id?: string | null }>,
+    source: string
+  ): Promise<void> {
+    let current = studioId;
+    for (const parent of parents.slice(0, 5)) {
+      const [row] = await db
+        .select({ parentStudioId: studiosTable.parentStudioId })
+        .from(studiosTable)
+        .where(eq(studiosTable.id, current))
+        .limit(1);
+      if (!row || row.parentStudioId !== null) return;
+      const { match, ambiguous } = await this.resolveRelated(
+        "studio",
+        parent.name,
+        source,
+        parent.external_id
+      );
+      if (ambiguous.length > 0) return;
+      let parentId = match?.id;
+      if (parentId === undefined) {
+        parentId = (await studiosService.create({ name: parent.name })).id;
+        await this.linkExternalId("studio", parentId, source, parent.external_id);
+      }
+      if (parentId === current) return;
+      await db
+        .update(studiosTable)
+        .set({ parentStudioId: parentId, updatedAt: new Date() })
+        .where(eq(studiosTable.id, current));
+      current = parentId;
+    }
   }
 
   // --- Cross-entity resolvers (external id → name → alias → create) -------
 
   /**
    * Find the library entity a scene's performer / studio / tag proposal points
-   * at, without creating anything: the source's external id first, then the
-   * name ignoring case, then an alias. Accepting uses the same lookup, so the
-   * review preview and the write always agree.
+   * at, without creating anything. Order, as in Stash's matcher
+   * (pkg/match/scraped.go): the source's ID (or an older ID the source merged
+   * into it), then the name ignoring case, then an alias. A name or alias links
+   * only when exactly one entity has it; an entity already holding a different
+   * ID from the same source is someone else and never matches by name.
+   * Accepting uses the same lookup, so the review preview and the write agree.
    */
+  async resolveRelated(
+    kind: RelatedKind,
+    name: string,
+    source?: string | null,
+    externalId?: string | null,
+    mergedIds: string[] = []
+  ): Promise<RelatedResolution> {
+    const t = RELATED_TABLES[kind];
+    if (source && externalId) {
+      const ids = [externalId, ...mergedIds.filter((id) => id && id !== externalId)];
+      const rows = await db
+        .select({ id: t.extOwner, name: t.name, externalId: t.extId })
+        .from(t.ext)
+        .innerJoin(t.table, eq(t.id, t.extOwner))
+        .where(and(eq(t.extSource, source), inArray(t.extId, ids)));
+      const hit = rows.find((row) => row.externalId === externalId) ?? rows[0];
+      if (hit) {
+        return {
+          match:
+            hit.externalId === externalId
+              ? { id: hit.id, name: hit.name, via: "external_id" }
+              : {
+                  id: hit.id,
+                  name: hit.name,
+                  via: "merged_id",
+                  stale_external_id: hit.externalId,
+                },
+          ambiguous: [],
+        };
+      }
+    }
+    const notOtherwiseIdentified =
+      source && externalId
+        ? sql`NOT EXISTS (SELECT 1 FROM ${t.ext} WHERE ${t.extOwner} = ${t.id} AND ${t.extSource} = ${source})`
+        : sql`TRUE`;
+    const lowered = name.trim().toLowerCase();
+    const byName = await db
+      .select({ id: t.id, name: t.name })
+      .from(t.table)
+      .where(and(sql`lower(${t.name}) = ${lowered}`, notOtherwiseIdentified))
+      .orderBy(t.id)
+      .limit(10);
+    const candidates =
+      byName.length > 0
+        ? byName.map((row) => ({ ...row, via: "name" as const }))
+        : (
+            await db
+              .selectDistinct({ id: t.id, name: t.name })
+              .from(t.alias)
+              .innerJoin(t.table, eq(t.id, t.aliasOwner))
+              .where(
+                and(sql`lower(${t.aliasName}) = ${lowered}`, notOtherwiseIdentified)
+              )
+              .orderBy(t.id)
+              .limit(10)
+          ).map((row) => ({ ...row, via: "alias" as const }));
+    if (candidates.length === 1) {
+      return { match: candidates[0]!, ambiguous: [] };
+    }
+    return {
+      match: null,
+      ambiguous: candidates.map(({ id, name }) => ({ id, name })),
+    };
+  }
+
   async findRelatedEntity(
     kind: RelatedKind,
     name: string,
     source?: string | null,
     externalId?: string | null
   ): Promise<RelatedMatch | null> {
-    const t = RELATED_TABLES[kind];
-    if (source && externalId) {
-      const [ext] = await db
-        .select({ id: t.extOwner, name: t.name })
-        .from(t.ext)
-        .innerJoin(t.table, eq(t.id, t.extOwner))
-        .where(and(eq(t.extSource, source), eq(t.extId, externalId)))
-        .limit(1);
-      if (ext) return { id: ext.id, name: ext.name, via: "external_id" };
-    }
-    const lowered = name.trim().toLowerCase();
-    const [byName] = await db
-      .select({ id: t.id, name: t.name })
-      .from(t.table)
-      .where(sql`lower(${t.name}) = ${lowered}`)
-      .limit(1);
-    if (byName) return { id: byName.id, name: byName.name, via: "name" };
-    const [byAlias] = await db
-      .select({ id: t.id, name: t.name })
-      .from(t.alias)
-      .innerJoin(t.table, eq(t.id, t.aliasOwner))
-      .where(sql`lower(${t.aliasName}) = ${lowered}`)
-      .limit(1);
-    if (byAlias) return { id: byAlias.id, name: byAlias.name, via: "alias" };
-    return null;
+    return (await this.resolveRelated(kind, name, source, externalId)).match;
   }
 
   /** What each pending performer / studio / tag proposal of a scene resolves to. */
@@ -1317,11 +1771,12 @@ export class EnrichmentService {
       const kind = RELATED_KIND_BY_TYPE[row.type];
       if (!kind) continue;
       const raw = this.parseRaw(row);
-      const match = await this.findRelatedEntity(
+      const { match, ambiguous } = await this.resolveRelated(
         kind,
         row.value,
         raw.source ?? row.source,
-        raw.external_id
+        raw.external_id,
+        raw.merged_ids
       );
       if (match && kind === "tag") {
         let look = tagLooks.get(match.id);
@@ -1343,7 +1798,13 @@ export class EnrichmentService {
         }
         Object.assign(match, look);
       }
-      previews.push({ suggestion_id: row.id, kind, match });
+      previews.push({
+        suggestion_id: row.id,
+        kind,
+        match,
+        ambiguous,
+        requires_choice: match || ambiguous.length ? null : (raw.requires_choice ?? null),
+      });
     }
     return previews;
   }
@@ -1371,54 +1832,25 @@ export class EnrichmentService {
       .onConflictDoNothing();
   }
 
-  private async resolveCreatorId(
-    name: string,
-    source: string,
-    externalId?: string | null
-  ): Promise<number> {
-    const found = await this.findRelatedEntity(
-      "creator",
-      name,
-      source,
-      externalId
-    );
-    if (found) return found.id;
-    const created = await creatorsService.quickCreate(name);
-    await this.linkExternalId("creator", created.id, source, externalId);
-    return created.id;
-  }
-
   private async resolveStudioId(
     name: string,
     source: string,
     externalId?: string | null
   ): Promise<number> {
-    const found = await this.findRelatedEntity(
+    const { match, ambiguous } = await this.resolveRelated(
       "studio",
       name,
       source,
       externalId
     );
-    if (found) return found.id;
+    if (match) return match.id;
+    if (ambiguous.length > 0) {
+      throw new ConflictError(
+        `${ambiguous.length} library studios are named "${name}"; set the parent studio by hand`
+      );
+    }
     const created = await studiosService.create({ name });
     await this.linkExternalId("studio", created.id, source, externalId);
-    return created.id;
-  }
-
-  private async resolveTagId(
-    name: string,
-    source?: string,
-    externalId?: string | null
-  ): Promise<number> {
-    const found = await this.findRelatedEntity("tag", name, source, externalId);
-    if (found) {
-      // Remember the source's id so the next scene resolves without guessing.
-      if (found.via !== "external_id")
-        await this.linkExternalId("tag", found.id, source, externalId);
-      return found.id;
-    }
-    const created = await tagsService.create({ name: name.slice(0, 255) });
-    await this.linkExternalId("tag", created.id, source, externalId);
     return created.id;
   }
 

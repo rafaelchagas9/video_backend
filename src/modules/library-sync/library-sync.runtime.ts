@@ -47,6 +47,11 @@ import {
 import { settingsService } from "@/modules/settings/settings.service";
 import { storyboardsService } from "@/modules/storyboards/storyboards.service";
 import { previewsService } from "@/modules/previews/previews.service";
+import {
+  currentVisualIndexIds,
+  indexVideoVisually,
+} from "@/modules/visual-search/visual-search.jobs";
+import { VisualSearchUnavailableError } from "@/modules/visual-search/visual-search.client";
 import { ConflictError, NotFoundError } from "@/utils/errors";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import { logger } from "@/utils/logger";
@@ -72,7 +77,7 @@ const AUTO_SETTING = "library_sync_auto_perceptual";
 const AUTO_WATERMARK = "library_sync_auto_perceptual_watermark_video_id";
 const AUTO_GENERATION = "library_sync_auto_perceptual_generation";
 const ACTIVE = ["queued", "running", "retry_wait"] as const;
-const TASKS = ["perceptual", "faces", "storyboards", "previews"] as const;
+const TASKS = ["perceptual", "faces", "storyboards", "previews", "visual"] as const;
 
 type JobRow = typeof durableJobsTable.$inferSelect;
 type Video = { id: number; filePath: string; durationSeconds: number | null };
@@ -172,6 +177,10 @@ export interface LibrarySyncAdapters {
       signal: AbortSignal
     ): Promise<{ size_bytes: number; clip_count: number }>;
   };
+  visual: {
+    processedIds(videoIds: number[]): Promise<Set<number>>;
+    process(videoId: number, signal: AbortSignal): Promise<{ frames: number }>;
+  };
 }
 
 function durableJobs() {
@@ -202,6 +211,7 @@ function blankProgress(
     faces: blankTask(tasks.includes("faces") ? videos.length : 0),
     storyboards: blankTask(tasks.includes("storyboards") ? videos.length : 0),
     previews: blankTask(tasks.includes("previews") ? videos.length : 0),
+    visual: blankTask(tasks.includes("visual") ? videos.length : 0),
   };
   const total = Object.values(byTask).reduce(
     (sum, item) => sum + item.total,
@@ -520,6 +530,10 @@ function defaultAdapters(): LibrarySyncAdapters {
         };
       },
     },
+    visual: {
+      processedIds: (videoIds) => currentVisualIndexIds(videoIds),
+      process: (videoId, signal) => indexVideoVisually(videoId, signal),
+    },
   };
 }
 
@@ -685,12 +699,13 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
   async overview() {
     const videos = await this.availableVideos();
     const ids = videos.map((v) => v.id);
-    const [perceptual, faces, storyboards, previews, rows, activeRows, auto] =
+    const [perceptual, faces, storyboards, previews, visual, rows, activeRows, auto] =
       await Promise.all([
         this.adapters.perceptual.processedIds(videos),
         this.adapters.faces.processedIds(ids),
         this.adapters.storyboards.processedIds(ids),
         this.adapters.previews.processedIds(ids),
+        this.adapters.visual.processedIds(ids),
         db
           .select()
           .from(durableJobsTable)
@@ -728,6 +743,7 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
         faces: count(faces),
         storyboards: count(storyboards),
         previews: count(previews),
+        visual: count(visual),
       },
     };
     return {
@@ -1094,6 +1110,10 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
               };
               if (!(task === "perceptual" && code === COPY_ENGINE_NOT_READY_CODE))
                 reportFailure(error);
+              if (task === "visual" && error instanceof VisualSearchUnavailableError) {
+                // the model is not loaded: every remaining video would fail the same way
+                throw error;
+              }
               if (task === "perceptual" && code === "ENGINE_UNAVAILABLE") {
                 // missing ffmpeg/fpcalc fails every video the same way
                 throw error;
@@ -1114,13 +1134,17 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
                             ? "PERCEPTUAL_SYNC_FAILED"
                             : task === "faces"
                               ? "FACE_SYNC_FAILED"
-                              : "STORYBOARD_SYNC_FAILED",
+                              : task === "visual"
+                                ? "VISUAL_INDEX_FAILED"
+                                : "STORYBOARD_SYNC_FAILED",
                         message:
                           task === "perceptual"
                             ? "Perceptual analysis failed"
                             : task === "faces"
                               ? "Face analysis failed"
-                              : "Storyboard generation failed",
+                              : task === "visual"
+                                ? "Visual indexing failed"
+                                : "Storyboard generation failed",
                       },
               };
             }
@@ -1187,7 +1211,9 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
         ? this.adapters.faces.processedIds(ids)
         : task === "previews"
           ? this.adapters.previews.processedIds(ids)
-          : this.adapters.storyboards.processedIds(ids);
+          : task === "visual"
+            ? this.adapters.visual.processedIds(ids)
+            : this.adapters.storyboards.processedIds(ids);
   }
   private async process(
     task: LibrarySyncTask,
@@ -1200,6 +1226,7 @@ export class LibrarySyncRuntime implements LibrarySyncServiceContract {
     }
     if (task === "faces") return this.adapters.faces.process(id, signal);
     if (task === "previews") return this.adapters.previews.process(id, signal);
+    if (task === "visual") return this.adapters.visual.process(id, signal);
     return this.adapters.storyboards.process(id, signal);
   }
 

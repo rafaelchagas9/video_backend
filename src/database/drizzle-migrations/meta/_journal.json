@@ -344,6 +344,34 @@
       "when": 1790603583809,
       "tag": "0048_picture_dimensions",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1790948644935,
+      "tag": "0049_stash_bridge",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790995003075,
+      "tag": "0050_visual_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790996358496,
+      "tag": "0051_watch_heat",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1791009870714,
+      "tag": "0052_recording_reviews",
+      "breakpoints": true
     }
   ]
 }

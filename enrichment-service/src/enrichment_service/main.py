@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .routes import enrich_router, health_router
 from .routes.providers import router as providers_router
+from .routes.stash import router as stash_router
 
 
 def setup_logging() -> None:
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(enrich_router)
     app.include_router(providers_router)
+    app.include_router(stash_router)
 
     return app
 

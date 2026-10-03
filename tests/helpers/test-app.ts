@@ -589,6 +589,9 @@ function installExternalServiceMocks(): void {
         }
       ),
       closeAll: mock(() => undefined),
+      broadcast: mock(() => undefined),
+      broadcastToAuthenticated: mock(() => undefined),
+      broadcastToUser: mock(() => undefined),
     },
   }));
 

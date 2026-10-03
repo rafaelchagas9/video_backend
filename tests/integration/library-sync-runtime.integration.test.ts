@@ -69,6 +69,14 @@ describe("library sync durable runtime", () => {
         return { size_bytes: 1, clip_count: 1 };
       },
     },
+    visual: {
+      processedIds: async () => new Set(),
+      process: async (id, signal) => {
+        signal.throwIfAborted();
+        calls.push(`visual:${id}`);
+        return { frames: 1 };
+      },
+    },
   };
   /** Manual runs walk available videos newest first. */
   async function manualOrder(): Promise<number[]> {
@@ -592,7 +600,7 @@ describe("library sync durable runtime", () => {
             generation: LIBRARY_SYNC_GENERATION,
             progress: {
               total: 4, processed: 2, completed: 2, failed: 0, skipped: 0, pending: 2, current: null,
-              byTask: { perceptual: task(2, 2), faces: task(0, 0), storyboards: task(2, 0), previews: task(0, 0) },
+              byTask: { perceptual: task(2, 2), faces: task(0, 0), storyboards: task(2, 0), previews: task(0, 0), visual: task(0, 0) },
             },
             recentItems: [],
             taskIndex: 1,

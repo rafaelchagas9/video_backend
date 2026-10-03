@@ -34,15 +34,21 @@ export interface Candidate {
 
 /** Discovery input sent to the Python service. */
 export interface FingerprintInput {
-  algorithm: "OSHASH" | "PHASH";
+  algorithm: "OSHASH" | "PHASH" | "MD5";
   hash: string;
   duration?: number;
 }
 
 export interface EnrichRequest {
   scraper_url?: string;
+  /** Stash community scraper id for a title search (IAFD, ...). */
+  scraper_id?: string;
   fingerprint?: FingerprintInput;
+  /** Extra hashes, e.g. the original file's OSHASH from before a conversion. */
+  fingerprints?: FingerprintInput[];
   stash_scene_id?: string;
+  /** Scenes: fingerprint matches only, never a title search. */
+  fingerprint_only?: boolean;
   name: string;
   entity_type: EntityType;
   aliases: string[];
@@ -72,6 +78,7 @@ export interface EnrichmentHealthResponse {
 
 export interface RunEnrichmentOptions {
   scraper_url?: string;
+  scraper_id?: string;
   fingerprint?: FingerprintInput;
   stash_scene_id?: string;
   identify_by_hash?: boolean;
@@ -124,6 +131,36 @@ export interface RelationalRaw {
   source?: string | null;
   as?: string | null;
   group?: string | null;
+  /** Performers: stash-box gender (FEMALE, MALE, TRANSGENDER_FEMALE, ...). */
+  gender?: string | null;
+  disambiguation?: string | null;
+  /** Performers: older stash-box IDs merged into `external_id`. */
+  merged_ids?: string[];
+  /** Studios: parent chain, nearest first. */
+  parents?: Array<{ name: string; external_id?: string | null }>;
+  /** Set when accepting must name a target: "single_name". */
+  requires_choice?: string | null;
+}
+
+/** How to resolve a performer / studio / tag proposal on accept. */
+export interface AcceptChoice {
+  /** Link to this existing creator / studio / tag. */
+  target_id?: number;
+  /** Create a new entity even though one may match by name. */
+  create?: boolean;
+}
+
+/** One stored performer ID checked against its stash-box. */
+export interface PerformerIdentity {
+  requested_id: string;
+  supported?: boolean;
+  found?: boolean;
+  id?: string;
+  name?: string;
+  deleted?: boolean;
+  merged?: boolean;
+  merged_ids?: string[];
+  error?: string;
 }
 
 /** What a scene reset undid. */

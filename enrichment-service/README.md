@@ -1,9 +1,15 @@
 # Creator enrichment service
 
-A FastAPI service that returns external creator metadata as candidates for
-manual review. The Bun backend owns accepted writes. The shared
-[StashBox adapter](src/enrichment_service/sources/stashbox.py) supports ThePornDB
-and StashDB; ThePornDB also uses REST for exact URL/slug/ID lookups.
+A FastAPI service that returns external metadata as candidates for manual
+review. The Bun backend owns accepted writes. Discovery runs through the local
+Stash ([client](src/enrichment_service/stash_client.py)): Stash sends every
+fingerprint of a file, knows each stash-box server's search queries, and runs
+the community scrapers. The [stash-box source](src/enrichment_service/sources/stashbox.py)
+maps Stash's results and talks to a stash-box directly only for exact pasted
+IDs (ThePornDB through REST), hashes of files Stash never saw (an original
+replaced by a conversion), and the merged-performer check. Scene matches are
+ranked by [fingerprint agreement](src/enrichment_service/matching.py), after
+Stash's tagger.
 
 ## Setup and run
 

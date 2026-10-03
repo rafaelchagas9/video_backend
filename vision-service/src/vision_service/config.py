@@ -1,7 +1,7 @@
 """Configuration settings for the visual inference service."""
 
-from functools import lru_cache
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     nudity_fp16_enabled: bool = False
     nudity_initialization_retry_seconds: float = Field(default=60, ge=0)
 
+    # SigLIP2 embeddings for natural-language visual search. Loads in the background after
+    # startup; the model lives at MODEL_CACHE_DIR/siglip2/<CLIP_MODEL>.
+    clip_enabled: bool = True
+    clip_model: str = "so400m-patch16-256"
+    clip_onnx_providers: str = "MIGraphXExecutionProvider,CPUExecutionProvider"
+    clip_batch_size: int = Field(default=64, ge=1)
+    clip_fp16_enabled: bool = True
+    clip_text_threads: int = Field(default=4, ge=1)
+    clip_max_tiles: int = Field(default=1024, ge=1)
+    clip_max_texts: int = Field(default=64, ge=1)
+
     # Request and admission limits
     max_image_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
     max_image_pixels: int = Field(default=40_000_000, ge=1)
@@ -77,6 +88,9 @@ class Settings(BaseSettings):
     def get_onnx_providers(self) -> list[str]:
         """Parse ONNX providers from comma-separated string."""
         return [p.strip() for p in self.onnx_providers.split(",") if p.strip()]
+
+    def get_clip_onnx_providers(self) -> list[str]:
+        return [p.strip() for p in self.clip_onnx_providers.split(",") if p.strip()]
 
     def get_nudity_onnx_providers(self) -> list[str]:
         """Parse the independent NudeNet provider preference."""

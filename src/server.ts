@@ -161,6 +161,9 @@ export async function buildServer() {
       const { getContentAnalysisRuntime } =
         await import("./modules/content-analysis/content-analysis.runtime");
       await getContentAnalysisRuntime().stop();
+      const { getStashRuntime } =
+        await import("./modules/stash/stash.runtime");
+      await getStashRuntime().stop();
       const { getLibrarySyncRuntime } =
         await import("./modules/library-sync/library-sync.runtime");
       await getLibrarySyncRuntime().stop();
@@ -581,9 +584,18 @@ export async function buildServer() {
       const { librarySyncRoutes } =
         await import("./modules/library-sync/library-sync.routes");
 
+      const { recordingsRoutes } =
+        await import("./modules/recordings/recordings.routes");
+      const { discoveryRoutes } =
+        await import("./modules/discovery/discovery.routes");
+      const { visualSearchRoutes } =
+        await import("./modules/visual-search/visual-search.routes");
       const { vrRoutes } = await import("./modules/vr/vr.routes");
       const { creatorCollectionsRoutes } = await import("./modules/creator-collections/creator-collections.routes");
       await instance.register(vrRoutes, { prefix: "/vr" });
+      await instance.register(visualSearchRoutes, { prefix: "/visual-search" });
+      await instance.register(discoveryRoutes, { prefix: "/discovery" });
+      await instance.register(recordingsRoutes, { prefix: "/recordings" });
       await instance.register(creatorCollectionsRoutes, { prefix: "/creator-collections" });
       await instance.register(authRoutes, { prefix: "/auth" });
       await instance.register(directoriesRoutes, { prefix: "/directories" });
@@ -644,6 +656,8 @@ export async function buildServer() {
         prefix: "/multiplayer-remote",
       });
       await instance.register(enrichmentRoutes, { prefix: "/enrichment" });
+      const { stashRoutes } = await import("./modules/stash/stash.routes");
+      await instance.register(stashRoutes, { prefix: "/stash" });
       await instance.register(contentAnalysisRoutes);
       await instance.register(librarySyncRoutes);
     },
@@ -703,6 +717,11 @@ export async function buildServer() {
       await import("./modules/content-analysis/content-analysis.runtime");
     if (await isContentAnalysisSchemaReady()) {
       await getContentAnalysisRuntime().start();
+    }
+    const { getStashRuntime, isStashSchemaReady } =
+      await import("./modules/stash/stash.runtime");
+    if (await isStashSchemaReady()) {
+      await getStashRuntime().start();
     }
   }
 

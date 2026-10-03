@@ -205,7 +205,28 @@ async def v1_capabilities(request: Request) -> VisionCapabilitiesResponse:
             )
             for status in runtime.capability_statuses()
         ]
+        + _clip_capability(request, settings)
     )
+
+
+def _clip_capability(request: Request, settings: Settings) -> list[CapabilityResponse]:
+    clip = getattr(request.app.state, "clip_runtime", None)
+    if clip is None or not clip.enabled:
+        return []
+    return [
+        CapabilityResponse(
+            name="clip",
+            ready=clip.ready,
+            state=clip.state.value,
+            providers=list(clip.providers),
+            model_revision=clip.model_revision,
+            taxonomy_revision="embedding",
+            max_batch_items=settings.clip_max_tiles,
+            max_batch_bytes=settings.max_batch_bytes,
+            max_image_bytes=settings.max_image_bytes,
+            max_image_pixels=settings.max_image_pixels,
+        )
+    ]
 
 
 @router.post(

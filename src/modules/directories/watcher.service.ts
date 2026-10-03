@@ -21,6 +21,7 @@ import {
 } from "@/modules/videos/videos.types";
 import type { Directory, ScanResult, ScanRun } from "./directories.types";
 import { ConflictError } from "@/utils/errors";
+import { stashLinkService } from "@/modules/stash/stash-link.service";
 
 export class WatcherService {
   private scanningDirectories = new Set<number>();
@@ -549,6 +550,8 @@ export class WatcherService {
         isNewVideo = true;
         logger.info({ videoId, filePath }, "Video indexed");
       }
+      // Stash fingerprints the new or changed file for stash-box lookups.
+      stashLinkService.scheduleSync([videoId]);
     }
 
     // Check for regular thumbnail and generate if missing

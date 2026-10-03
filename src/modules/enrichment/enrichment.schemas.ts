@@ -19,13 +19,15 @@ export const runEnrichmentBodySchema = z
     scraper_url: z.httpUrl().max(2048).optional(),
     fingerprint: z
       .object({
-        algorithm: z.enum(["OSHASH", "PHASH"]),
-        hash: z.string().regex(/^[0-9a-fA-F]{16}$/),
+        algorithm: z.enum(["OSHASH", "PHASH", "MD5"]),
+        hash: z.string().regex(/^(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32})$/),
         duration: z.number().nonnegative().optional(),
       })
       .optional(),
     stash_scene_id: z.string().min(1).max(255).optional(),
     identify_by_hash: z.boolean().optional(),
+    /** Stash community scraper id for a scene title search (IAFD, ...). */
+    scraper_id: z.string().min(1).max(255).optional(),
   })
   .strict()
   .nullish();
@@ -64,10 +66,24 @@ export const listSuggestionsQuerySchema = z.object({
 });
 
 /** One review pass: every id listed is decided in a single request. */
+export const acceptChoiceSchema = z
+  .object({
+    target_id: z.number().int().positive().optional(),
+    create: z.boolean().optional(),
+  })
+  .strict()
+  .refine((choice) => !(choice.target_id && choice.create), {
+    message: "Choose a target or create, not both",
+  });
+
+export const acceptSuggestionBodySchema = acceptChoiceSchema.nullish();
+
 export const resolveSuggestionsBodySchema = z
   .object({
     accept: z.array(z.number().int().positive()).max(500).default([]),
     reject: z.array(z.number().int().positive()).max(500).default([]),
+    /** Per accepted suggestion id: link to an existing entity or create one. */
+    choices: z.record(z.string().regex(/^\d+$/), acceptChoiceSchema).optional(),
   })
   .strict()
   .refine((body) => body.accept.length + body.reject.length > 0, {
@@ -96,11 +112,14 @@ export const resolutionResponseSchema = z.object({
         .object({
           id: z.number(),
           name: z.string(),
-          via: z.enum(["external_id", "name", "alias"]),
+          via: z.enum(["external_id", "merged_id", "name", "alias"]),
+          stale_external_id: z.string().optional(),
           color: z.string().nullable().optional(),
           category: z.string().nullable().optional(),
         })
         .nullable(),
+      ambiguous: z.array(z.object({ id: z.number(), name: z.string() })),
+      requires_choice: z.string().nullable(),
     })
   ),
 });

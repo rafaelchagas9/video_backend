@@ -8,6 +8,12 @@ export interface DirectoryStorageInfo {
   video_count: number;
 }
 
+export interface StorageAssetInfo {
+  key: string;
+  label: string;
+  size_bytes: number;
+}
+
 export interface StorageSnapshot {
   id: number;
   total_video_size_bytes: number;
@@ -46,6 +52,7 @@ export interface CurrentStorageStats {
   faces_size_bytes: number;
   database_size_bytes: number;
   directory_breakdown: DirectoryStorageInfo[];
+  asset_breakdown: StorageAssetInfo[];
   total_managed_size_bytes: number;
 }
 

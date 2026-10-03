@@ -34,6 +34,7 @@ import type {
   QueueJobPayload,
   ConversionEvent,
 } from "./conversion.types";
+import { stashLinkService } from "@/modules/stash/stash-link.service";
 
 export class ConversionProcessorService {
   /**
@@ -288,7 +289,14 @@ export class ConversionProcessorService {
             { videoId, jobId },
             "Replacing original file in-place (preserving video record and relations)"
           );
+          // stash-box servers index the released file; keep its OSHASH.
+          await stashLinkService.recordPreConversion(
+            videoId,
+            inputPath,
+            video.duration_seconds ?? null
+          );
           await videosService.replaceFile(videoId, outputPath);
+          stashLinkService.scheduleSync([videoId]);
           const currentIdentity = lstatSync(inputPath, { bigint: true });
           if (
             originalIdentity?.isFile() &&

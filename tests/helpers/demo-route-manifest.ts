@@ -87,6 +87,18 @@ allowed PATCH /api/enrichment/providers/{id}
 allowed GET /api/enrichment/stash/scrapers
 allowed POST /api/enrichment/stash/contributions/prepare
 allowed POST /api/enrichment/stash/contributions/submit
+allowed GET /api/enrichment/identify/options
+allowed PUT /api/enrichment/identify/options
+allowed POST /api/enrichment/identify
+allowed GET /api/enrichment/identify/runs
+allowed GET /api/enrichment/identify/runs/{id}
+allowed GET /api/enrichment/identify/runs/{id}/items
+allowed POST /api/enrichment/identify/runs/{id}/cancel
+allowed POST /api/enrichment/creators/external-ids/refresh
+allowed GET /api/stash/status
+allowed POST /api/stash/sync
+allowed GET /api/stash/jobs/{id}
+allowed POST /api/stash/fingerprints/submit
 allowed GET /api/cleanup/focus
 allowed GET /api/cleanup/overview http-contract
 allowed GET /api/cleanup/candidates http-contract
@@ -288,6 +300,24 @@ allowed GET /api/videos/{id}/preview
 allowed GET /api/videos/{id}/preview/status
 allowed POST /api/videos/{id}/preview
 allowed DELETE /api/videos/{id}/preview
+allowed GET /api/visual-search/status
+allowed GET /api/discovery/home
+allowed GET /api/recordings/
+allowed GET /api/recordings/settings
+allowed PUT /api/recordings/settings
+allowed GET /api/recordings/channels/{channelId}/thumbnail
+allowed GET /api/recordings/{videoId}
+allowed POST /api/recordings/{videoId}/analyze
+allowed PUT /api/recordings/{videoId}/clips
+allowed POST /api/recordings/{videoId}/render
+allowed GET /api/discovery/moments
+allowed GET /api/discovery/videos/{id}/heatmap
+allowed POST /api/visual-search/
+allowed POST /api/visual-search/similar
+allowed GET /api/visual-search/tags/{tagId}/queries
+allowed POST /api/visual-search/tags/{tagId}/queries
+allowed DELETE /api/visual-search/tags/{tagId}/queries/{id}
+allowed GET /api/visual-search/tags/{tagId}/suggestions
 allowed GET /api/stats/storage
 allowed GET /api/stats/storage/history
 allowed POST /api/stats/storage-snapshots

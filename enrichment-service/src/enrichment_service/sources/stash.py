@@ -5,7 +5,8 @@ import httpx
 from ..models import Candidate, EnrichRequest, Fingerprint
 from ..providers import Provider
 from .base import Source
-from .stashbox import StashBoxSource
+from ..stash_client import StashClient
+from .stashbox import StashBoxSource, normalize_scraped_scene, scene_search_term
 
 PERFORMER_FIELDS = """name aliases gender birthdate death_date ethnicity country eye_color hair_color height
 career_start career_end details urls images remote_site_id"""
@@ -39,6 +40,8 @@ class StashSource(Source):
         return data["listScrapers"]
 
     async def search(self, request: EnrichRequest, client: httpx.AsyncClient) -> list[Candidate]:
+        if request.scraper_id and not request.scraper_url:
+            return await self.search_with_scraper(request, client)
         if not request.scraper_url:
             return []
         creator = request.entity_type == "creator"
@@ -76,6 +79,27 @@ class StashSource(Source):
                              "match": (candidate.raw or {}).get("match") or {
                                  "entity_type": request.entity_type, "source": self.name,
                                  "external_id": None, "name": entity.get("name" if creator else "title")}}
+        return candidates
+
+    async def search_with_scraper(self, request: EnrichRequest, client: httpx.AsyncClient) -> list[Candidate]:
+        """Title search through one installed community scraper (IAFD, ...)."""
+        if request.entity_type != "scene":
+            raise ValueError("Scraper title search supports scenes")
+        term = scene_search_term(request)
+        found = await StashClient(self.provider, client).scrape_scene_with_scraper(request.scraper_id or "", term)
+        mapper = StashBoxSource(name=self.name, endpoint=self.provider.endpoint, api_key="", dialect="stashbox")
+        candidates: list[Candidate] = []
+        for scene in found[: request.limit]:
+            normalized = normalize_scraped_scene(scene)
+            # A scraper's remote_site_id belongs to the scraped site, not to a stash-box.
+            normalized["id"] = None
+            for candidate in mapper._map_scene(normalized, 0.6 if (scene.get("title") or "").lower() != term.lower() else 0.85):
+                candidate.raw = {**(candidate.raw or {}), "scraper_id": request.scraper_id,
+                                 "remote_site_id": scene.get("remote_site_id"),
+                                 "match": {**((candidate.raw or {}).get("match") or {}),
+                                           "external_id": None, "name": scene.get("title"),
+                                           "source": self.name, "entity_type": "scene"}}
+                candidates.append(candidate)
         return candidates
 
     async def fingerprints(self, client: httpx.AsyncClient, scene_id: str) -> list[Fingerprint]:

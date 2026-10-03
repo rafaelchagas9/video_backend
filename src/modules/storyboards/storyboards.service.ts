@@ -465,6 +465,11 @@ export class StoryboardsService {
         { tileCount, spriteSizeBytes }
       );
 
+      // New frames for visual search; loaded lazily to keep the import graph acyclic.
+      void import("@/modules/visual-search/visual-search.jobs")
+        .then(({ queueVisualIndex }) => queueVisualIndex(videoId))
+        .catch(() => {});
+
       return this.mapToApiFormat(result[0]);
     } finally {
       if (!published) {
@@ -561,6 +566,10 @@ export class StoryboardsService {
         spriteSizeBytes,
       })
       .returning();
+
+    void import("@/modules/visual-search/visual-search.jobs")
+      .then(({ queueVisualIndex }) => queueVisualIndex(videoId))
+      .catch(() => {});
 
     return this.mapToApiFormat(result[0]);
   }

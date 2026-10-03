@@ -63,7 +63,7 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
         tags: ["stats"],
         summary: "Get current storage statistics",
         description:
-          "Returns real-time storage statistics including video sizes, thumbnails, storyboards, and per-directory breakdown.",
+          "Returns cataloged video sizes and measured app file sizes by asset type and directory. PostgreSQL storage is excluded outside demo mode.",
         response: {
           200: storageCurrentResponseSchema,
           401: errorResponseSchema,

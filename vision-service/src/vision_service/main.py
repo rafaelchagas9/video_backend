@@ -8,9 +8,10 @@ import uvicorn
 from fastapi import FastAPI
 
 from .body_limit import VisionAnalyzeBodyLimitMiddleware
-from .config import get_settings
+from .clip_runtime import ClipRuntime
 from .compiled_cache import configure_compiled_cache
-from .routes import detect_router, health_router, v1_router
+from .config import get_settings
+from .routes import detect_router, embeddings_router, health_router, v1_router
 from .runtime import VisionRuntime
 
 
@@ -46,15 +47,19 @@ async def lifespan(app: FastAPI):
     # slower than any caller's timeout. Warm them in the background so they only
     # report ready once they are actually fast.
     runtime.warm_lazy_capabilities()
+    app.state.clip_runtime.start_background()
 
     try:
         yield
     finally:
         logger.info("Shutting down Vision Inference Service")
+        await app.state.clip_runtime.stop()
         await runtime.stop()
 
 
-def create_app(runtime: VisionRuntime | None = None) -> FastAPI:
+def create_app(
+    runtime: VisionRuntime | None = None, clip_runtime: ClipRuntime | None = None
+) -> FastAPI:
     """Create and configure the FastAPI application."""
     setup_logging()
     settings = runtime.settings if runtime is not None else get_settings()
@@ -68,6 +73,13 @@ def create_app(runtime: VisionRuntime | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.vision_runtime = runtime or VisionRuntime(settings)
+    if clip_runtime is None:
+        # An injected detector runtime means a test harness; never load SigLIP2 there.
+        clip_settings = settings if runtime is None else settings.model_copy(
+            update={"clip_enabled": False}
+        )
+        clip_runtime = ClipRuntime(clip_settings)
+    app.state.clip_runtime = clip_runtime
     app.add_middleware(
         VisionAnalyzeBodyLimitMiddleware,
         max_batch_bytes=settings.max_batch_bytes,
@@ -77,6 +89,7 @@ def create_app(runtime: VisionRuntime | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(detect_router)
     app.include_router(v1_router)
+    app.include_router(embeddings_router)
 
     return app
 

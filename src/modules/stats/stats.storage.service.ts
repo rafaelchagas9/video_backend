@@ -1,5 +1,4 @@
 import { snapshotHistoryQuery, snapshotDateToISOString } from "./stats.snapshots";
-import { existsSync } from "fs";
 import { readdir, stat as statAsync } from "fs/promises";
 import { resolve, join } from "path";
 import { sql } from "drizzle-orm";
@@ -10,6 +9,7 @@ import { logger } from "@/utils/logger";
 import type {
   CurrentStorageStats,
   DirectoryStorageInfo,
+  StorageAssetInfo,
   StorageSnapshot,
 } from "./stats.types";
 
@@ -21,40 +21,88 @@ export class StorageStatsService {
   /**
    * Get size of a directory recursively
    */
-  private async getDirectorySize(dirPath: string): Promise<number> {
+  private async getDirectorySize(dirPath: string, excludedRoots = new Set<string>()): Promise<number> {
     const fullPath = resolve(process.cwd(), dirPath);
-
-    if (!existsSync(fullPath)) {
-      return 0;
-    }
-
     let totalSize = 0;
+    const pending = [fullPath];
 
-    try {
-      const items = await readdir(fullPath, { withFileTypes: true });
-
-      await Promise.all(
-        items.map(async (item) => {
-          const itemPath = join(fullPath, item.name);
-          if (item.isDirectory()) {
-            totalSize += await this.getDirectorySize(itemPath);
-          } else if (item.isFile()) {
-            totalSize += (await statAsync(itemPath)).size;
+    while (pending.length) {
+      const directory = pending.pop()!;
+      let items;
+      try {
+        items = await readdir(directory, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" && directory === fullPath) return 0;
+        throw error;
+      }
+      const files: string[] = [];
+      for (const item of items) {
+        const path = join(directory, item.name);
+        if (excludedRoots.has(path)) continue;
+        if (item.isDirectory()) pending.push(path);
+        else if (item.isFile()) files.push(path);
+      }
+      // The library can contain tens of thousands of derivatives. Bound stat
+      // concurrency so a stats request does not exhaust file descriptors.
+      for (let index = 0; index < files.length; index += 64) {
+        const sizes = await Promise.all(files.slice(index, index + 64).map(async (path) => {
+          try {
+            return (await statAsync(path)).size;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+            throw error;
           }
-        }),
-      );
-    } catch (error) {
-      logger.warn({ dirPath, error }, "Failed to calculate directory size");
+        }));
+        totalSize += sizes.reduce((sum, size) => sum + size, 0);
+      }
     }
 
     return totalSize;
+  }
+
+  /** Measure app-owned files without reading video or image contents. */
+  async getAssetBreakdown(): Promise<StorageAssetInfo[]> {
+    // Count actual files, including derivatives and caches that have no DB row.
+    // Gallery images and profile images share PROFILE_PICTURES_DIR.
+    const assetDirectories = [
+      { key: "thumbnails", label: "Thumbnails", path: env.THUMBNAILS_DIR },
+      { key: "storyboards", label: "Storyboards", path: env.STORYBOARDS_DIR },
+      { key: "profiles_gallery", label: "Profiles & gallery", path: env.PROFILE_PICTURES_DIR },
+      { key: "faces", label: "Face crops", path: env.FACES_DIR },
+      { key: "face_thumbnails", label: "Face thumbnails", path: env.CREATOR_FACE_THUMBNAILS_DIR },
+      { key: "artwork", label: "Artwork", path: env.ARTWORK_DIR },
+      { key: "previews", label: "Video previews", path: env.PREVIEWS_DIR },
+      { key: "converted", label: "Converted files", path: env.CONVERTED_VIDEOS_DIR },
+      { key: "copy_cache", label: "Copy detection cache", path: env.COPY_DETECTION_CACHE_DIR },
+      { key: "perceptual_cache", label: "Perceptual index cache", path: "./data/perceptual-duplicates-cache" },
+      { key: "cast_transcodes", label: "Cast transcodes", path: env.CAST_TRANSCODE_DIR },
+      { key: "backups", label: "Database backups", path: "./data/backups" },
+    ];
+    const knownPaths = assetDirectories.map(({ path }) => resolve(process.cwd(), path));
+    const sizes = await Promise.all(knownPaths.map((path, index) => {
+      if (knownPaths.indexOf(path) !== index) return Promise.resolve(0);
+      return this.getDirectorySize(path, new Set(knownPaths.filter((other) => other !== path)));
+    }));
+    const assetBreakdown = assetDirectories.map(({ key, label }, index) => ({
+      key,
+      label,
+      size_bytes: sizes[index],
+    }));
+
+    // Keep newly introduced data/ directories visible without double counting
+    // the named roots, even when a configured root is nested under another.
+    const dataRoot = resolve(process.cwd(), "data");
+    const otherDataSize = await this.getDirectorySize(dataRoot, new Set(knownPaths));
+    assetBreakdown.push({ key: "other_data", label: "Other app data", size_bytes: otherDataSize });
+
+    return assetBreakdown;
   }
 
   /**
    * Get current storage statistics (real-time calculation)
    */
   async getCurrentStorageStats(): Promise<CurrentStorageStats> {
-    // Get video storage from database
+    // Video bytes are catalog metadata; managed asset bytes are measured files.
     const videoStatsQuery = sql`
       SELECT
         COALESCE(SUM(file_size_bytes), 0) as total_size,
@@ -77,7 +125,6 @@ export class StorageStatsService {
       total_count: Number(videoStatsRaw.total_count),
     };
 
-    // Get per-directory breakdown
     const directoryBreakdownQuery = sql`
       SELECT
         wd.id as directory_id,
@@ -107,22 +154,19 @@ export class StorageStatsService {
         video_count: Number(row.video_count),
       }));
 
-    // Get managed directory sizes in parallel
-    const [thumbnailsSize, storyboardsSize, profilePicturesSize, convertedSize, facesSize] =
-      await Promise.all([
-        this.getDirectorySize(env.THUMBNAILS_DIR),
-        this.getDirectorySize(env.STORYBOARDS_DIR),
-        this.getDirectorySize(env.PROFILE_PICTURES_DIR),
-        this.getDirectorySize(env.CONVERTED_VIDEOS_DIR),
-        this.getDirectorySize(env.FACES_DIR),
-      ]);
+    const assetBreakdown = await this.getAssetBreakdown();
+    const sizeFor = (key: string) => assetBreakdown.find((item) => item.key === key)?.size_bytes ?? 0;
+    const thumbnailsSize = sizeFor("thumbnails");
+    const storyboardsSize = sizeFor("storyboards");
+    const profilePicturesSize = sizeFor("profiles_gallery");
+    const facesSize = sizeFor("faces");
+    const convertedSize = sizeFor("converted");
 
     // Note: PostgreSQL stores data in its own data directory managed by the server
     // We no longer track database file size since it's not a local SQLite file
     const databaseSize = 0;
 
-    const totalManagedSize =
-      thumbnailsSize + storyboardsSize + profilePicturesSize + convertedSize + facesSize;
+    const totalManagedSize = assetBreakdown.reduce((sum, item) => sum + item.size_bytes, 0);
 
     return {
       total_video_size_bytes: videoStats.total_size,
@@ -134,6 +178,7 @@ export class StorageStatsService {
       faces_size_bytes: facesSize,
       database_size_bytes: databaseSize,
       directory_breakdown: directoryBreakdown,
+      asset_breakdown: assetBreakdown,
       total_managed_size_bytes: totalManagedSize,
     };
   }

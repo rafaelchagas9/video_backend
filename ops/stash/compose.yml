@@ -3,8 +3,10 @@ services:
     image: stashapp/stash:v0.31.1
     container_name: kura-stash
     restart: unless-stopped
+    # Loopback only: Stash exposes SQL and file operations to any authenticated
+    # client. Reach the UI remotely through an SSH tunnel or the HTTPS proxy.
     ports:
-      - "9999:9999"
+      - "127.0.0.1:9999:9999"
     environment:
       STASH_PORT: "9999"
     volumes:
@@ -14,7 +16,10 @@ services:
       - ../../data/stash/cache:/cache
       - ../../data/stash/blobs:/blobs
       - ../../demo_mode:/demo:ro
+      # Library roots are mounted read-only at the same absolute path Kura uses,
+      # so a Kura file path is also its Stash path.
       - /mnt:/mnt:ro
+      - /home/rafael/Documentos/projetos/goondvr/videos/completed:/home/rafael/Documentos/projetos/goondvr/videos/completed:ro
     logging:
       driver: json-file
       options:

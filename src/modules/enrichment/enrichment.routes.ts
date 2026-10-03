@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { registerProviderRoutes } from "./enrichment.providers";
+import { registerIdentifyRoutes } from "./enrichment.identify.routes";
 import { enrichmentService } from "./enrichment.service";
 import {
   entityParamSchema,
@@ -15,6 +16,7 @@ import {
   listSuggestionsQuerySchema,
   runResponseSchema,
   runListResponseSchema,
+  acceptSuggestionBodySchema,
   suggestionResponseSchema,
   suggestionListResponseSchema,
   errorResponseSchema,
@@ -28,6 +30,7 @@ export async function enrichmentRoutes(
   app.addHook("preHandler", authenticateUser);
 
   registerProviderRoutes(app);
+  registerIdentifyRoutes(app);
 
   // Run discovery for an entity (creator | studio | scene | tag)
   app.post(
@@ -65,6 +68,7 @@ export async function enrichmentRoutes(
           fingerprint: body.fingerprint,
           stash_scene_id: body.stash_scene_id,
           identify_by_hash: body.identify_by_hash,
+          scraper_id: body.scraper_id,
         }
       );
       return reply.send({
@@ -212,8 +216,11 @@ export async function enrichmentRoutes(
         tags: ["enrichment"],
         summary: "Accept a suggestion",
         description:
-          "Applies the suggestion via the existing entity writers and marks it accepted.",
+          "Applies the suggestion via the existing entity writers and marks it accepted. " +
+          "A performer, studio or tag whose name matches several library entities, or a " +
+          "single-name performer, needs `target_id` (link that entity) or `create: true`.",
         params: suggestionIdParamSchema,
+        body: acceptSuggestionBodySchema,
         response: {
           200: suggestionResponseSchema,
           400: errorResponseSchema,
@@ -225,7 +232,8 @@ export async function enrichmentRoutes(
     },
     async (request, reply) => {
       const suggestion = await enrichmentService.acceptSuggestion(
-        request.params.id
+        request.params.id,
+        request.body ?? undefined
       );
       return reply.send({
         success: true,

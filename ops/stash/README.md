@@ -2,6 +2,28 @@
 
 Instância instalada com imagem oficial `stashapp/stash:v0.31.1`. Interface: `http://localhost:9999`; GraphQL: `http://localhost:9999/graphql`.
 
+A porta escuta só em `127.0.0.1` e o Stash exige login: usuário, senha e chave de API ficam em `data/stash/credentials` (ignorado pelo Git, modo 0600). A chave também está no provedor "Stash local" do Kura. Para abrir a interface de outro aparelho, use um túnel SSH (`ssh -L 9999:127.0.0.1:9999 host`).
+
+## O que o Kura delega ao Stash
+
+- Fingerprints: o Kura sincroniza cada vídeo com a cena do Stash que tem o mesmo arquivo (caminho idêntico) e pede apenas pHash, sem previews, sprites ou capas. Novos arquivos e conversões sincronizam sozinhos; o painel Configurações → Stash mostra a cobertura e sincroniza a biblioteca. Medido: cerca de 8,6 s por arquivo com `parallelTasks = 1`.
+- Buscas no StashDB, FansDB e ThePornDB, por fingerprint ou título, e os scrapers comunitários. Salvar a chave de um provedor no Kura também a grava no Stash.
+- Contribuições de fingerprints e rascunhos, sempre com confirmação.
+
+Continuam diretos no Kura: busca por ID ou link colado, o OSHASH do arquivo original guardado antes de uma conversão e a verificação de performers mesclados.
+
+Cada pasta da biblioteca precisa estar montada com o mesmo caminho absoluto que o Kura usa (veja `compose.yml`).
+
+## Atualizar o Stash
+
+Troque a tag em `compose.yml`, recrie o container e rode, no serviço Python:
+
+```sh
+uv run python scripts/check_stash_contract.py "um título de cena"
+```
+
+O script consulta só leitura e aponta a primeira chamada cujo formato mudou.
+
 ```sh
 docker compose -f ops/stash/compose.yml up -d
 ```

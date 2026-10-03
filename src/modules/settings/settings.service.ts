@@ -42,6 +42,8 @@ export class SettingsService {
   }
 
   private parseSettingValue(key: string, value: string): SettingValue {
+    // Text settings (patterns, lists, JSON) keep their stored text as is.
+    if (typeof DEFAULT_SETTINGS[key] === "string") return value;
     if (value === "true") return true;
     if (value === "false") return false;
 

@@ -242,6 +242,11 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value.toLowerCase() === "true"),
 
+  // GoondVR live recorder (its API, through the web container's proxy)
+  GOONDVR_API_URL: z.string().default("http://localhost:32080/api/v1"),
+  GOONDVR_USERNAME: z.string().default(""),
+  GOONDVR_PASSWORD: z.string().default(""),
+
   // Creator Enrichment (Python microservice)
   ENRICHMENT_SERVICE_URL: z.string().default("http://localhost:8200"),
 

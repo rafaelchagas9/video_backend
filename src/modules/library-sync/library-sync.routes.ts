@@ -48,6 +48,8 @@ async function demoOverview() {
     getDemoDatabase().select({ total: count() }).from(demoVideosTable).get()
       ?.total ?? 0;
   const done = { pending: 0, completed: total };
+  const { visualSearchStore } = await import("@/modules/visual-search/visual-search.service");
+  const visualIndexed = (await visualSearchStore().indexedCount()).videos;
   return {
     generation: "demo",
     capabilities: {
@@ -60,7 +62,13 @@ async function demoOverview() {
     settings: { auto_perceptual: false },
     counts: {
       total_videos: total,
-      tasks: { perceptual: done, faces: done, storyboards: done, previews: done },
+      tasks: {
+        perceptual: done,
+        faces: done,
+        storyboards: done,
+        previews: done,
+        visual: { pending: Math.max(0, total - visualIndexed), completed: visualIndexed },
+      },
     },
     active_run: null,
     recent_runs: [],
@@ -103,6 +111,14 @@ function serialize(run: LibrarySyncRun) {
         storyboards: run.progress.byTask.storyboards,
         // Runs recorded before the previews task existed carry no entry for it.
         previews: run.progress.byTask.previews ?? {
+          total: 0,
+          processed: 0,
+          completed: 0,
+          failed: 0,
+          skipped: 0,
+          pending: 0,
+        },
+        visual: run.progress.byTask.visual ?? {
           total: 0,
           processed: 0,
           completed: 0,

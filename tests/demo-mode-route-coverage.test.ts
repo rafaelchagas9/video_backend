@@ -297,7 +297,7 @@ describe("demo mode runtime route coverage", () => {
     });
   });
 
-  it("requires an explicit manifest record for all 337 primary operations", () => {
+  it("requires an explicit manifest record for all 367 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -308,8 +308,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(337);
-    expect(manifestKeys).toHaveLength(337);
+    expect(runtimeOperationKeys).toHaveLength(367);
+    expect(manifestKeys).toHaveLength(367);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -337,7 +337,7 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 337,
+      allowed: 367,
       blocked: 0,
       conditional: 0,
     });
@@ -455,11 +455,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 145 generated HEAD counterparts", () => {
+  it("registers and classifies all 161 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(145);
+    expect(getScenarios).toHaveLength(161);
 
     for (const scenario of getScenarios) {
       expect(

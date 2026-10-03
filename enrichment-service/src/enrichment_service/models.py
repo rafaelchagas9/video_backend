@@ -40,8 +40,8 @@ class Candidate(BaseModel):
 
 
 class Fingerprint(BaseModel):
-    algorithm: Literal["OSHASH", "PHASH"]
-    hash: str = Field(pattern=r"^[0-9a-fA-F]{16}$")
+    algorithm: Literal["OSHASH", "PHASH", "MD5"]
+    hash: str = Field(pattern=r"^(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32})$")
     duration: float | None = Field(default=None, ge=0)
 
 
@@ -57,7 +57,14 @@ class EnrichRequest(BaseModel):
     # Scene (video) matching hints.
     scraper_url: str | None = None
     fingerprint: Fingerprint | None = None
+    # Extra hashes of this video, e.g. the original file's OSHASH captured before
+    # a conversion replaced it. Looked up directly: Stash never saw that file.
+    fingerprints: list[Fingerprint] = Field(default_factory=list)
     stash_scene_id: str | None = None
+    # Scene: only fingerprint matches, never a title search (batch identify).
+    fingerprint_only: bool = False
+    # Community scraper (Stash scraper id) for a name/title search.
+    scraper_id: str | None = None
     title: str | None = None
     file_name: str | None = None
     duration_seconds: float | None = None
@@ -65,6 +72,10 @@ class EnrichRequest(BaseModel):
     sources: list[str] | None = None
     # Number of search matches to map per source. Exact external-id lookups ignore it.
     limit: int = Field(default=1, ge=1, le=25)
+
+
+class BatchEnrichRequest(BaseModel):
+    requests: list[EnrichRequest] = Field(min_length=1, max_length=200)
 
 
 class EnrichResponse(BaseModel):

@@ -10,6 +10,7 @@ import type {
   EnrichRequest,
   EnrichResponse,
   EnrichmentHealthResponse,
+  PerformerIdentity,
 } from "./enrichment.types";
 
 export class EnrichmentClient {
@@ -24,10 +25,11 @@ export class EnrichmentClient {
   async request(
     path: string,
     method = "GET",
-    body?: unknown
+    body?: unknown,
+    timeoutMs = this.timeout
   ): Promise<unknown> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         method,
@@ -84,6 +86,28 @@ export class EnrichmentClient {
   async isAvailable(): Promise<boolean> {
     const health = await this.healthCheck();
     return health.status === "healthy";
+  }
+
+  /** Fingerprint-identify many Stash scenes; one Stash call per source. */
+  async enrichBatch(requests: EnrichRequest[]): Promise<EnrichResponse[]> {
+    // Stash downloads each result's cover; a batch can take minutes.
+    return (await this.request(
+      "/enrich/batch",
+      "POST",
+      { requests },
+      10 * 60_000
+    )) as EnrichResponse[];
+  }
+
+  /** Where stored stash-box performer IDs point now (merged / deleted). */
+  async performerIdentity(
+    source: string,
+    ids: string[]
+  ): Promise<{ source: string; results: PerformerIdentity[] }> {
+    return (await this.request("/stashbox/performers/identity", "POST", {
+      source,
+      ids,
+    })) as { source: string; results: PerformerIdentity[] };
   }
 
   /** Discover candidate metadata for a creator. */

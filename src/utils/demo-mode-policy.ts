@@ -13,6 +13,37 @@ const SAFE_API_REQUESTS: Array<{
     ),
   },
   { methods: new Set(["POST"]), path: new RegExp(`^${API_PREFIX}/vr/access$`) },
+  // Recording reviews run on demo vectors and keep decisions in memory; GoondVR is not called.
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|\\d+|channels/[^/]+/thumbnail))?/?$`),
+  },
+  {
+    methods: new Set(["PUT"]),
+    path: new RegExp(`^${API_PREFIX}/recordings/(?:settings|\\d+/clips)$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/recordings/\\d+/(?:analyze|render)$`),
+  },
+  // Discovery reads the demo catalogue; demo replay heat is synthetic plus in-memory.
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/discovery/(?:home|moments|videos/\\d+/heatmap)$`),
+  },
+  // Visual search reads demo vectors from files; tag descriptions stay in memory.
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/visual-search/(?:status|tags/\\d+/(?:queries|suggestions))$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/visual-search(?:/(?:similar|tags/\\d+/queries))?/?$`),
+  },
+  {
+    methods: new Set(["DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/visual-search/tags/\\d+/queries/\\d+$`),
+  },
   {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/vr/(?:stream|thumbnail)/\\d+$`),
@@ -377,6 +408,32 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET", "PATCH"]),
     path: new RegExp(`^${API_PREFIX}/settings$`),
+  },
+  // Stash bridge and batch identify answer from an in-memory demo stand-in
+  // (stash.demo.ts); identify defaults live in the demo settings store.
+  {
+    methods: new Set(["GET", "PUT"]),
+    path: new RegExp(`^${API_PREFIX}/enrichment/identify/options$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(
+      `^${API_PREFIX}/enrichment/(?:identify|identify/runs/\\d+/cancel|creators/external-ids/refresh)$`
+    ),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(
+      `^${API_PREFIX}/enrichment/identify/runs(?:/\\d+(?:/items)?)?$`
+    ),
+  },
+  {
+    methods: new Set(["GET"]),
+    path: new RegExp(`^${API_PREFIX}/stash/(?:status|jobs/\\d+)$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/stash/(?:sync|fingerprints/submit)$`),
   },
   {
     methods: new Set(["GET"]),

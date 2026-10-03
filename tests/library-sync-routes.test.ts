@@ -63,6 +63,14 @@ const progress = {
       skipped: 0,
       pending: 0,
     },
+    visual: {
+      total: 0,
+      processed: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      pending: 0,
+    },
   },
 };
 const run: LibrarySyncRun = {
@@ -104,6 +112,7 @@ const overview = mock(async () => ({
       faces: { pending: 5, completed: 7 },
       storyboards: { pending: 3, completed: 9 },
       previews: { pending: 12, completed: 0 },
+      visual: { pending: 12, completed: 0 },
     },
   },
   activeRun: run,

@@ -81,8 +81,14 @@ export class StatsDemoService {
       faces_size_bytes: 0,
       database_size_bytes: databaseSize,
       directory_breakdown: directoryBreakdown,
+      asset_breakdown: [
+        { key: "thumbnails", label: "Thumbnails", size_bytes: thumbnailsSize },
+        { key: "storyboards", label: "Storyboards", size_bytes: storyboardsSize },
+        { key: "profiles_gallery", label: "Profiles & gallery", size_bytes: 0 },
+        { key: "converted", label: "Converted files", size_bytes: convertedSize },
+        { key: "database", label: "Demo database", size_bytes: databaseSize },
+      ],
       total_managed_size_bytes:
-        Number(video.size) +
         thumbnailsSize +
         storyboardsSize +
         convertedSize +

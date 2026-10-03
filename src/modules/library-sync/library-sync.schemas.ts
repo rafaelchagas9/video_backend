@@ -6,13 +6,14 @@ export const librarySyncTaskSchema = z.enum([
   "faces",
   "storyboards",
   "previews",
+  "visual",
 ]);
 export const librarySyncStartBodySchema = z
   .object({
     tasks: z
       .array(librarySyncTaskSchema)
       .min(1)
-      .max(4)
+      .max(5)
       .refine(
         (items) => new Set(items).size === items.length,
         "Tasks must be unique"
@@ -78,6 +79,7 @@ const runSchema = z.object({
       faces: taskProgressSchema,
       storyboards: taskProgressSchema,
       previews: taskProgressSchema,
+      visual: taskProgressSchema,
     }),
   }),
   matching: z
@@ -146,6 +148,10 @@ export const librarySyncOverviewResponseSchema = z.object({
           completed: z.number().int(),
         }),
         previews: z.object({
+          pending: z.number().int(),
+          completed: z.number().int(),
+        }),
+        visual: z.object({
           pending: z.number().int(),
           completed: z.number().int(),
         }),

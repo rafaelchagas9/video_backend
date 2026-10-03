@@ -76,7 +76,15 @@ export class EnrichmentDemoService {
       rows.flatMap((row) => {
         const kind = kinds[row.type];
         return kind
-          ? [{ suggestion_id: row.id, kind, match: demoRepository.findRelatedEntity(kind, row.value) }]
+          ? [
+              {
+                suggestion_id: row.id,
+                kind,
+                match: demoRepository.findRelatedEntity(kind, row.value),
+                ambiguous: [],
+                requires_choice: null,
+              },
+            ]
           : [];
       })
     );

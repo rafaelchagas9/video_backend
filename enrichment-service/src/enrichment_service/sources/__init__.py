@@ -5,8 +5,14 @@ from .base import Source
 from .stashbox import StashBoxSource
 from .stash import StashSource
 
+def stash_bridge(settings: Settings):
+    """The configured local Stash, which stash-box discovery runs through."""
+    return next((p for p in configured_providers(settings) if p.kind == "stash" and p.endpoint), None)
+
+
 def build_sources(settings: Settings, requested_names: set[str] | None = None) -> list[Source]:
     sources = []
+    bridge = stash_bridge(settings)
     for provider in configured_providers(settings):
         if requested_names is not None and provider.id not in requested_names:
             continue
@@ -19,5 +25,6 @@ def build_sources(settings: Settings, requested_names: set[str] | None = None) -
             sources.append(StashSource(provider))
         else:
             sources.append(StashBoxSource(name=provider.id, endpoint=provider.endpoint, api_key=provider.api_key,
-                auth_style=provider.auth_style, dialect=provider.dialect, exact_endpoint=provider.exact_endpoint))
+                auth_style=provider.auth_style, dialect=provider.dialect, exact_endpoint=provider.exact_endpoint,
+                bridge=bridge))
     return sources

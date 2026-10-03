@@ -1,7 +1,7 @@
 import type { DurableJobStatus } from "@/modules/durable-jobs";
 import type { CopyDetectionResults } from "@/modules/copy-detection/copy-detection.schemas";
 
-export type LibrarySyncTask = "perceptual" | "faces" | "storyboards" | "previews";
+export type LibrarySyncTask = "perceptual" | "faces" | "storyboards" | "previews" | "visual";
 export type LibrarySyncTrigger = "manual" | "automatic";
 export type LibrarySyncItemStatus = "completed" | "failed" | "skipped";
 export type LibrarySyncPhase =
