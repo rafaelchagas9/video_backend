@@ -103,14 +103,18 @@ const envSchema = z.object({
 
   // Storyboard (Vidstack slider thumbnails)
   STORYBOARDS_DIR: z.string().default("./data/storyboards"),
-  STORYBOARD_TILE_WIDTH: z.string().default("192").transform(Number),
-  STORYBOARD_TILE_HEIGHT: z.string().default("108").transform(Number),
-  STORYBOARD_INTERVAL_SECONDS: z.string().default("6").transform(Number),
+  // Tiles keep the video's aspect ratio; this is their short side (see storyboards.standard).
+  STORYBOARD_TILE_SHORT_SIDE: z
+    .string()
+    .default("256")
+    .transform(Number)
+    .pipe(z.number().int().min(64).max(512)),
+  STORYBOARD_INTERVAL_SECONDS: z.string().default("5").transform(Number),
   STORYBOARD_FORMAT: z.enum(["webp", "jpg"]).default("webp"),
-  STORYBOARD_MAX_TILES: z.string().default("300").transform(Number),
+  STORYBOARD_MAX_TILES: z.string().default("4320").transform(Number),
   STORYBOARD_QUALITY: z
     .string()
-    .default("70")
+    .default("90")
     .transform(Number)
     .pipe(z.number().min(1).max(100)),
   STORYBOARD_MAX_CONCURRENT: z
@@ -119,9 +123,10 @@ const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().int().min(1).max(8)),
   STORYBOARD_SAMPLING: z.enum(["auto", "precise", "keyframes"]).default("auto"),
+  // Half the interval keeps every keyframe tile inside its own cue.
   STORYBOARD_MAX_KEYFRAME_DRIFT_SECONDS: z
     .string()
-    .default("5")
+    .default("2.5")
     .transform(Number)
     .pipe(z.number().positive().max(60)),
 

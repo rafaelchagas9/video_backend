@@ -13,8 +13,10 @@ import { indexVideoVisually } from "@/modules/visual-search/visual-search.jobs";
 import { visualSearchService, visualSearchStore } from "@/modules/visual-search/visual-search.service";
 import { BadRequestError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
-import { goondvr, usernameFromFileName, type GoondvrChannel } from "./recordings.goondvr";
+import { goondvr, usernameFromFileName } from "./recordings.goondvr";
+import { recorderService } from "./recordings.live";
 import { detectHighlights, joinStretches } from "./recordings.highlights";
+import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
 
 export interface RecordingSettings {
   directoryId: number | null;
@@ -128,7 +130,7 @@ export class RecordingsService {
       SELECT c.id, c.name FROM creators c
       WHERE EXISTS (
         SELECT 1 FROM creator_social_links l WHERE l.creator_id = c.id
-          AND lower(l.url) ~ ${`(chaturbate|stripchat)\\.com/${username.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/?$`}
+          AND lower(l.url) ~ ${`(chaturbate\\.com|stripchat\\.com|kick\\.com|twitch\\.tv|youtube\\.com)/@?${username.toLowerCase().replace(/^@/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/?$`}
       ) OR lower(c.name) = ${username.toLowerCase()}
       ORDER BY c.id LIMIT 1`);
     return rows[0] ? { id: Number(rows[0].id), name: String(rows[0].name) } : null;
@@ -136,23 +138,8 @@ export class RecordingsService {
 
   async overview(userId: number) {
     const settings = await this.settings();
-    // Demo mode never reaches the real recorder.
-    const channels = env.DEMO_MODE ? [] : await goondvr.channels();
-    const linked = await Promise.all(
-      (channels ?? []).map(async (channel: GoondvrChannel) => ({
-        id: channel.id,
-        username: channel.username,
-        site: channel.site,
-        online: channel.is_online,
-        paused: channel.is_paused,
-        recording_seconds: channel.duration_seconds,
-        room_title: channel.room_title ?? "",
-        viewers: channel.viewer_count ?? 0,
-        has_thumbnail: Boolean(channel.has_live_thumbnail),
-        creator: await this.creatorForUsername(channel.username),
-      }))
-    );
-    linked.sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
+    const channels = await goondvr.channels();
+    const linked = channels ? await recorderService.withCreators(channels) : [];
 
     let videos: Video[] = [];
     if (settings.directoryId) {
@@ -196,9 +183,11 @@ export class RecordingsService {
       Promise.all(settings.highlightPrompts.map((prompt) => visualSearchService.textVector(prompt))),
       Promise.all(settings.idlePrompts.map((prompt) => visualSearchService.textVector(prompt))),
     ]);
+    const catalogDuration = video.duration_seconds ?? frames.timestamps.at(-1) ?? 0;
+    const duration = env.DEMO_MODE ? catalogDuration : await probeRecordingDuration(video.file_path, catalogDuration);
     const result = detectHighlights({
       ...frames,
-      durationSeconds: video.duration_seconds ?? frames.timestamps.at(-1) ?? 0,
+      durationSeconds: duration,
       highlights: settings.highlightPrompts.map((label, index) => ({ label, vector: highlightVectors[index]! })),
       idle: idleVectors,
       options: { sensitivity: settings.sensitivity },
@@ -266,6 +255,8 @@ export class RecordingsService {
     const settings = await this.settings();
     if (!settings.clipsDirectoryId) throw new BadRequestError("No library directory to render clips into");
     const source = await videosService.findById(videoId, userId);
+    const duration = env.DEMO_MODE ? source.duration_seconds ?? Infinity : await probeRecordingDuration(source.file_path, source.duration_seconds ?? Infinity);
+    const boundedClips = capRecordingClips(row.clips, duration);
     const stem = basename(source.file_name).replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "_");
     const output = (fileName: string) => ({
       directory_id: settings.clipsDirectoryId!,
@@ -277,16 +268,16 @@ export class RecordingsService {
     const todo = (clip: RecordingClip) => clip.keep && !clip.output_video_id && !clip.job_id;
     let clips: RecordingClip[];
     if (combine) {
-      const pending = row.clips.filter(todo);
+      const pending = boundedClips.filter(todo);
       if (!pending.length) throw new BadRequestError("Keep at least one highlight first");
       const job = await editsService.create(videoId, {
         output: output(`${stem}_highlights_${Date.now().toString(36)}.mkv`),
         timeline: { segments: joinStretches(pending) },
       });
-      clips = row.clips.map((clip) => (todo(clip) ? { ...clip, job_id: job.id } : clip));
+      clips = boundedClips.map((clip) => (todo(clip) ? { ...clip, job_id: job.id } : clip));
     } else {
       clips = [];
-      for (const clip of row.clips) {
+      for (const clip of boundedClips) {
         if (!todo(clip)) {
           clips.push(clip);
           continue;
@@ -352,12 +343,30 @@ export class RecordingsService {
 
   private async deleteOriginal(source: Video) {
     try {
-      const owned = (await goondvr.recordings()).find((recording) => recording.name === source.file_name && !recording.active);
-      if (owned) await goondvr.deleteRecording(owned.id);
-      await videosService.delete(source.id);
+      await this.remove(source);
     } catch (error) {
       logger.warn({ error, videoId: source.id }, "Could not delete the original recording");
     }
+  }
+
+  /**
+   * Throws a whole recording away from its review, when nothing in it is worth keeping.
+   * Clips already rendered from it stay in the library.
+   */
+  async discard(userId: number, videoId: number) {
+    if ((await this.row(videoId))?.status === "rendering") throw new BadRequestError("Clips are still being rendered from this recording");
+    await this.remove(await videosService.findById(videoId, userId));
+    demoReviews.delete(videoId);
+    return { video_id: videoId };
+  }
+
+  /** Through GoondVR when it owns the file, so its per-channel quota counters stay truthful. */
+  private async remove(source: Video) {
+    // The demo drives the real GoondVR, but its library videos are never GoondVR's files.
+    const owned = env.DEMO_MODE ? undefined : (await goondvr.recordings()).find((recording) => recording.name === source.file_name);
+    if (owned?.active) throw new BadRequestError("GoondVR is still recording this file");
+    if (owned && !(await goondvr.deleteRecording(owned.id))) throw new BadRequestError("GoondVR could not delete the recording");
+    await videosService.delete(source.id);
   }
 
   async renderingIds(): Promise<number[]> {

@@ -144,6 +144,8 @@ export async function buildServer() {
 
   fastify.addHook("onClose", async () => {
     schedulerService.stop();
+    const { recorderRelay } = await import("./modules/recordings/recordings.live");
+    recorderRelay.stop();
     await castTranscodingService.stop();
 
     if (!env.DEMO_MODE) {
@@ -669,6 +671,12 @@ export async function buildServer() {
   // startup must not inspect or mutate the configured production workspace.
   if (!env.DEMO_MODE) {
     await castTranscodingService.start();
+  }
+
+  // GoondVR's channel events reach clients through Kura's own event stream.
+  if (env.NODE_ENV !== "test") {
+    const { recorderRelay } = await import("./modules/recordings/recordings.live");
+    recorderRelay.start();
   }
 
   // Start scheduler for automatic directory scanning

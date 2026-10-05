@@ -631,7 +631,12 @@ export class EditsProcessor {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
           logger.error({ jobId, error, errorMessage }, "Edit job failed");
-          await editsService.markFailed(jobId, "Video rendering failed");
+          await editsService.markFailed(
+            jobId,
+            error instanceof RenderedEditValidationError
+              ? error.message
+              : "Video rendering failed"
+          );
           const ffmpegProperties =
             error instanceof EditFfmpegProcessError
               ? (() => {

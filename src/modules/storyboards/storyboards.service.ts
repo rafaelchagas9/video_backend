@@ -34,9 +34,18 @@ import {
   storyboardImagePaths,
   storyboardPagePaths,
 } from "./storyboards.pages";
+import {
+  standardIntervalSeconds,
+  standardTileSize,
+} from "./storyboards.standard";
 
 interface SpriteSheetOptions extends StoryboardRenderOptions {
   videoId: number;
+}
+
+export interface GenerateOptions {
+  /** Queue the new storyboard for visual-search indexing (default). Off when the caller indexes it. */
+  visualIndex?: boolean;
 }
 
 export class StoryboardsService {
@@ -230,7 +239,8 @@ export class StoryboardsService {
    */
   generate(
     videoId: number,
-    input?: GenerateStoryboardInput
+    input?: GenerateStoryboardInput,
+    options: GenerateOptions = {}
   ): Promise<Storyboard> {
     const active = this.generating.get(videoId);
     if (active) {
@@ -240,7 +250,7 @@ export class StoryboardsService {
       );
       return active;
     }
-    const pending = this.runGeneration(videoId, input).finally(() =>
+    const pending = this.runGeneration(videoId, input, options).finally(() =>
       this.generating.delete(videoId)
     );
     this.generating.set(videoId, pending);
@@ -249,7 +259,8 @@ export class StoryboardsService {
 
   private async runGeneration(
     videoId: number,
-    input?: GenerateStoryboardInput
+    input: GenerateStoryboardInput | undefined,
+    options: GenerateOptions
   ): Promise<Storyboard> {
     this.setGenerationStatus(videoId, "processing");
     const started = Date.now();
@@ -267,7 +278,7 @@ export class StoryboardsService {
           text: "Generating storyboard thumbnails...",
         },
       });
-      const storyboard = await this.generateInternal(videoId, input);
+      const storyboard = await this.generateInternal(videoId, input, options);
       this.setGenerationStatus(videoId, "ready");
       logger.info(
         {
@@ -309,7 +320,8 @@ export class StoryboardsService {
 
   private async generateInternal(
     videoId: number,
-    input?: GenerateStoryboardInput
+    input: GenerateStoryboardInput | undefined,
+    generateOptions: GenerateOptions
   ): Promise<Storyboard> {
     if (env.DEMO_MODE)
       return demoMediaAssetsService.generateStoryboard(videoId, input);
@@ -466,9 +478,10 @@ export class StoryboardsService {
       );
 
       // New frames for visual search; loaded lazily to keep the import graph acyclic.
-      void import("@/modules/visual-search/visual-search.jobs")
-        .then(({ queueVisualIndex }) => queueVisualIndex(videoId))
-        .catch(() => {});
+      if (generateOptions.visualIndex !== false)
+        void import("@/modules/visual-search/visual-search.jobs")
+          .then(({ queueVisualIndex }) => queueVisualIndex(videoId))
+          .catch(() => {});
 
       return this.mapToApiFormat(result[0]);
     } finally {
@@ -503,9 +516,7 @@ export class StoryboardsService {
     const video = await videosService.findById(videoId);
     const { tileWidth, tileHeight } = this.getTileDimensions(
       video.width,
-      video.height,
-      env.STORYBOARD_TILE_WIDTH,
-      env.STORYBOARD_TILE_HEIGHT
+      video.height
     );
     const storyboardFormat = env.STORYBOARD_FORMAT;
     const tileCount = frames.length;
@@ -605,27 +616,37 @@ export class StoryboardsService {
     overrideWidth?: number,
     overrideHeight?: number
   ): { tileWidth: number; tileHeight: number } {
-    const baseWidth = overrideWidth ?? env.STORYBOARD_TILE_WIDTH;
-    const baseHeight = overrideHeight ?? env.STORYBOARD_TILE_HEIGHT;
-
-    if (!width || !height) {
-      return { tileWidth: baseWidth, tileHeight: baseHeight };
-    }
-
-    if (height > width) {
-      return { tileWidth: baseHeight, tileHeight: baseWidth };
-    }
-
-    return { tileWidth: baseWidth, tileHeight: baseHeight };
+    const standard = standardTileSize(width, height, env.STORYBOARD_TILE_SHORT_SIDE);
+    return {
+      tileWidth: overrideWidth ?? standard.tileWidth,
+      tileHeight: overrideHeight ?? standard.tileHeight,
+    };
   }
 
   private getEffectiveIntervalSeconds(
     durationSeconds: number,
     requestedIntervalSeconds: number
   ): number {
-    const maxTiles = Math.max(1, env.STORYBOARD_MAX_TILES);
-    const intervalByTileLimit = Math.ceil(durationSeconds / maxTiles);
-    return Math.max(1, requestedIntervalSeconds, intervalByTileLimit);
+    return standardIntervalSeconds(
+      durationSeconds,
+      requestedIntervalSeconds,
+      env.STORYBOARD_MAX_TILES
+    );
+  }
+
+  /** Tile size and interval a storyboard generated now would have for this video. */
+  standardFor(video: {
+    width: number | null | undefined;
+    height: number | null | undefined;
+    durationSeconds: number;
+  }): { tileWidth: number; tileHeight: number; intervalSeconds: number } {
+    return {
+      ...this.getTileDimensions(video.width, video.height),
+      intervalSeconds: this.getEffectiveIntervalSeconds(
+        video.durationSeconds,
+        env.STORYBOARD_INTERVAL_SECONDS
+      ),
+    };
   }
 
   /**

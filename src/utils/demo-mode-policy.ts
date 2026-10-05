@@ -13,10 +13,29 @@ const SAFE_API_REQUESTS: Array<{
     ),
   },
   { methods: new Set(["POST"]), path: new RegExp(`^${API_PREFIX}/vr/access$`) },
-  // Recording reviews run on demo vectors and keep decisions in memory; GoondVR is not called.
+  // Recording reviews run on demo vectors and keep decisions in memory.
   {
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|\\d+|channels/[^/]+/thumbnail))?/?$`),
+  },
+  // The recorder is GoondVR itself — a separate service, not the personal library —
+  // so the demo drives it for real. Creator links land in the demo database.
+  {
+    methods: new Set(["GET"]),
+    // watch hands the demo a demo video; stream answers 404 there (no real broadcast).
+    path: new RegExp(`^${API_PREFIX}/recordings/live(?:/(?:settings|creators/\\d+|channels/[^/]+/(?:watch|stream/[^/]+)))?$`),
+  },
+  {
+    methods: new Set(["POST"]),
+    path: new RegExp(`^${API_PREFIX}/recordings/live/channels(?:/[^/]+/(?:pause|resume|creator))?$`),
+  },
+  {
+    methods: new Set(["PUT"]),
+    path: new RegExp(`^${API_PREFIX}/recordings/live/(?:settings|channels/[^/]+)$`),
+  },
+  {
+    methods: new Set(["DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/recordings/live/channels/[^/]+$`),
   },
   {
     methods: new Set(["PUT"]),
@@ -25,6 +44,11 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["POST"]),
     path: new RegExp(`^${API_PREFIX}/recordings/\\d+/(?:analyze|render)$`),
+  },
+  // Deleting a recording removes the in-memory demo video, never a GoondVR file.
+  {
+    methods: new Set(["DELETE"]),
+    path: new RegExp(`^${API_PREFIX}/recordings/\\d+$`),
   },
   // Discovery reads the demo catalogue; demo replay heat is synthetic plus in-memory.
   {
