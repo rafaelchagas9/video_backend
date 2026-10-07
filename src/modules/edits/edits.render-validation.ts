@@ -318,7 +318,8 @@ export function probeRenderedEditOutput(
           outputPath,
           source.path,
           source.timeline,
-          signal
+          signal,
+          { seeked: true }
         );
       } catch {
         throw new RenderedEditValidationError(

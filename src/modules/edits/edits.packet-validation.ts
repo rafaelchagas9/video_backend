@@ -53,15 +53,21 @@ export class VideoPacketCoverage {
   }
 }
 
-/** Translate output holes through cuts, reordered selections, and speed changes. */
+/**
+ * Translate output holes through cuts, reordered selections, and speed changes.
+ * `leads` are how far past each segment's start its first decodable frame sits:
+ * a seek into a stream whose intra frames are not IDR starts at a later one.
+ */
 export function mapEditGapsToSourceIntervals(
   gaps: TimeInterval[],
-  timeline: EditTimelineConfig
+  timeline: EditTimelineConfig,
+  leads: readonly number[] = []
 ): TimeInterval[] {
   const intervals: TimeInterval[] = [];
   let offset = 0;
-  for (const segment of timeline.segments) {
+  timeline.segments.forEach((segment, index) => {
     const speed = segment.speed ?? 1;
+    const start = segment.start + (leads[index] ?? 0);
     const end = offset + (segment.end - segment.start) / speed;
     for (const gap of gaps) {
       // Ignore frame rounding and seek alignment at both edges of a hole.
@@ -69,12 +75,12 @@ export function mapEditGapsToSourceIntervals(
       const to = Math.min(end, gap.end - EDGE_TOLERANCE_SECONDS);
       if (to > from)
         intervals.push({
-          start: segment.start + (from - offset) * speed,
-          end: segment.start + (to - offset) * speed,
+          start: start + (from - offset) * speed,
+          end: start + (to - offset) * speed,
         });
     }
     offset = end;
-  }
+  });
   intervals.sort((a, b) => a.start - b.start);
   const merged: TimeInterval[] = [];
   for (const interval of intervals) {
@@ -163,12 +169,73 @@ function inspectTimestamps(
   });
 }
 
+const SEEK_PROBE_SECONDS = 10;
+
+/** The native timestamp of the first frame FFmpeg decodes after `-ss start`, as the edit render seeks. */
+function firstDecodedTimestamp(
+  path: string,
+  start: number,
+  signal?: AbortSignal
+): Promise<number | null> {
+  if (signal?.aborted)
+    return Promise.reject(new Error("Packet inspection cancelled"));
+  const args = [
+    "-hide_banner",
+    "-nostats",
+    "-ss",
+    start.toFixed(6),
+    "-t",
+    String(SEEK_PROBE_SECONDS),
+    "-an",
+    "-copyts",
+    "-i",
+    path,
+    "-frames:v",
+    "1",
+    "-vf",
+    "showinfo",
+    "-f",
+    "null",
+    "-",
+  ];
+  return new Promise((resolve, reject) => {
+    const child = spawn(env.FFMPEG_PATH, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    let failure: Error | undefined;
+    const stop = (message: string) => {
+      failure ??= new Error(message);
+      if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+    };
+    const abort = () => stop("Packet inspection cancelled");
+    const timeout = setTimeout(() => stop("Seek inspection timed out"), 60_000);
+    timeout.unref();
+    signal?.addEventListener("abort", abort, { once: true });
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (stderr.length < 65_536) stderr += chunk.toString();
+    });
+    child.on("error", () => {
+      failure ??= new Error("Seek inspection could not start");
+    });
+    child.on("close", () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      if (failure) return reject(failure);
+      const match = /pts_time:(-?[\d.]+)/.exec(stderr);
+      const timestamp = match ? Number(match[1]) : Number.NaN;
+      resolve(Number.isFinite(timestamp) ? timestamp : null);
+    });
+  });
+}
+
 /** Check packet timing without decoding images; consult the source only for holes. */
 export async function hasUnexpectedEditVideoGap(
   outputPath: string,
   sourcePath: string,
   timeline: EditTimelineConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: { seeked?: boolean } = {}
 ): Promise<boolean> {
   const coverage = new VideoPacketCoverage();
   const outputOrigin = await inspectTimestamps(
@@ -183,14 +250,26 @@ export async function hasUnexpectedEditVideoGap(
       sum + (segment.end - segment.start) / (segment.speed ?? 1),
     0
   );
-  const relativeIntervals = mapEditGapsToSourceIntervals(
-    coverage.gaps(duration, outputOrigin),
-    timeline
-  );
+  const outputGaps = coverage.gaps(duration, outputOrigin);
+  if (!outputGaps.length) return false;
+  let relativeIntervals = mapEditGapsToSourceIntervals(outputGaps, timeline);
   if (!relativeIntervals.length) return false;
   // Edit seeks are playback-relative, but ffprobe exposes native timestamps.
   // Match FFmpeg's default -ss origin before seeking or comparing source packets.
   const sourceOrigin = await inspectTimestamps(sourcePath, undefined, signal);
+  if (options.seeked) {
+    // Each segment's frames start where its seek really landed, often a second or
+    // more late in live recordings; mapping from the nominal start would shift the
+    // source's own dropouts onto frames that exist and report them as lost.
+    const leads: number[] = [];
+    for (const segment of timeline.segments) {
+      const first = await firstDecodedTimestamp(sourcePath, segment.start, signal);
+      const lead = first === null ? 0 : first - sourceOrigin - segment.start;
+      leads.push(Math.min(SEEK_PROBE_SECONDS, Math.max(0, lead)));
+    }
+    relativeIntervals = mapEditGapsToSourceIntervals(outputGaps, timeline, leads);
+    if (!relativeIntervals.length) return false;
+  }
   const intervals = relativeIntervals.map(({ start, end }) => ({
     start: start + sourceOrigin,
     end: end + sourceOrigin,

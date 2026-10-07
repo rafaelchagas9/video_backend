@@ -16,7 +16,7 @@ const SAFE_API_REQUESTS: Array<{
   // Recording reviews run on demo vectors and keep decisions in memory.
   {
     methods: new Set(["GET"]),
-    path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|\\d+|channels/[^/]+/thumbnail))?/?$`),
+    path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|feedback|\\d+|channels/[^/]+/thumbnail))?/?$`),
   },
   // The recorder is GoondVR itself — a separate service, not the personal library —
   // so the demo drives it for real. Creator links land in the demo database.

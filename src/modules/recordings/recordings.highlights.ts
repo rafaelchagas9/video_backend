@@ -1,13 +1,20 @@
 /**
  * Highlight detection for long live recordings, from SigLIP frame embeddings.
  *
- * A frame scores by how much more it looks like any highlight description than like the
- * idle states that fill most of a stream (chatting clothed, an empty room, an offline card).
- * Scores are then compared with the recording's own baseline (median / MAD), because what
- * counts as "more than usual" differs per stream: lighting, camera and outfit shift every
- * raw similarity. Stretches clearly above the baseline become proposed clips.
+ * Two scorers feed one clipper:
+ *
+ * * **trained** (`detectWithProbe`) — a probe fitted on hand-labelled frames classifies every
+ *   frame into a stream state; a frame's score is the probability of the states chosen as
+ *   highlights. Absolute, so a recording with no highlight proposes nothing.
+ * * **prompts** (`detectHighlights`) — a frame scores by how much more it looks like any
+ *   highlight description than like the idle states that fill most of a stream, compared with
+ *   the recording's own baseline (median / MAD), because lighting, camera and outfit shift
+ *   every raw similarity.
+ *
+ * Stretches above the threshold become proposed clips.
  */
 import { dot } from "@/modules/visual-search/visual-search.vectors";
+import { classifyFrames, type HighlightProbe, type ProbeState } from "./recordings.probe";
 
 export interface HighlightOptions {
   /** Robust z-score a frame must exceed to count as highlight material. */
@@ -113,10 +120,22 @@ export function detectHighlights(input: {
     (value) => Math.round(value * 1000) / 1000
   );
 
+  return { clips: shapeClips(timestamps, z, labels, options.sensitivity, input.durationSeconds, options), curve };
+}
+
+/** Runs of frames scoring at least `threshold`, joined across short gaps, padded, ranked. */
+function shapeClips(
+  timestamps: number[],
+  scores: number[],
+  labels: string[],
+  threshold: number,
+  durationSeconds: number,
+  options: HighlightOptions
+): ProposedClip[] {
   const interval = timestamps.length > 1 ? (timestamps.at(-1)! - timestamps[0]!) / (timestamps.length - 1) : 5;
   const runs: { from: number; to: number }[] = [];
-  for (let index = 0; index < z.length; index++) {
-    if ((z[index] ?? 0) < options.sensitivity) continue;
+  for (let index = 0; index < scores.length; index++) {
+    if ((scores[index] ?? 0) < threshold) continue;
     const at = timestamps[index]!;
     const last = runs.at(-1);
     if (last && at - timestamps[last.to]! <= options.mergeGapSeconds) last.to = index;
@@ -132,14 +151,14 @@ export function detectHighlights(input: {
     let sum = 0;
     const votes = new Map<string, number>();
     for (let index = run.from; index <= run.to; index++) {
-      sum += z[index] ?? 0;
-      if ((z[index] ?? 0) > (z[peak] ?? 0)) peak = index;
-      votes.set(labels[index]!, (votes.get(labels[index]!) ?? 0) + Math.max(0, z[index] ?? 0));
+      sum += scores[index] ?? 0;
+      if ((scores[index] ?? 0) > (scores[peak] ?? 0)) peak = index;
+      votes.set(labels[index]!, (votes.get(labels[index]!) ?? 0) + Math.max(0, scores[index] ?? 0));
     }
     const label = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
     clips.push({
       start_seconds: Math.max(0, Math.round(start - options.padSeconds)),
-      end_seconds: Math.min(input.durationSeconds || Infinity, Math.round(end + options.padSeconds)),
+      end_seconds: Math.min(durationSeconds || Infinity, Math.round(end + options.padSeconds)),
       peak_seconds: Math.round(timestamps[peak]!),
       score: Math.round((sum / (run.to - run.from + 1)) * 100) / 100,
       label,
@@ -163,7 +182,47 @@ export function detectHighlights(input: {
     .sort((a, b) => b.score - a.score)
     .slice(0, options.maxClips)
     .sort((a, b) => a.start_seconds - b.start_seconds);
-  return { clips: kept, curve };
+  return kept;
+}
+
+/**
+ * Short, weak highlights from the trained detector start out skipped. In the first 140
+ * reviewed (2026-10-07), ones under 3 minutes and below 0.8 were kept about 1 time in 4,
+ * while long confident ones were kept 6 times in 7 — so the reviewer flips the few good
+ * ones instead of skipping the many. They stay in the review; nothing is dropped.
+ */
+export const LIKELY_SKIP = { maxSeconds: 180, minScore: 0.8 };
+
+export function isLikelySkip(clip: Pick<ProposedClip, "start_seconds" | "end_seconds" | "score">): boolean {
+  return clip.end_seconds - clip.start_seconds < LIKELY_SKIP.maxSeconds && clip.score < LIKELY_SKIP.minScore;
+}
+
+const stateName = (state: ProbeState) => state.charAt(0).toUpperCase() + state.slice(1);
+
+/**
+ * The trained detector: frames whose highlight-state probability reaches `threshold`. Each
+ * clip is named after the highlight state most of its frames fall in.
+ */
+export function detectWithProbe(input: {
+  timestamps: number[];
+  vectors: Float32Array[];
+  durationSeconds: number;
+  probe: HighlightProbe;
+  states: ProbeState[];
+  threshold: number;
+  options?: Partial<HighlightOptions>;
+}): HighlightResult {
+  const options = { ...DEFAULT_HIGHLIGHT_OPTIONS, ...input.options };
+  const columns = input.states.map((state) => input.probe.classes.indexOf(state)).filter((index) => index >= 0);
+  if (input.vectors.length < 4 || !columns.length) return { clips: [], curve: [] };
+  const probabilities = classifyFrames(input.probe, input.vectors);
+  const scores = smooth(probabilities.map((row) => columns.reduce((sum, column) => sum + row[column]!, 0)), 1);
+  const labels = probabilities.map((row) => {
+    const best = columns.reduce((top, column) => (row[column]! > row[top]! ? column : top), columns[0]!);
+    return stateName(input.probe.classes[best]!);
+  });
+  const curve = downsample(scores, 240).map((value) => Math.round(value * 1000) / 1000);
+  return { clips: shapeClips(input.timestamps, scores, labels, input.threshold, input.durationSeconds, options), curve };
 }
 
 /** Kept stretches in recording order, overlapping or touching ones joined into one segment. */

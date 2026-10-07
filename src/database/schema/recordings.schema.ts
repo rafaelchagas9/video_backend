@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { boolean, doublePrecision, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { videosTable } from "./videos.schema";
 
 export interface RecordingClip {
@@ -14,6 +14,10 @@ export interface RecordingClip {
   /** Set once rendered: the edit job and the clip video it produced. */
   job_id?: number | null;
   output_video_id?: number | null;
+  /** Why the reviewer kept, skipped or added it: preset ids or their own words. */
+  reasons?: string[];
+  /** The edges detection proposed, before trimming; absent on clips added by hand. */
+  detected?: { start_seconds: number; end_seconds: number };
 }
 
 /**
@@ -35,3 +39,43 @@ export const recordingReviewsTable = pgTable("recording_reviews", {
   analyzedAt: timestamp("analyzed_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/**
+ * Every keep/skip/add decision made in a review, one row per highlight per analysis.
+ * Append-only training data for "what makes a clip worth keeping": it outlives
+ * re-analysis (a new analysed_at) and the recording itself (no foreign key).
+ */
+export const recordingClipFeedbackTable = pgTable(
+  "recording_clip_feedback",
+  {
+    id: serial("id").primaryKey(),
+    videoId: integer("video_id").notNull(),
+    /** The analysis the highlight came from. */
+    analyzedAt: timestamp("analyzed_at").notNull(),
+    clipId: text("clip_id").notNull(),
+    /** GoondVR channel, from the file name. */
+    channel: text("channel"),
+    /** What proposed the highlight: the review's detector revision. */
+    detector: text("detector").notNull(),
+    /** keep | skip */
+    verdict: text("verdict").notNull(),
+    /** Added by hand: a moment detection missed. */
+    added: boolean("added").notNull().default(false),
+    reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+    startSeconds: doublePrecision("start_seconds").notNull(),
+    endSeconds: doublePrecision("end_seconds").notNull(),
+    detectedStart: doublePrecision("detected_start"),
+    detectedEnd: doublePrecision("detected_end"),
+    peakSeconds: doublePrecision("peak_seconds").notNull(),
+    score: doublePrecision("score").notNull(),
+    label: text("label").notNull(),
+    recordingSeconds: doublePrecision("recording_seconds"),
+    /** The decision went as far as rendering the clip. */
+    rendered: boolean("rendered").notNull().default(false),
+    /** The whole recording was deleted from its review afterwards. */
+    recordingDiscarded: boolean("recording_discarded").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("recording_clip_feedback_clip").on(table.videoId, table.analyzedAt, table.clipId)]
+);

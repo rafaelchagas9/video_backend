@@ -41,3 +41,15 @@ it("maps a gap across reordered selections and different playback speeds", () =>
     { start: 102.5, end: 106 },
   ]);
 });
+
+it("maps a gap from where a late seek really started the segment", () => {
+  // The seek to 2914 decoded its first frame 1.43 s later, so the output hole at
+  // 30.76 s is the source's own dropout at 2946.16 s, not frames the render lost.
+  const [interval] = mapEditGapsToSourceIntervals(
+    [{ start: 30.76, end: 34.12 }],
+    { segments: [{ start: 2914, end: 3004 }] },
+    [1.43]
+  );
+  expect(interval!.start).toBeCloseTo(2946.44, 6);
+  expect(interval!.end).toBeCloseTo(2949.3, 6);
+});

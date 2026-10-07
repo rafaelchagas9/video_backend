@@ -37,6 +37,7 @@ import type {
 } from "./videos.types";
 import type { StudioAssignmentStatus } from "./videos.types";
 import { buildVideoFilters, getValidSortColumn } from "./videos.query-builder";
+import { withRecordingsHidden } from "./videos.recordings-filter";
 
 const studioAssignmentStatusSql = sql<StudioAssignmentStatus>`CASE
   WHEN EXISTS (SELECT 1 FROM ${videoStudiosTable} vs_status WHERE vs_status.video_id = ${videosTable.id}) THEN 'assigned'
@@ -82,6 +83,7 @@ export class VideosSearchService {
     userId: number,
     options: ListVideosOptions = {}
   ): Promise<PaginatedVideos> {
+    options = await withRecordingsHidden(options);
     if (env.DEMO_MODE) {
       const { demoRepository } = await import("@/database/demo/repository");
       const result = demoRepository.getVideos(options) as PaginatedVideos;

@@ -303,6 +303,7 @@ allowed DELETE /api/videos/{id}/preview
 allowed GET /api/visual-search/status
 allowed GET /api/discovery/home
 allowed GET /api/recordings/
+allowed GET /api/recordings/feedback
 allowed GET /api/recordings/settings
 allowed PUT /api/recordings/settings
 allowed GET /api/recordings/channels/{channelId}/thumbnail

@@ -1,0 +1,35 @@
+[project]
+name = "vision-lab"
+version = "0.1.0"
+description = "Offline experiments for recording highlight detection: candidate embedding models, labels, probes"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.9",
+    "torchvision",
+    "triton-rocm",
+    "transformers>=4.57",
+    "accelerate",
+    "sentence-transformers",
+    "open-clip-torch",
+    "timm",
+    "pillow",
+    "numpy",
+    "scikit-learn",
+    "psycopg[binary]",
+    "fastapi",
+    "uvicorn",
+    "qwen-vl-utils",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+torchvision = { index = "pytorch-rocm" }
+triton-rocm = { index = "pytorch-rocm" }

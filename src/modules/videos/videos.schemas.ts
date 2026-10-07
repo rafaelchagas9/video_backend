@@ -101,6 +101,8 @@ export const listVideosQuerySchema = z
       .default("created_at"),
     order: z.enum(["asc", "desc"]).default("desc"),
     include_hidden: z.preprocess(parseBooleanQuery, z.boolean()).default(false),
+    /** Leave GoondVR recordings out; a directory filter naming their folder wins. */
+    hideRecordings: z.preprocess(parseBooleanQuery, z.boolean()).optional(),
     createdFrom: z.iso.datetime({ offset: true }).optional(),
     createdBefore: z.iso.datetime({ offset: true }).optional(),
     minPlayCount: z.coerce.number().int().min(0).optional(),

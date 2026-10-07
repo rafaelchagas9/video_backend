@@ -95,6 +95,9 @@ export interface ListVideosOptions {
   sort?: string;
   order?: "asc" | "desc";
   include_hidden?: boolean;
+  hideRecordings?: boolean;
+  /** `hideRecordings` resolved by the service: the videos it leaves out. */
+  excludeRecordings?: { directoryId: number; minDurationSeconds: number | null };
   createdFrom?: string;
   createdBefore?: string;
   minPlayCount?: number;

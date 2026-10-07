@@ -15,6 +15,7 @@ import { logger } from "@/utils/logger";
 import { ConflictError, isForeignKeyViolation } from "@/utils/errors";
 import type { ListVideosOptions } from "./videos.types";
 import { buildVideoFilters } from "./videos.query-builder";
+import { withRecordingsHidden } from "./videos.recordings-filter";
 import { env } from "@/config/env";
 import { videosDemoService } from "./videos.demo.service";
 import { videoRelationshipsService } from "./videos.relationships.service";
@@ -396,6 +397,8 @@ export class VideosBulkService {
       studios_removed: number;
     };
   }> {
+    // Acts on what the library shows: hidden recordings stay untouched.
+    filter = await withRecordingsHidden(filter);
     const { conditions } = buildVideoFilters(userId, filter);
     const videoIds = env.DEMO_MODE
       ? demoRepository

@@ -32,4 +32,8 @@ export const DEFAULT_SETTINGS: Record<string, SettingValue> = {
   recordings_idle_prompts:
     "woman talking to the camera, fully clothed\nempty room\nblack screen\nstream offline placeholder\nwoman looking at her phone",
   recordings_sensitivity: 1.4,
+  // "trained" uses the labelled-frame probe when one is exported, "prompts" the descriptions above.
+  recordings_detector: "trained",
+  // Comma-separated probe states that count as highlights.
+  recordings_highlight_states: "nude,explicit",
 };
