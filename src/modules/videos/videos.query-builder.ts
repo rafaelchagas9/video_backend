@@ -102,6 +102,16 @@ export function buildVideoFilters(
     conditions.push(eq(videosTable.directoryId, directory_id));
   }
 
+  // GoondVR recordings, when hidden
+  const recordings = options.excludeRecordings;
+  if (recordings) {
+    conditions.push(
+      recordings.minDurationSeconds === null
+        ? sql`${videosTable.directoryId} IS DISTINCT FROM ${recordings.directoryId}`
+        : sql`NOT (${videosTable.directoryId} IS NOT DISTINCT FROM ${recordings.directoryId} AND COALESCE(${videosTable.durationSeconds}, 0) >= ${recordings.minDurationSeconds})`
+    );
+  }
+
   // IDs filter
   if (ids && ids.length > 0) {
     conditions.push(inArray(videosTable.id, ids));

@@ -15,8 +15,11 @@ import { BadRequestError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { goondvr, usernameFromFileName } from "./recordings.goondvr";
 import { recorderService } from "./recordings.live";
-import { detectHighlights, joinStretches } from "./recordings.highlights";
+import { detectHighlights, detectWithProbe, isLikelySkip, joinStretches } from "./recordings.highlights";
+import { loadHighlightProbe, PROBE_STATES, probeThreshold, type HighlightProbe, type ProbeState } from "./recordings.probe";
 import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
+import { DEMO_RECORDING_MIN_SECONDS, recordingScope } from "./recordings.scope";
+import { feedbackSummary, markRecordingDiscarded, recordFeedback } from "./recordings.feedback";
 
 export interface RecordingSettings {
   directoryId: number | null;
@@ -24,6 +27,21 @@ export interface RecordingSettings {
   highlightPrompts: string[];
   idlePrompts: string[];
   sensitivity: number;
+  /** Which scorer finds highlights; "trained" falls back to prompts when no probe is exported. */
+  detector: RecordingDetector;
+  /** Probe states clipped by the trained detector. */
+  highlightStates: ProbeState[];
+  /** The exported probe, when there is one. */
+  trainedModel: TrainedModelInfo | null;
+}
+
+export type RecordingDetector = "trained" | "prompts";
+
+export interface TrainedModelInfo {
+  version: string;
+  labelledFrames: number;
+  labelledRecordings: number;
+  metrics: HighlightProbe["metrics"];
 }
 
 interface ReviewRow {
@@ -46,44 +64,63 @@ const lines = (value: unknown) =>
     .map((line) => line.trim())
     .filter(Boolean);
 
-function revisionOf(settings: RecordingSettings): string {
-  return JSON.stringify([settings.highlightPrompts, settings.idlePrompts, settings.sensitivity]);
+/** What produced a review's clips; a review whose revision differs predates a settings change. */
+function revisionOf(settings: RecordingSettings, detector: RecordingDetector): string {
+  return detector === "trained"
+    ? JSON.stringify({ detector, model: settings.trainedModel?.version, states: settings.highlightStates, sensitivity: settings.sensitivity })
+    : JSON.stringify([settings.highlightPrompts, settings.idlePrompts, settings.sensitivity]);
 }
 
-async function directories(): Promise<{ id: number; path: string; count: number }[]> {
-  if (env.DEMO_MODE) return [{ id: 1, path: "demo_mode/video", count: 132 }];
-  const rows = await db.execute<{ id: number; path: string; count: number }>(sql`
-    SELECT d.id, d.path, count(v.id)::int AS count FROM watched_directories d
-    LEFT JOIN videos v ON v.directory_id = d.id GROUP BY d.id ORDER BY count DESC`);
-  return rows.map((row) => ({ id: Number(row.id), path: String(row.path), count: Number(row.count) }));
+/** Older reviews stored a bare prompts array as their revision. */
+function detectorOf(revision: string | undefined): RecordingDetector | null {
+  if (!revision) return null;
+  try {
+    const parsed = JSON.parse(revision) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) && (parsed as { detector?: unknown }).detector === "trained" ? "trained" : "prompts";
+  } catch {
+    return null;
+  }
 }
+
+const isState = (value: string): value is ProbeState => (PROBE_STATES as readonly string[]).includes(value);
 
 export class RecordingsService {
   async settings(): Promise<RecordingSettings> {
-    const [directoryId, highlights, idle, sensitivity, all] = await Promise.all([
-      settingsService.getNumber("recordings_directory_id"),
+    const [scope, highlights, idle, sensitivity, detector, states, probe] = await Promise.all([
+      recordingScope(),
       settingsService.getValue("recordings_highlight_prompts"),
       settingsService.getValue("recordings_idle_prompts"),
       settingsService.getNumber("recordings_sensitivity"),
-      directories(),
+      settingsService.getValue("recordings_detector"),
+      settingsService.getValue("recordings_highlight_states"),
+      loadHighlightProbe(),
     ]);
-    // Detect GoondVR's output folder by name until one is chosen explicitly.
-    const recordings =
-      (directoryId ? all.find((dir) => dir.id === directoryId) : undefined) ??
-      all.find((dir) => /goondvr/i.test(dir.path)) ??
-      (env.DEMO_MODE ? all[0] : undefined);
-    const clips = all.find((dir) => dir.id !== recordings?.id) ?? recordings;
+    const highlightStates = String(states ?? "").split(",").map((state) => state.trim()).filter(isState);
     return {
-      directoryId: recordings?.id ?? null,
-      clipsDirectoryId: clips?.id ?? null,
+      directoryId: scope.directoryId,
+      clipsDirectoryId: scope.clipsDirectoryId,
       highlightPrompts: lines(highlights),
       idlePrompts: lines(idle),
       sensitivity: sensitivity || 1.4,
+      detector: detector === "prompts" ? "prompts" : "trained",
+      highlightStates: highlightStates.length ? highlightStates : ["nude", "explicit"],
+      trainedModel: probe
+        ? { version: probe.version, labelledFrames: probe.labelledFrames, labelledRecordings: probe.labelledRecordings, metrics: probe.metrics }
+        : null,
     };
   }
 
-  async updateSettings(input: { highlightPrompts?: string[]; idlePrompts?: string[]; sensitivity?: number; directoryId?: number }) {
+  async updateSettings(input: {
+    highlightPrompts?: string[];
+    idlePrompts?: string[];
+    sensitivity?: number;
+    directoryId?: number;
+    detector?: RecordingDetector;
+    highlightStates?: ProbeState[];
+  }) {
     const values: Record<string, string | number> = {};
+    if (input.detector) values.recordings_detector = input.detector;
+    if (input.highlightStates?.length) values.recordings_highlight_states = input.highlightStates.join(",");
     if (input.highlightPrompts) values.recordings_highlight_prompts = input.highlightPrompts.join("\n");
     if (input.idlePrompts) values.recordings_idle_prompts = input.idlePrompts.join("\n");
     if (input.sensitivity !== undefined) values.recordings_sensitivity = input.sensitivity;
@@ -149,7 +186,7 @@ export class RecordingsService {
         sort: "created_at",
         order: "desc",
         include: ["creators", "artwork"],
-        ...(env.DEMO_MODE ? { minDuration: 900 } : {}),
+        ...(env.DEMO_MODE ? { minDuration: DEMO_RECORDING_MIN_SECONDS } : {}),
       });
       videos = page.data;
     }
@@ -172,32 +209,53 @@ export class RecordingsService {
   async analyze(userId: number, videoId: number) {
     const video = await videosService.findById(videoId, userId);
     const settings = await this.settings();
-    if (!settings.highlightPrompts.length) throw new BadRequestError("Add at least one highlight description first");
     const store = visualSearchStore();
-    if (!(await store.indexed([videoId])).has(videoId)) {
+    let indexed = (await store.indexed([videoId])).get(videoId);
+    if (!indexed) {
       if (env.DEMO_MODE) throw new BadRequestError("This demo video has no visual index");
       await indexVideoVisually(videoId, AbortSignal.timeout(30 * 60_000));
+      indexed = (await store.indexed([videoId])).get(videoId);
     }
+    // The probe only reads the embedding space it was trained in.
+    const probe = settings.detector === "trained" ? await loadHighlightProbe() : null;
+    const useProbe = probe !== null && indexed?.modelRevision === probe.modelRevision;
+    if (!useProbe && !settings.highlightPrompts.length) throw new BadRequestError("Add at least one highlight description first");
     const frames = await store.videoFrames(videoId);
-    const [highlightVectors, idleVectors] = await Promise.all([
-      Promise.all(settings.highlightPrompts.map((prompt) => visualSearchService.textVector(prompt))),
-      Promise.all(settings.idlePrompts.map((prompt) => visualSearchService.textVector(prompt))),
-    ]);
     const catalogDuration = video.duration_seconds ?? frames.timestamps.at(-1) ?? 0;
     const duration = env.DEMO_MODE ? catalogDuration : await probeRecordingDuration(video.file_path, catalogDuration);
-    const result = detectHighlights({
-      ...frames,
-      durationSeconds: duration,
-      highlights: settings.highlightPrompts.map((label, index) => ({ label, vector: highlightVectors[index]! })),
-      idle: idleVectors,
-      options: { sensitivity: settings.sensitivity },
-    });
+    let result;
+    if (useProbe) {
+      result = detectWithProbe({
+        ...frames,
+        durationSeconds: duration,
+        probe,
+        states: settings.highlightStates,
+        threshold: probeThreshold(settings.sensitivity),
+      });
+    } else {
+      const [highlightVectors, idleVectors] = await Promise.all([
+        Promise.all(settings.highlightPrompts.map((prompt) => visualSearchService.textVector(prompt))),
+        Promise.all(settings.idlePrompts.map((prompt) => visualSearchService.textVector(prompt))),
+      ]);
+      result = detectHighlights({
+        ...frames,
+        durationSeconds: duration,
+        highlights: settings.highlightPrompts.map((label, index) => ({ label, vector: highlightVectors[index]! })),
+        idle: idleVectors,
+        options: { sensitivity: settings.sensitivity },
+      });
+    }
     const row: ReviewRow = {
       videoId,
       status: result.clips.length ? "proposed" : "dismissed",
-      clips: result.clips.map((clip, index) => ({ ...clip, id: `c${index + 1}`, keep: true })),
+      clips: result.clips.map((clip, index) => ({
+        ...clip,
+        id: `c${index + 1}`,
+        keep: !(useProbe && isLikelySkip(clip)),
+        detected: { start_seconds: clip.start_seconds, end_seconds: clip.end_seconds },
+      })),
       curve: result.curve,
-      promptsRevision: revisionOf(settings),
+      promptsRevision: revisionOf(settings, useProbe ? "trained" : "prompts"),
       deleteOriginal: false,
       error: null,
       analyzedAt: new Date(),
@@ -219,9 +277,10 @@ export class RecordingsService {
     let row = await this.row(videoId);
     if (row?.status === "rendering") row = (await this.finalize(videoId)) ?? row;
     const video = await videosService.findById(videoId, userId, ["creators"]).catch(() => null);
-    if (!row) return { video, status: "pending", clips: [], curve: [], delete_original: false, error: null, analyzed_at: null };
+    if (!row) return { video, status: "pending", clips: [], curve: [], delete_original: false, error: null, analyzed_at: null, detector: null };
     return {
       video,
+      detector: detectorOf(row.promptsRevision),
       status: row.status,
       clips: row.clips,
       curve: row.curve,
@@ -235,12 +294,37 @@ export class RecordingsService {
     const row = await this.row(videoId);
     if (!row) throw new NotFoundError("This recording has not been analysed");
     if (row.status === "rendering") throw new BadRequestError("Clips are being rendered");
-    const duration = (await videosService.findById(videoId, userId)).duration_seconds ?? Infinity;
+    const video = await videosService.findById(videoId, userId);
+    const duration = video.duration_seconds ?? Infinity;
     for (const clip of clips)
       if (!(clip.end_seconds > clip.start_seconds) || clip.start_seconds < 0 || clip.end_seconds > duration + 1)
         throw new BadRequestError("Every clip must end after it starts, inside the recording");
-    await this.save({ ...row, clips, status: clips.some((clip) => clip.keep) ? "proposed" : "dismissed" });
+    // Clips added by hand were never detected; a merge sends back the pair's combined proposal.
+    const next = clips.map((clip) => {
+      if (!clip.id.startsWith("added-")) return clip;
+      const { detected: _detected, ...rest } = clip;
+      return rest;
+    });
+    await this.save({ ...row, clips: next, status: next.some((clip) => clip.keep) ? "proposed" : "dismissed" });
+    await this.recordDecisions(row, video, next);
     return this.review(userId, videoId);
+  }
+
+  /** Training data for what is worth keeping; a failure here never loses the review itself. */
+  private async recordDecisions(row: ReviewRow, video: Video, clips: RecordingClip[], rendered = false) {
+    try {
+      await recordFeedback(
+        { videoId: row.videoId, analyzedAt: row.analyzedAt, promptsRevision: row.promptsRevision, fileName: video.file_name, durationSeconds: video.duration_seconds ?? null },
+        clips,
+        { rendered }
+      );
+    } catch (error) {
+      logger.warn({ error, videoId: row.videoId }, "Could not record review decisions");
+    }
+  }
+
+  feedback() {
+    return feedbackSummary();
   }
 
   /**
@@ -291,6 +375,7 @@ export class RecordingsService {
       }
     }
     await this.save({ ...row, clips, deleteOriginal, status: "rendering", error: null });
+    await this.recordDecisions(row, source, clips, true);
     startFinalizer();
     return this.review(userId, videoId);
   }
@@ -357,6 +442,7 @@ export class RecordingsService {
     if ((await this.row(videoId))?.status === "rendering") throw new BadRequestError("Clips are still being rendered from this recording");
     await this.remove(await videosService.findById(videoId, userId));
     demoReviews.delete(videoId);
+    await markRecordingDiscarded(videoId).catch((error) => logger.warn({ error, videoId }, "Could not mark review decisions discarded"));
     return { video_id: videoId };
   }
 

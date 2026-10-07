@@ -101,6 +101,9 @@ const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().min(0).max(2)),
 
+  // Trained recording-highlight detector, exported by vision-lab/export_probe.py.
+  RECORDINGS_HIGHLIGHT_PROBE: z.string().default("./data/models/recordings-highlight-probe.json"),
+
   // Storyboard (Vidstack slider thumbnails)
   STORYBOARDS_DIR: z.string().default("./data/storyboards"),
   // Tiles keep the video's aspect ratio; this is their short side (see storyboards.standard).

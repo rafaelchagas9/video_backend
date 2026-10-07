@@ -6,6 +6,7 @@ import { env } from "@/config/env";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { goondvr } from "./recordings.goondvr";
 import { RECORDER_SITES, demoChannelPicture, recorderService } from "./recordings.live";
+import { PROBE_STATES } from "./recordings.probe";
 import { recordingsService } from "./recordings.service";
 
 const videoParams = z.object({ videoId: z.coerce.number().int().positive() });
@@ -19,6 +20,8 @@ const clipSchema = z.object({
   keep: z.boolean(),
   job_id: z.number().int().nullable().optional(),
   output_video_id: z.number().int().nullable().optional(),
+  reasons: z.array(z.string().trim().min(1).max(60)).max(16).optional(),
+  detected: z.object({ start_seconds: z.number().min(0), end_seconds: z.number().min(0) }).optional(),
 });
 const anyData = z.object({ success: z.literal(true), data: z.any() });
 const channelParams = z.object({ channelId: z.string().min(1).max(200) });
@@ -68,6 +71,8 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
           idle_prompts: z.array(z.string().trim().min(1).max(200)).max(40).optional(),
           sensitivity: z.number().min(0.5).max(4).optional(),
           directory_id: z.number().int().min(0).optional(),
+          detector: z.enum(["trained", "prompts"]).optional(),
+          highlight_states: z.array(z.enum(PROBE_STATES)).min(1).max(PROBE_STATES.length).optional(),
         }),
         response: { 200: anyData },
       },
@@ -79,6 +84,8 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         ...(request.body.idle_prompts ? { idlePrompts: request.body.idle_prompts } : {}),
         ...(request.body.sensitivity !== undefined ? { sensitivity: request.body.sensitivity } : {}),
         ...(request.body.directory_id !== undefined ? { directoryId: request.body.directory_id } : {}),
+        ...(request.body.detector ? { detector: request.body.detector } : {}),
+        ...(request.body.highlight_states ? { highlightStates: request.body.highlight_states } : {}),
       }),
     })
   );
@@ -283,6 +290,19 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       },
     },
     async (request) => ({ success: true as const, data: await recorderService.updateSettings(request.body) })
+  );
+
+  app.get(
+    "/feedback",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Review decisions so far",
+        description: "How many highlights were kept, skipped or added, and how often each reason was given — the reasons people typed included.",
+        response: { 200: anyData },
+      },
+    },
+    async () => ({ success: true as const, data: await recordingsService.feedback() })
   );
 
   app.get(

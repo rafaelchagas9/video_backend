@@ -16,6 +16,15 @@ export function buildDemoVideoQuery(
     add("v.is_available = ?", Number(options.isAvailable));
   else if (!options.include_hidden) add("v.is_available = 1");
   if (options.directory_id) add("v.directory_id = ?", options.directory_id);
+  const recordings = options.excludeRecordings;
+  if (recordings)
+    add(
+      recordings.minDurationSeconds === null
+        ? "v.directory_id <> ?"
+        : "NOT (v.directory_id = ? AND COALESCE(v.duration_seconds, 0) >= ?)",
+      recordings.directoryId,
+      ...(recordings.minDurationSeconds === null ? [] : [recordings.minDurationSeconds])
+    );
   if (options.ids?.length)
     add(`v.id IN (${placeholders(options.ids)})`, ...options.ids);
   if (options.search) {
