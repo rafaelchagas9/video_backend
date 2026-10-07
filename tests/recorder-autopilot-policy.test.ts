@@ -14,7 +14,6 @@ const live = (input: Partial<LiveInput>): LiveInput => ({
   state: "watching",
   stateSince: at(0),
   online: true,
-  readable: true,
   hotStreak: 0,
   lastHotAt: null,
   title: "",
@@ -74,13 +73,6 @@ describe("live transitions", () => {
     expect(liveTransition(live({ ...recording, stateSince: at(50), lastHotAt: null, now: at(60) }), settings)).toBeNull();
   });
 
-  test("sites without a live frame record while online, up to the session cap", () => {
-    expect(liveTransition(live({ readable: false }), settings)?.state).toBe("recording");
-    const blind = { state: "recording" as const, readable: false, stateSince: at(0) };
-    expect(liveTransition(live({ ...blind, now: at(60) }), settings)).toBeNull();
-    expect(liveTransition(live({ ...blind, now: new Date(at(0).getTime() + 121 * 60_000) }), settings)?.state).toBe("watching");
-    expect(liveTransition(live({ ...blind, online: false }), settings)?.state).toBe("watching");
-  });
 });
 
 test("the target needs all three numbers", () => {

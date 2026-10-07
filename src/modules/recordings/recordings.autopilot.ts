@@ -36,7 +36,10 @@ import { recordingScope } from "./recordings.scope";
 
 const SETTINGS_KEY = "recordings_autopilot";
 const CYCLE_MS = 60_000;
-/** Sites whose live frame GoondVR can serve; Streamlink sites have none. */
+/**
+ * Sites whose live frame GoondVR can serve. Streamlink sites (Twitch, Kick, YouTube) have none,
+ * so the autopilot leaves them to the user.
+ */
 const READABLE_SITES = new Set(["chaturbate", "stripchat"]);
 /** The storyboard tile the probe was trained on: SigLIP squashes it to 256×256 anyway. */
 const TILE = { width: 456, height: 256 };
@@ -83,7 +86,7 @@ class RecorderAutopilot {
     const current = await this.settings();
     const next = parseSettings(JSON.stringify({ ...current, ...update, targets: { ...current.targets, ...update.targets } }));
     await settingsService.updateValues({ [SETTINGS_KEY]: JSON.stringify(next) });
-    if (update.mode && update.mode !== current.mode) await this.log(null, "mode", `modo: ${update.mode}`, true);
+    if (update.mode && update.mode !== current.mode) await this.log(null, "mode", `mode: ${update.mode}`, true);
     return next;
   }
 
@@ -94,7 +97,7 @@ class RecorderAutopilot {
       .insert(recorderAutopilotChannelsTable)
       .values({ channelId, managed })
       .onConflictDoUpdate({ target: recorderAutopilotChannelsTable.channelId, set: { managed, updatedAt: new Date() } });
-    await this.log(channelId, "managed", managed ? "voltou para o piloto" : "controle manual", true);
+    await this.log(channelId, "managed", managed ? "handed back to the autopilot" : "taken over by hand", true);
     return { channel_id: channelId, managed };
   }
 
@@ -107,16 +110,16 @@ class RecorderAutopilot {
       if (settings.mode === "off") return;
       const channels = await goondvr.channels();
       if (!channels) {
-        this.lastError = "GoondVR não respondeu";
+        this.lastError = "GoondVR is not reachable";
         return;
       }
       await this.syncOutcomes();
       const [progress, queue, outcomes, rows] = await Promise.all([this.progress(), this.queue(), this.outcomes(), this.rows()]);
       const reached = targetReached(progress, settings.targets);
       const blocked = reached
-        ? "meta do classificador atingida"
+        ? "classifier target reached"
         : queue >= settings.queueLimit
-          ? `${queue} gravações esperando revisão`
+          ? `${queue} recordings waiting for review`
           : null;
       const readings = await this.read(channels.filter((channel) => {
         const row = rows.get(channel.id);
@@ -155,12 +158,12 @@ class RecorderAutopilot {
       (
         await db
           .insert(recorderAutopilotChannelsTable)
-          .values({ channelId: channel.id, state: "watching", reason: "novo no piloto" })
+          .values({ channelId: channel.id, state: "watching", reason: "new to the autopilot" })
           .onConflictDoNothing()
           .returning()
       )[0] ??
       (await db.select().from(recorderAutopilotChannelsTable).where(eq(recorderAutopilotChannelsTable.channelId, channel.id)))[0]!;
-    if (!current.managed) return;
+    if (!current.managed || !READABLE_SITES.has(channel.site)) return;
 
     const patch: Partial<ChannelRow> = {};
     if (reading) {
@@ -180,7 +183,7 @@ class RecorderAutopilot {
     let state = current.state as AutopilotState;
     let reason = current.reason ?? "";
     const history = channelHistory(outcomes);
-    const settled = context.reached ? { state: "target" as const, reason: "meta do classificador atingida" } : settledState(history, settings);
+    const settled = context.reached ? { state: "target" as const, reason: "classifier target reached" } : settledState(history, settings);
     const recordingNow = !channel.is_paused;
 
     if (settled) {
@@ -192,12 +195,12 @@ class RecorderAutopilot {
     } else {
       if (state === "enough" || state === "dropped" || state === "target") {
         state = "watching";
-        reason = "voltou a observar";
+        reason = "watching again";
       }
       // A channel someone resumed by hand is treated as a recording the autopilot started.
       if (apply && state === "watching" && recordingNow && channel.is_online) {
         state = "recording";
-        reason = "já estava gravando";
+        reason = "was already recording";
         patch.lastHotAt = now;
       }
       if (apply && state === "recording" && channel.is_paused && current.state === "recording") {
@@ -205,23 +208,22 @@ class RecorderAutopilot {
           // Paused by hand while the autopilot was recording: the user takes the channel over.
           await db
             .update(recorderAutopilotChannelsTable)
-            .set({ managed: false, state: "watching", reason: "pausado à mão", stateSince: now, updatedAt: now })
+            .set({ managed: false, state: "watching", reason: "paused by hand", stateSince: now, updatedAt: now })
             .where(eq(recorderAutopilotChannelsTable.channelId, channel.id));
-          await this.log(channel.id, "managed", `${channel.username}: pausado à mão, agora em controle manual`, true);
+          await this.log(channel.id, "managed", `${channel.username}: paused by hand, now managed by hand`, true);
           return;
         }
         // GoondVR paused it itself (quota, disk): back to watching.
         state = "watching";
-        reason = `GoondVR pausou: ${channel.pause_reason}`;
+        reason = `GoondVR paused it: ${channel.pause_reason}`;
       }
       // A channel held by one of its own limits cannot record until the limit clears.
-      const limited = channel.is_paused && channel.pause_reason && channel.pause_reason !== "Added without auto-start" ? `limite do GoondVR: ${channel.pause_reason}` : null;
+      const limited = channel.is_paused && channel.pause_reason && channel.pause_reason !== "Added without auto-start" ? `GoondVR limit: ${channel.pause_reason}` : null;
       const next = liveTransition(
         {
           state,
           stateSince: state === current.state ? current.stateSince : now,
           online: channel.is_online,
-          readable: READABLE_SITES.has(channel.site),
           hotStreak,
           lastHotAt: patch.lastHotAt ?? lastHotAt,
           title: channel.room_title ?? "",
@@ -245,7 +247,7 @@ class RecorderAutopilot {
           await goondvr.resumeChannel(channel.id);
         } catch (error) {
           state = "watching";
-          reason = `GoondVR recusou: ${error instanceof Error ? error.message : String(error)}`;
+          reason = `GoondVR refused: ${error instanceof Error ? error.message : String(error)}`;
           await this.log(channel.id, "start", `${channel.username}: ${reason}`, false);
         }
       } else if (!want && !channel.is_paused) {
@@ -280,7 +282,7 @@ class RecorderAutopilot {
       max_stored_size_mb: settings.defaultKeepMb,
     });
     channel.max_stored_size_mb = settings.defaultKeepMb;
-    await this.log(channel.id, "limits", `${channel.username}: limite de ${Math.round(settings.defaultKeepMb / 1024)} GB guardados`, true);
+    await this.log(channel.id, "limits", `${channel.username}: storage limit set to ${Math.round(settings.defaultKeepMb / 1024)} GB`, true);
   }
 
   /** Live-frame state probabilities per channel id; channels whose frame could not be read are absent. */
@@ -312,7 +314,7 @@ class RecorderAutopilot {
     const pages = [...images].map(([id, image]) => ({ id, image, fileName: "live.jpg", tileWidth: TILE.width, tileHeight: TILE.height, columns: 1, count: 1 }));
     const embedded = await visualSearchClient.embedPages(pages, AbortSignal.timeout(120_000));
     if (embedded.modelRevision !== probe.modelRevision) {
-      this.lastError = `o modelo de imagem (${embedded.modelRevision}) não é o do probe (${probe.modelRevision})`;
+      this.lastError = `the image model (${embedded.modelRevision}) is not the probe's (${probe.modelRevision})`;
       return result;
     }
     for (const [id, halves] of embedded.pages) {

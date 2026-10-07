@@ -285,7 +285,6 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
           startReadings: z.number().int().min(1).max(10).optional(),
           idleStopMinutes: z.number().int().min(1).max(240).optional(),
           minRecordMinutes: z.number().int().min(0).max(240).optional(),
-          blindSessionMinutes: z.number().int().min(5).max(24 * 60).optional(),
           queueLimit: z.number().int().min(1).max(1000).optional(),
           targets: z
             .object({

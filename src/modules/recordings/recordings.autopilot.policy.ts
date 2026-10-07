@@ -27,8 +27,6 @@ export interface AutopilotSettings {
   idleStopMinutes: number;
   /** ...but never before it has run this long, so a pause in the action does not split it. */
   minRecordMinutes: number;
-  /** Sites without a live frame record whenever online, for at most this long a session. */
-  blindSessionMinutes: number;
   /** No new recording starts while this many recordings wait for review (analysed or not). */
   queueLimit: number;
   targets: { pairedRecordings: number; channels: number; keeps: number };
@@ -52,7 +50,6 @@ export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   startReadings: 2,
   idleStopMinutes: 20,
   minRecordMinutes: 15,
-  blindSessionMinutes: 120,
   queueLimit: 25,
   targets: { pairedRecordings: 60, channels: 25, keeps: 150 },
   enoughUseful: 4,
@@ -102,11 +99,11 @@ export function channelHistory(outcomes: Outcome[]): ChannelHistory {
 /** A state the history settles on its own, whatever is live right now; null when it settles nothing. */
 export function settledState(history: ChannelHistory, settings: AutopilotSettings): { state: AutopilotState; reason: string } | null {
   if (history.useful >= settings.enoughUseful)
-    return { state: "enough", reason: `${history.useful} gravações com destaque mantido e pulado já bastam` };
+    return { state: "enough", reason: `${history.useful} recordings with a kept and a skipped clip are enough` };
   if (settings.dropAfterEmpty > 0 && history.emptyStreak >= settings.dropAfterEmpty)
-    return { state: "dropped", reason: `as últimas ${history.emptyStreak} gravações não tiveram nenhum destaque` };
+    return { state: "dropped", reason: `the last ${history.emptyStreak} recordings had no highlight at all` };
   if (settings.dropAfterReviewedWithoutKeep > 0 && history.kept === 0 && history.reviewed >= settings.dropAfterReviewedWithoutKeep)
-    return { state: "dropped", reason: `${history.reviewed} gravações revisadas sem nenhum destaque mantido` };
+    return { state: "dropped", reason: `${history.reviewed} reviewed recordings without a kept clip` };
   return null;
 }
 
@@ -129,8 +126,6 @@ export interface LiveInput {
   state: AutopilotState;
   stateSince: Date;
   online: boolean;
-  /** Whether a live frame can be read for this channel at all. */
-  readable: boolean;
   hotStreak: number;
   lastHotAt: Date | null;
   title: string;
@@ -145,22 +140,16 @@ export function liveTransition(input: LiveInput, settings: AutopilotSettings): {
   if (input.state === "watching") {
     if (!input.online || input.blocked) return null;
     if (matches(input.title, settings.titleBlock)) return null;
-    if (!input.readable) return { state: "recording", reason: "online (site sem imagem ao vivo)" };
     const needed = matches(input.title, settings.titlePrefer) ? 1 : settings.startReadings;
-    if (input.hotStreak >= needed) return { state: "recording", reason: `ação na live em ${input.hotStreak} leitura(s) seguida(s)` };
+    if (input.hotStreak >= needed) return { state: "recording", reason: `action in ${input.hotStreak} live frame(s) in a row` };
     return null;
   }
   if (input.state === "recording") {
     const running = minutes(input.stateSince);
     if (running < settings.minRecordMinutes) return null;
-    if (!input.readable) {
-      if (!input.online) return { state: "watching", reason: "a live terminou" };
-      if (running >= settings.blindSessionMinutes) return { state: "watching", reason: `${settings.blindSessionMinutes} min gravados sem imagem para avaliar` };
-      return null;
-    }
     const idle = Math.min(minutes(input.lastHotAt), running);
     if (idle >= settings.idleStopMinutes)
-      return { state: "watching", reason: input.online ? `${Math.round(idle)} min sem ação` : "a live terminou" };
+      return { state: "watching", reason: input.online ? `${Math.round(idle)} min without action` : "the stream ended" };
   }
   return null;
 }
