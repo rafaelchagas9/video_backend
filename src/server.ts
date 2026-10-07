@@ -146,6 +146,8 @@ export async function buildServer() {
     schedulerService.stop();
     const { recorderRelay } = await import("./modules/recordings/recordings.live");
     recorderRelay.stop();
+    const { recorderAutopilot } = await import("./modules/recordings/recordings.autopilot");
+    recorderAutopilot.stop();
     await castTranscodingService.stop();
 
     if (!env.DEMO_MODE) {
@@ -677,6 +679,8 @@ export async function buildServer() {
   if (env.NODE_ENV !== "test") {
     const { recorderRelay } = await import("./modules/recordings/recordings.live");
     recorderRelay.start();
+    const { recorderAutopilot } = await import("./modules/recordings/recordings.autopilot");
+    recorderAutopilot.start();
   }
 
   // Start scheduler for automatic directory scanning

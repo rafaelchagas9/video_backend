@@ -4,6 +4,8 @@ import { z } from "zod";
 import { API_PREFIX } from "@/config/constants";
 import { env } from "@/config/env";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import { recorderAutopilot } from "./recordings.autopilot";
+import { AUTOPILOT_MODES } from "./recordings.autopilot.policy";
 import { goondvr } from "./recordings.goondvr";
 import { RECORDER_SITES, demoChannelPicture, recorderService } from "./recordings.live";
 import { PROBE_STATES } from "./recordings.probe";
@@ -256,6 +258,74 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       },
     },
     async (request) => ({ success: true as const, data: await recorderService.linkCreator(request.params.channelId, request.body) })
+  );
+
+  app.get(
+    "/autopilot",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Recorder autopilot status",
+        description: "Settings, progress toward the classifier's data targets, the review queue, each channel's state and recent decisions.",
+        response: { 200: anyData },
+      },
+    },
+    async () => ({ success: true as const, data: await recorderAutopilot.status() })
+  );
+
+  app.put(
+    "/autopilot/settings",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Change the recorder autopilot's settings",
+        body: z.object({
+          mode: z.enum(AUTOPILOT_MODES).optional(),
+          startThreshold: z.number().min(0.05).max(0.99).optional(),
+          startReadings: z.number().int().min(1).max(10).optional(),
+          idleStopMinutes: z.number().int().min(1).max(240).optional(),
+          minRecordMinutes: z.number().int().min(0).max(240).optional(),
+          blindSessionMinutes: z.number().int().min(5).max(24 * 60).optional(),
+          queueLimit: z.number().int().min(1).max(1000).optional(),
+          targets: z
+            .object({
+              pairedRecordings: z.number().int().min(0).max(100_000).optional(),
+              channels: z.number().int().min(0).max(10_000).optional(),
+              keeps: z.number().int().min(0).max(100_000).optional(),
+            })
+            .optional(),
+          enoughUseful: z.number().int().min(1).max(1000).optional(),
+          dropAfterEmpty: z.number().int().min(0).max(100).optional(),
+          dropAfterReviewedWithoutKeep: z.number().int().min(0).max(100).optional(),
+          defaultKeepMb: z.number().int().min(0).max(100 * 1024 * 1024).optional(),
+          titleBlock: z.array(z.string().trim().min(1).max(60)).max(100).optional(),
+          titlePrefer: z.array(z.string().trim().min(1).max(60)).max(100).optional(),
+        }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => {
+      const { targets, ...rest } = request.body;
+      const current = await recorderAutopilot.settings();
+      return {
+        success: true as const,
+        data: await recorderAutopilot.updateSettings({ ...rest, ...(targets ? { targets: { ...current.targets, ...targets } } : {}) }),
+      };
+    }
+  );
+
+  app.put(
+    "/autopilot/channels/:channelId",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Hand a channel to the autopilot or take it back",
+        params: channelParams,
+        body: z.object({ managed: z.boolean() }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => ({ success: true as const, data: await recorderAutopilot.setManaged(request.params.channelId, request.body.managed) })
   );
 
   app.get(
