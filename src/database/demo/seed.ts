@@ -189,6 +189,8 @@ export function importDemoSeedDocument(
   const videos = expandVideos(input.videos);
 
   withDemoTransaction(() => {
+    // Child tags can be listed before their parents in a fresh catalog.
+    sqlite.exec("PRAGMA defer_foreign_keys = ON");
     if (options.reset ?? true) {
       for (const table of DELETE_ORDER) sqlite.exec(`DELETE FROM ${table}`);
       sqlite.exec("DELETE FROM demo_bookmark_categories WHERE kind='custom'");
