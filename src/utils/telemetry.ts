@@ -435,21 +435,52 @@ export function captureTelemetryLog(level: LogLevel, args: unknown[]): void {
   }
 }
 
-export function shouldTrackRequestMetrics(request: FastifyRequest): boolean {
-  if (!env.POSTHOG_CAPTURE_REQUEST_METRICS) return false;
+export function shouldTrackRequestMetrics(
+  request: FastifyRequest,
+  statusCode = 200,
+  captureSuccessfulRequests = env.POSTHOG_CAPTURE_REQUEST_METRICS,
+): boolean {
+  // Failures remain visible even when successful request analytics are disabled.
+  if (statusCode >= 400) return true;
+  if (!captureSuccessfulRequests) return false;
   if (request.method === "OPTIONS") return false;
+
+  const path = request.url.split("?", 1)[0]!;
 
   if (
     /^\/api\/multiplayer-remote\/sessions\/\d+\/join-requests\/pending(?:\?|$)/.test(
-      request.url,
+      path,
     )
   ) {
     return false;
   }
 
   return !["/health", "/docs", "/docs/", "/ws", "/api/events/stream"].some(
-    (path) => request.url === path || request.url.startsWith(`${path}/`),
+    (excluded) => path === excluded || path.startsWith(`${excluded}/`),
   );
+}
+
+export function getRequestTelemetryLogLevel(
+  request: FastifyRequest,
+  statusCode: number,
+  durationMs: number,
+): "warn" | "error" | null {
+  if (statusCode >= 500) return "error";
+  if (statusCode >= 400) return "warn";
+
+  const path = request.url.split("?", 1)[0]!;
+  // Streaming responses can remain open for the entire playback/session.
+  // Their response lifetime is not a useful measure of server latency.
+  if (
+    /(?:^|\/)stream(?:\/|$)/.test(path) ||
+    /^\/api\/cast\/[^/]+\/[^/]+$/.test(path) ||
+    path.endsWith("/preview.mp4") ||
+    /(?:^|\/)ws(?:\/|$)/.test(path)
+  ) {
+    return null;
+  }
+
+  return durationMs >= 2_000 ? "warn" : null;
 }
 
 let shutdownPromise: Promise<void> | null = null;

@@ -247,7 +247,7 @@ const envSchema = z.object({
     .default("info"),
   POSTHOG_CAPTURE_REQUEST_METRICS: z
     .string()
-    .default("true")
+    .default("false")
     .transform((value) => value.toLowerCase() === "true"),
 
   // GoondVR live recorder (its API, through the web container's proxy)

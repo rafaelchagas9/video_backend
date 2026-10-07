@@ -24,14 +24,12 @@ import { schedulerService } from "./modules/scheduler/scheduler.service";
 import { castTranscodingService } from "./modules/cast/cast-transcoding.service";
 import { logger } from "./utils/logger";
 import {
-  captureTelemetryEvent,
   captureTelemetryException,
-  captureTelemetryLog,
   getTelemetryDistinctId,
   sanitizeTelemetryUrl,
-  shouldTrackRequestMetrics,
   shutdownTelemetry,
 } from "./utils/telemetry";
+import { registerRequestTelemetryHooks } from "./utils/request-telemetry";
 import { eventsService } from "./modules/events/events.service";
 import { multiplayerRemoteWebSocketService } from "./modules/multiplayer-remote/multiplayer-remote.websocket";
 import { isDemoRequestAllowed } from "./utils/demo-mode-policy";
@@ -103,44 +101,7 @@ export async function buildServer() {
 
   // Database is initialized via drizzle.ts on import; no separate pool needed
 
-  fastify.addHook("onRequest", async (request) => {
-    request.telemetryStartTime = process.hrtime.bigint();
-  });
-
-  fastify.addHook("onResponse", async (request, reply) => {
-    if (!shouldTrackRequestMetrics(request) || !request.telemetryStartTime) {
-      return;
-    }
-
-    const durationMs =
-      Number(process.hrtime.bigint() - request.telemetryStartTime) / 1_000_000;
-
-    captureTelemetryEvent(
-      "api request completed",
-      {
-        requestId: request.id,
-        method: request.method,
-        route: request.routeOptions.url,
-        url: sanitizeTelemetryUrl(request.url),
-        statusCode: reply.statusCode,
-        durationMs,
-        authenticated: Boolean(request.user),
-      },
-      getTelemetryDistinctId(request.user?.id)
-    );
-
-    captureTelemetryLog("info", [
-      {
-        requestId: request.id,
-        method: request.method,
-        route: request.routeOptions.url,
-        statusCode: reply.statusCode,
-        durationMs,
-        authenticated: Boolean(request.user),
-      },
-      "HTTP request completed",
-    ]);
-  });
+  registerRequestTelemetryHooks(fastify);
 
   fastify.addHook("onClose", async () => {
     schedulerService.stop();

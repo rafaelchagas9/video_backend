@@ -97,6 +97,16 @@ release or Git SHA; the same value is injected into the bundle, attached to the
 upload, and emitted as telemetry resource metadata. The runtime
 `POSTHOG_API_KEY` project token must never be used as the CLI credential.
 
+Successful HTTP responses do not generate PostHog analytics events by default.
+Set `POSTHOG_CAPTURE_REQUEST_METRICS=true` to restore per-request analytics
+(existing health, docs, SSE, OPTIONS and multiplayer polling exclusions apply).
+HTTP failures with status 400 or higher always generate request events, including
+on excluded routes, independently of this setting. HTTP diagnostic logs retain
+failures and requests taking at least two seconds; successful playback streams,
+Cast assets, hover video previews, SSE and WebSockets are excluded from slow
+request logging because their response lifetime can include playback. Existing
+application logs, exception capture and `POSTHOG_LOG_LEVEL` remain unchanged.
+
 ## Demo Mode
 
 Set `DEMO_MODE=true` to expose only the isolated demo library. Demo mode uses a
