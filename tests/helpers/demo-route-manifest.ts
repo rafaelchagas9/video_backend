@@ -305,6 +305,9 @@ allowed GET /api/discovery/home
 allowed GET /api/recordings/
 allowed GET /api/recordings/feedback
 allowed GET /api/recordings/settings
+allowed GET /api/recordings/autopilot
+allowed PUT /api/recordings/autopilot/settings
+allowed PUT /api/recordings/autopilot/channels/{channelId}
 allowed PUT /api/recordings/settings
 allowed GET /api/recordings/channels/{channelId}/thumbnail
 allowed GET /api/recordings/live

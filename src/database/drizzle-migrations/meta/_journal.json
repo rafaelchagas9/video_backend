@@ -379,6 +379,13 @@
       "when": 1791331926360,
       "tag": "0053_recording_clip_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1791381396498,
+      "tag": "0054_recorder_autopilot",
+      "breakpoints": true
     }
   ]
 }

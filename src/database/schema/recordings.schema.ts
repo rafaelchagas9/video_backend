@@ -79,3 +79,56 @@ export const recordingClipFeedbackTable = pgTable(
   },
   (table) => [uniqueIndex("recording_clip_feedback_clip").on(table.videoId, table.analyzedAt, table.clipId)]
 );
+
+/**
+ * The recorder autopilot's view of each GoondVR channel: whether it manages the channel, the
+ * state it decided on and why, and the live readings behind that decision.
+ */
+export const recorderAutopilotChannelsTable = pgTable("recorder_autopilot_channels", {
+  /** GoondVR's `<site>__<username>` id. */
+  channelId: text("channel_id").primaryKey(),
+  /** False hands the channel back to the user: the autopilot never pauses or resumes it. */
+  managed: boolean("managed").notNull().default(true),
+  /** watching | recording | enough | dropped */
+  state: text("state").notNull().default("watching"),
+  reason: text("reason"),
+  stateSince: timestamp("state_since").defaultNow().notNull(),
+  /** The last live-frame state probabilities, in probe class order. */
+  lastReading: jsonb("last_reading").$type<number[]>(),
+  lastReadingAt: timestamp("last_reading_at"),
+  /** Consecutive readings at or above the start threshold. */
+  hotStreak: integer("hot_streak").notNull().default(0),
+  lastHotAt: timestamp("last_hot_at"),
+  readings: integer("readings").notNull().default(0),
+  hotReadings: integer("hot_readings").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Every start, stop and state change the autopilot made (or, in suggest mode, would have made). */
+export const recorderAutopilotEventsTable = pgTable("recorder_autopilot_events", {
+  id: serial("id").primaryKey(),
+  channelId: text("channel_id"),
+  /** start | stop | state | target | limits */
+  action: text("action").notNull(),
+  reason: text("reason").notNull(),
+  /** False in suggest mode, or when GoondVR refused. */
+  applied: boolean("applied").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * What each analysed recording yielded, kept after the recording is deleted so a channel's
+ * history (empty recordings, useful ones) survives clean-ups. No foreign key on purpose.
+ */
+export const recorderAutopilotOutcomesTable = pgTable("recorder_autopilot_outcomes", {
+  videoId: integer("video_id").primaryKey(),
+  /** GoondVR username, from the file name. */
+  channel: text("channel").notNull(),
+  fileName: text("file_name").notNull(),
+  status: text("status").notNull(),
+  clips: integer("clips").notNull(),
+  kept: integer("kept").notNull(),
+  skipped: integer("skipped").notNull(),
+  recordedAt: timestamp("recorded_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
