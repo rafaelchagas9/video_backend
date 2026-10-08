@@ -3,9 +3,10 @@ import { resolve } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
-import { videoVisualIndexTable, type RecordingClip } from "@/database/schema";
+import { videoVisualIndexTable, type RecordingClip, type RecordingProposal } from "@/database/schema";
 import type { Video } from "@/modules/videos/videos.types";
 import { BadRequestError } from "@/utils/errors";
+import { LABEL_TYPE, type SaveContext } from "./recordings.feedback";
 import { usernameFromFileName } from "./recordings.goondvr";
 import { RecordingTrainingSnapshots, snapshotFeatureIdentity, type SnapshotIndex, type SnapshotReview } from "./recordings.snapshots";
 
@@ -27,6 +28,7 @@ interface Review {
   status: string;
   clips: RecordingClip[];
   curve: number[];
+  proposals?: RecordingProposal[] | null;
 }
 
 const indexOf = (row: typeof videoVisualIndexTable.$inferSelect): SnapshotIndex => ({
@@ -34,7 +36,8 @@ const indexOf = (row: typeof videoVisualIndexTable.$inferSelect): SnapshotIndex 
   indexedAt: row.indexedAt.toISOString(), intervalSeconds: row.intervalSeconds, frameCount: row.frameCount,
 });
 
-export async function preserveRecordingTrainingSnapshot(review: Review, video: Video, event: SnapshotReview["event"]): Promise<void> {
+/** `save` carries the Save's context; later events (render, delete) keep the manifest's but do not know it. */
+export async function preserveRecordingTrainingSnapshot(review: Review, video: Video, event: SnapshotReview["event"], save: SaveContext | null = null): Promise<void> {
   if (env.DEMO_MODE) return;
   const source = { videoId: video.id, fileName: video.file_name, fileHash: video.file_hash,
     fileSizeBytes: video.file_size_bytes, durationSeconds: video.duration_seconds, width: video.width,
@@ -45,7 +48,8 @@ export async function preserveRecordingTrainingSnapshot(review: Review, video: V
     if (!row) throw new Error("This recording has no stored embeddings; a training snapshot cannot be preserved yet");
     const index = indexOf(row);
     await snapshots().save({ source, analyzedAt: review.analyzedAt.toISOString(), detectorRevision: review.promptsRevision,
-      status: review.status, clips: review.clips, curve: review.curve, event }, index, async () => {
+      status: review.status, clips: review.clips, proposals: review.proposals ?? null, labelType: LABEL_TYPE, save,
+      curve: review.curve, event }, index, async () => {
       // The index identity and its frames must come from the same database snapshot, even if a reindex is running.
       return db.transaction(async (tx) => {
         await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);

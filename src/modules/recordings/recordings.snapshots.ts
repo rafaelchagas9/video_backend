@@ -6,7 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { RecordingClip } from "@/database/schema";
+import type { RecordingClip, RecordingProposal } from "@/database/schema";
 
 export const SNAPSHOT_MAGIC = "KURAFEAT";
 export const SNAPSHOT_DIMENSION = 1152;
@@ -41,6 +41,12 @@ export interface SnapshotReview {
   detectorRevision: string;
   status: string;
   clips: RecordingClip[];
+  /** The proposals as shown before any review; null on reviews older than stored proposals. */
+  proposals?: RecordingProposal[] | null;
+  /** What the verdicts mean: "triage" is a coarse has-potential call, trims included. */
+  labelType?: string;
+  /** The Save that confirmed these clips, where the recording sat in the queue, and whether it was an audit pick. */
+  save?: { batch: string; queuePosition: number | null; queueSort: string | null; audit: boolean } | null;
   curve: number[];
   event: "save" | "render-requested" | "rendering" | "render-finished" | "before-delete";
 }
@@ -143,6 +149,7 @@ export class RecordingTrainingSnapshots {
     const identity = snapshotFeatureIdentity(review.source, index);
     const manifestPath = join(directory, `review-${Date.parse(review.analyzedAt)}.json`);
     let savedChecksum: string | null = null;
+    let savedContext: SnapshotReview["save"] = null;
     const saved = await open(manifestPath, "r").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
     if (saved) {
       try {
@@ -150,6 +157,7 @@ export class RecordingTrainingSnapshots {
         if (earlier.features.identity !== identity)
           throw new Error("The source or visual index changed since this review was saved; its original snapshot has been preserved");
         savedChecksum = earlier.features.sha256;
+        savedContext = earlier.save ?? null;
       } finally { await saved.close(); }
     }
     const file = `features-${identity}.bin`;
@@ -183,7 +191,8 @@ export class RecordingTrainingSnapshots {
     // Removal is rare: verify the bounded payload before allowing an original to be deleted.
     if (review.event === "before-delete" && hash(await readFile(path)) !== receipt.sha256)
       throw new Error("The saved training features failed their checksum; the original must be retained");
-    const manifest: TrainingSnapshotManifest = { ...review, format: "kura-recording-training", version: 1,
+    // Render and delete events do not know the Save's context; the last Save's stays.
+    const manifest: TrainingSnapshotManifest = { ...review, save: review.save ?? savedContext, format: "kura-recording-training", version: 1,
       updatedAt: new Date().toISOString(), features: { file, ...receipt, dimension: SNAPSHOT_DIMENSION, index } };
     await atomicWrite(manifestPath, Buffer.from(JSON.stringify(manifest)));
     return manifest;

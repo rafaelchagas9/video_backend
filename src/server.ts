@@ -642,6 +642,9 @@ export async function buildServer() {
     recorderRelay.start();
     const { recorderAutopilot } = await import("./modules/recordings/recordings.autopilot");
     recorderAutopilot.start();
+    // Renders queued before a restart still need their clips collected and the review finished.
+    const { resumeRecordingRenders } = await import("./modules/recordings/recordings.service");
+    void resumeRecordingRenders();
   }
 
   // Start scheduler for automatic directory scanning

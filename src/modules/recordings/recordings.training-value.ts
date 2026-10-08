@@ -10,6 +10,7 @@
  * - its channel has not yet given enough such recordings. Several waiting recordings from one
  *   channel each count towards that channel, so the top of the queue spreads across channels.
  */
+import { createHash } from "node:crypto";
 
 export interface TrainingCandidate {
   videoId: number;
@@ -58,4 +59,16 @@ export function trainingValues(candidates: TrainingCandidate[], paired: Map<stri
     if (channel) expected.set(channel, soFar + signal);
   }
   return values;
+}
+
+/** About one recording in ten, picked at random but stably by id, for the audit slice. */
+export const AUDIT_SHARE = 0.1;
+
+/**
+ * Whether the recording is in the audit slice: placed in the queue regardless of training value,
+ * so its decisions show what the value-ranked queue would otherwise bias. No position weights.
+ */
+export function isAuditRecording(videoId: number): boolean {
+  const digest = createHash("sha256").update(`kura-review-audit-v1:${videoId}`).digest();
+  return digest.readUInt32BE(0) / 0x1_0000_0000 < AUDIT_SHARE;
 }

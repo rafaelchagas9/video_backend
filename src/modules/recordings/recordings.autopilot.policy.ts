@@ -14,6 +14,7 @@
 export const AUTOPILOT_MODES = ["off", "suggest", "auto"] as const;
 export type AutopilotMode = (typeof AUTOPILOT_MODES)[number];
 
+/** "target" is no longer entered (data targets are only reported); channels left in it go back to watching. */
 export const AUTOPILOT_STATES = ["watching", "recording", "enough", "dropped", "target"] as const;
 export type AutopilotState = (typeof AUTOPILOT_STATES)[number];
 
@@ -129,7 +130,7 @@ export interface LiveInput {
   hotStreak: number;
   lastHotAt: Date | null;
   title: string;
-  /** Why a new recording may not start now (queue full, target reached), if anything. */
+  /** Why a new recording may not start now (the review queue is full), if anything. */
   blocked: string | null;
   now: Date;
 }

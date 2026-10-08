@@ -20,6 +20,18 @@ export interface RecordingClip {
   detected?: { start_seconds: number; end_seconds: number };
 }
 
+/** A highlight as detection proposed it, before any review: never rewritten by trims or merges. */
+export interface RecordingProposal {
+  id: string;
+  start_seconds: number;
+  end_seconds: number;
+  peak_seconds: number;
+  score: number;
+  label: string;
+  /** The default the reviewer was shown: false when detection marked it a likely skip. */
+  keep: boolean;
+}
+
 /**
  * Highlight review of a live recording: proposed clips from visual analysis, the user's
  * keep/adjust decisions, and the render that turns them into library videos.
@@ -34,6 +46,10 @@ export const recordingReviewsTable = pgTable("recording_reviews", {
   /** Normalised highlight intensity over the whole recording, for the review timeline. */
   curve: jsonb("curve").$type<number[]>().notNull(),
   promptsRevision: text("prompts_revision").notNull(),
+  /** This analysis' proposals as shown, kept through trims and merges; null on reviews older than the column. */
+  proposals: jsonb("proposals").$type<RecordingProposal[]>(),
+  /** When a reviewer first confirmed this analysis' decisions; null while only proposed. */
+  savedAt: timestamp("saved_at"),
   deleteOriginal: boolean("delete_original").notNull().default(false),
   error: text("error"),
   analyzedAt: timestamp("analyzed_at").defaultNow().notNull(),
@@ -74,6 +90,28 @@ export const recordingClipFeedbackTable = pgTable(
     rendered: boolean("rendered").notNull().default(false),
     /** The whole recording was deleted from its review afterwards. */
     recordingDiscarded: boolean("recording_discarded").notNull().default(false),
+    /**
+     * The proposal was merged into this clip id of the same analysis; its own row keeps the
+     * original range but is not a separate decision and is left out of counts.
+     */
+    mergedInto: text("merged_into"),
+    /** What the review showed before the reviewer acted: keep | likely-skip; null when added by hand. */
+    shownDefault: text("shown_default"),
+    /**
+     * What the verdict means. triage: "has potential", a coarse call on a proposed stretch;
+     * trimming edges does not make it a refinement label.
+     */
+    labelType: text("label_type").notNull().default("triage"),
+    /** The Save that last confirmed this decision; one id per Save. */
+    saveBatch: text("save_batch"),
+    /** The recording's 0-based place in the review queue when it was opened, and that queue's sort. */
+    queuePosition: integer("queue_position"),
+    queueSort: text("queue_sort"),
+    /** The recording belongs to the random audit slice, placed in the queue regardless of training value. */
+    audit: boolean("audit").notNull().default(false),
+    /** Kept and rendered footage the channel already had from its other recordings, when this was saved. */
+    channelKeptSeconds: doublePrecision("channel_kept_seconds"),
+    channelRenderedSeconds: doublePrecision("channel_rendered_seconds"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

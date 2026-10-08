@@ -1,8 +1,9 @@
 /**
  * The recorder autopilot: every minute it reads each online channel's live frame with the
  * trained highlight probe, starts recording when there is action, stops after a stretch without
- * it, retires channels whose history says they add nothing more, and pauses everything once the
- * classifier's data targets are met. Decisions live in recordings.autopilot.policy.ts.
+ * it, and retires channels whose history says they add nothing more. The classifier's data
+ * targets are reported, not acted on: reaching them does not stop recording. Decisions live in
+ * recordings.autopilot.policy.ts.
  *
  * GoondVR is driven only through its API (pause/resume/update), so nothing here depends on its
  * internals. In "suggest" mode every decision is logged but none is applied.
@@ -33,6 +34,7 @@ import {
 import { GOONDVR_DEFAULT_PATTERN, goondvr, usernameFromFileName, type GoondvrChannel } from "./recordings.goondvr";
 import { classifyFrames, loadHighlightProbe } from "./recordings.probe";
 import { recordingScope } from "./recordings.scope";
+import { confirmedDecisions } from "./recordings.feedback";
 
 const SETTINGS_KEY = "recordings_autopilot";
 const CYCLE_MS = 60_000;
@@ -114,13 +116,8 @@ class RecorderAutopilot {
         return;
       }
       await this.syncOutcomes();
-      const [progress, queue, outcomes, rows] = await Promise.all([this.progress(), this.queue(), this.outcomes(), this.rows()]);
-      const reached = targetReached(progress, settings.targets);
-      const blocked = reached
-        ? "classifier target reached"
-        : queue >= settings.queueLimit
-          ? `${queue} recordings waiting for review`
-          : null;
+      const [queue, outcomes, rows] = await Promise.all([this.queue(), this.outcomes(), this.rows()]);
+      const blocked = queue >= settings.queueLimit ? `${queue} recordings waiting for review` : null;
       const readings = await this.read(channels.filter((channel) => {
         const row = rows.get(channel.id);
         return channel.is_online && READABLE_SITES.has(channel.site) && row?.managed !== false && (!row || row.state === "watching" || row.state === "recording");
@@ -129,7 +126,6 @@ class RecorderAutopilot {
       for (const channel of channels) {
         await this.decide(channel, rows.get(channel.id), outcomes.get(usernameKey(channel.username)) ?? [], readings.get(channel.id), {
           settings,
-          reached,
           blocked,
           now,
         });
@@ -149,7 +145,7 @@ class RecorderAutopilot {
     row: ChannelRow | undefined,
     outcomes: Outcome[],
     reading: number[] | undefined,
-    context: { settings: AutopilotSettings; reached: boolean; blocked: string | null; now: Date }
+    context: { settings: AutopilotSettings; blocked: string | null; now: Date }
   ) {
     const { settings, now } = context;
     const apply = settings.mode === "auto";
@@ -183,7 +179,7 @@ class RecorderAutopilot {
     let state = current.state as AutopilotState;
     let reason = current.reason ?? "";
     const history = channelHistory(outcomes);
-    const settled = context.reached ? { state: "target" as const, reason: "classifier target reached" } : settledState(history, settings);
+    const settled = settledState(history, settings);
     const recordingNow = !channel.is_paused;
 
     if (settled) {
@@ -329,8 +325,8 @@ class RecorderAutopilot {
   private async syncOutcomes() {
     const rows = await db.execute<{ video_id: number; file_name: string; status: string; clips: number; kept: number; skipped: number }>(sql`
       SELECT r.video_id, v.file_name, r.status, jsonb_array_length(r.clips)::int AS clips,
-        (SELECT count(*) FROM recording_clip_feedback f WHERE f.video_id = r.video_id AND f.verdict = 'keep')::int AS kept,
-        (SELECT count(*) FROM recording_clip_feedback f WHERE f.video_id = r.video_id AND f.verdict = 'skip')::int AS skipped
+        (SELECT count(*) FROM ${confirmedDecisions} f WHERE f.video_id = r.video_id AND f.verdict = 'keep')::int AS kept,
+        (SELECT count(*) FROM ${confirmedDecisions} f WHERE f.video_id = r.video_id AND f.verdict = 'skip')::int AS skipped
       FROM recording_reviews r JOIN videos v ON v.id = r.video_id`);
     for (const row of rows) {
       const channel = usernameFromFileName(String(row.file_name));
@@ -372,10 +368,10 @@ class RecorderAutopilot {
   async progress(): Promise<Progress> {
     const [row] = await db.execute<{ paired: number; channels: number; keeps: number }>(sql`
       SELECT
-        (SELECT count(*) FROM (SELECT video_id FROM recording_clip_feedback GROUP BY video_id
-          HAVING bool_or(verdict = 'keep') AND bool_or(verdict = 'skip')) t)::int AS paired,
-        (SELECT count(DISTINCT lower(channel)) FROM recording_clip_feedback WHERE verdict = 'keep')::int AS channels,
-        (SELECT count(*) FROM recording_clip_feedback WHERE verdict = 'keep')::int AS keeps`);
+        (SELECT count(*) FROM (SELECT f.video_id FROM ${confirmedDecisions} f GROUP BY f.video_id
+          HAVING bool_or(f.verdict = 'keep') AND bool_or(f.verdict = 'skip')) t)::int AS paired,
+        (SELECT count(DISTINCT lower(regexp_replace(f.channel, '^@', ''))) FROM ${confirmedDecisions} f WHERE f.verdict = 'keep')::int AS channels,
+        (SELECT count(*) FROM ${confirmedDecisions} f WHERE f.verdict = 'keep')::int AS keeps`);
     return { pairedRecordings: Number(row?.paired ?? 0), channels: Number(row?.channels ?? 0), keeps: Number(row?.keeps ?? 0) };
   }
 

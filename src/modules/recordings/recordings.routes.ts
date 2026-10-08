@@ -417,13 +417,24 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         tags: ["recordings"],
         summary: "Save clip decisions",
         params: videoParams,
-        body: z.object({ clips: z.array(clipSchema).max(60) }),
+        description:
+          "Confirms every current choice. analyzed_at names the analysis being answered (a newer one is a conflict); queue_position and queue_sort say where the recording sat in the review queue.",
+        body: z.object({
+          clips: z.array(clipSchema).max(60),
+          analyzed_at: z.string().datetime().optional(),
+          queue_position: z.number().int().min(0).max(10_000).optional(),
+          queue_sort: z.string().trim().min(1).max(32).optional(),
+        }),
         response: { 200: anyData },
       },
     },
     async (request) => ({
       success: true as const,
-      data: await recordingsService.updateClips(request.user!.id, request.params.videoId, request.body.clips),
+      data: await recordingsService.updateClips(request.user!.id, request.params.videoId, request.body.clips, {
+        analyzedAt: request.body.analyzed_at,
+        queuePosition: request.body.queue_position,
+        queueSort: request.body.queue_sort,
+      }),
     })
   );
 

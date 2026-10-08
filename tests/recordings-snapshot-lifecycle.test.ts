@@ -12,7 +12,7 @@ const video = { id: 1, file_name: "synthetic.mkv", duration_seconds: 10 } as any
 
 it("Save archives every current verdict before acknowledging or persisting a review", async () => {
   const service = new RecordingsService(); const events: string[] = [];
-  Object.assign(service, { row: async () => row, save: async () => { events.push("review"); },
+  Object.assign(service, { row: async () => row, saveIfCurrent: async () => { events.push("review"); return true; },
     recordDecisions: async () => { events.push("feedback"); }, review: async () => row });
   spies.push(spyOn(videosService, "findById").mockResolvedValue(video));
   const preserve = spyOn(snapshots, "preserveRecordingTrainingSnapshot").mockImplementation(async () => { events.push("snapshot"); }); spies.push(preserve);
@@ -24,7 +24,7 @@ it("Save archives every current verdict before acknowledging or persisting a rev
 
 it("a failed snapshot cannot become a successful Save", async () => {
   const service = new RecordingsService(); let saved = false;
-  Object.assign(service, { row: async () => row, save: async () => { saved = true; }, review: async () => row });
+  Object.assign(service, { row: async () => row, saveIfCurrent: async () => { saved = true; return true; }, review: async () => row });
   spies.push(spyOn(videosService, "findById").mockResolvedValue(video));
   spies.push(spyOn(snapshots, "preserveRecordingTrainingSnapshot").mockRejectedValue(new Error("synthetic disk full")));
   await expect(service.updateClips(1, 1, clips)).rejects.toThrow("synthetic disk full");

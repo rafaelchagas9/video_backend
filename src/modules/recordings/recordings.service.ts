@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
-import { recordingReviewsTable, type RecordingClip } from "@/database/schema";
+import { recordingReviewsTable, type RecordingClip, type RecordingProposal } from "@/database/schema";
 import { editsService } from "@/modules/edits/edits.service";
+import { storyboardsService } from "@/modules/storyboards/storyboards.service";
 import { settingsService } from "@/modules/settings/settings.service";
 import { videosBulkService } from "@/modules/videos/videos.bulk.service";
 import { videosSearchService } from "@/modules/videos/videos.search.service";
@@ -11,7 +13,7 @@ import { videosService } from "@/modules/videos/videos.service";
 import type { Video } from "@/modules/videos/videos.types";
 import { indexVideoVisually } from "@/modules/visual-search/visual-search.jobs";
 import { visualSearchService, visualSearchStore } from "@/modules/visual-search/visual-search.service";
-import { BadRequestError, NotFoundError } from "@/utils/errors";
+import { BadRequestError, ConflictError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { goondvr, usernameFromFileName } from "./recordings.goondvr";
 import { recorderService } from "./recordings.live";
@@ -19,9 +21,9 @@ import { detectHighlights, detectWithProbe, isLikelySkip, joinStretches } from "
 import { loadHighlightProbe, PROBE_STATES, probeThreshold, type HighlightProbe, type ProbeState } from "./recordings.probe";
 import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
 import { DEMO_RECORDING_MIN_SECONDS, recordingScope } from "./recordings.scope";
-import { feedbackSummary, markRecordingDiscarded, recordFeedback } from "./recordings.feedback";
+import { confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type SaveContext } from "./recordings.feedback";
 import { recorderAutopilot } from "./recordings.autopilot";
-import { trainingValues } from "./recordings.training-value";
+import { isAuditRecording, trainingValues } from "./recordings.training-value";
 import { preserveRecordingTrainingSnapshot } from "./recordings.snapshots.store";
 import { keptRecordingSeconds } from "./recordings.kept-duration";
 
@@ -55,13 +57,31 @@ interface ReviewRow {
   clips: RecordingClip[];
   curve: number[];
   promptsRevision: string;
+  /** The analysis' proposals as shown; null on reviews older than the column. */
+  proposals: RecordingProposal[] | null;
+  /** When the reviewer first confirmed this analysis; null while only proposed. */
+  savedAt: Date | null;
   deleteOriginal: boolean;
   error: string | null;
   analyzedAt: Date;
 }
 
+/** Where the reviewer opened the recording from, as the client tells it. */
+export interface ReviewOrigin {
+  /** The review this Save answers; a different analysis since then is a conflict. */
+  analyzedAt?: string | undefined;
+  queuePosition?: number | undefined;
+  queueSort?: string | undefined;
+}
+
 /* Demo reviews live in memory: the demo database resets on every start anyway. */
 const demoReviews = new Map<number, ReviewRow>();
+
+/**
+ * One analysis at a time per recording, whoever asks: the processing queue, a finished index
+ * and the review page share the run already going instead of starting a second one.
+ */
+const analyses = new Map<number, Promise<ReviewRow | null>>();
 
 const lines = (value: unknown) =>
   String(value ?? "")
@@ -152,6 +172,28 @@ export class RecordingsService {
       .onConflictDoUpdate({ target: recordingReviewsTable.videoId, set: values });
   }
 
+  /**
+   * Writes a review only if it still answers the analysis `expected` (null: there was no review),
+   * so a run that started before someone saved or re-analysed cannot overwrite their review.
+   */
+  private async saveIfCurrent(row: ReviewRow, expected: Date | null): Promise<boolean> {
+    if (env.DEMO_MODE) {
+      const current = demoReviews.get(row.videoId);
+      if ((current?.analyzedAt.getTime() ?? null) !== (expected?.getTime() ?? null)) return false;
+      demoReviews.set(row.videoId, row);
+      return true;
+    }
+    const values = { ...row, updatedAt: new Date() };
+    const written = expected
+      ? await db
+          .update(recordingReviewsTable)
+          .set(values)
+          .where(and(eq(recordingReviewsTable.videoId, row.videoId), eq(recordingReviewsTable.analyzedAt, expected)))
+          .returning({ videoId: recordingReviewsTable.videoId })
+      : await db.insert(recordingReviewsTable).values(values).onConflictDoNothing().returning({ videoId: recordingReviewsTable.videoId });
+    return written.length > 0;
+  }
+
   private async rows(videoIds: number[]): Promise<Map<number, ReviewRow>> {
     if (env.DEMO_MODE) return new Map(videoIds.flatMap((id) => (demoReviews.has(id) ? [[id, demoReviews.get(id)!]] : [])));
     if (!videoIds.length) return new Map();
@@ -230,6 +272,7 @@ export class RecordingsService {
           site: (channel && siteOf.get(channel)) || null,
           channel_paired: channel ? (paired.get(channel) ?? 0) : 0,
           training_value: values.get(video.id) ?? 0,
+          audit: isAuditRecording(video.id),
         };
       }),
     };
@@ -250,15 +293,47 @@ export class RecordingsService {
     if (env.DEMO_MODE) return new Map();
     const rows = await db.execute<{ channel: string; paired: number }>(sql`
       SELECT channel, count(*)::int AS paired FROM (
-        SELECT lower(regexp_replace(channel, '^@', '')) AS channel FROM recording_clip_feedback
-        WHERE channel IS NOT NULL GROUP BY 1, video_id
-        HAVING bool_or(verdict = 'keep') AND bool_or(verdict = 'skip')
+        SELECT lower(regexp_replace(f.channel, '^@', '')) AS channel FROM ${confirmedDecisions} f
+        WHERE f.channel IS NOT NULL GROUP BY 1, f.video_id
+        HAVING bool_or(f.verdict = 'keep') AND bool_or(f.verdict = 'skip')
       ) t GROUP BY channel`);
     return new Map(rows.map((row) => [String(row.channel), Number(row.paired)]));
   }
 
-  async analyze(userId: number, videoId: number) {
+  /**
+   * Proposes highlights for a recording. Asked by hand, it starts a new analysis generation even
+   * over a saved review (whose decisions stay in the feedback rows and the training snapshot);
+   * `automatic` callers leave any existing review alone. Either way a review that changes while
+   * the analysis runs is never overwritten.
+   */
+  async analyze(userId: number, videoId: number, options: { automatic?: boolean } = {}) {
+    const running = analyses.get(videoId);
+    if (running) {
+      await running.catch(() => null);
+      return this.review(userId, videoId);
+    }
+    const run = this.runAnalysis(userId, videoId, options.automatic ?? false);
+    analyses.set(videoId, run);
+    try {
+      await run;
+    } finally {
+      if (analyses.get(videoId) === run) analyses.delete(videoId);
+    }
+    return this.review(userId, videoId);
+  }
+
+  /** GoondVR still writing the file: its frames would end where the write had got to. */
+  async assertFinished(video: Pick<Video, "file_name">) {
+    if (env.DEMO_MODE) return;
+    const owned = (await goondvr.recordings()).find((recording) => recording.name === video.file_name);
+    if (owned?.active) throw new BadRequestError("GoondVR is still recording this file; it is analysed once it is finished");
+  }
+
+  private async runAnalysis(userId: number, videoId: number, automatic: boolean): Promise<ReviewRow | null> {
+    const before = await this.row(videoId);
+    if (automatic && before) return before;
     const video = await videosService.findById(videoId, userId);
+    await this.assertFinished(video);
     const settings = await this.settings();
     const store = visualSearchStore();
     let indexed = (await store.indexed([videoId])).get(videoId);
@@ -271,9 +346,20 @@ export class RecordingsService {
     const probe = settings.detector === "trained" ? await loadHighlightProbe() : null;
     const useProbe = probe !== null && indexed?.modelRevision === probe.modelRevision;
     if (!useProbe && !settings.highlightPrompts.length) throw new BadRequestError("Add at least one highlight description first");
-    const frames = await store.videoFrames(videoId);
+    let frames = await store.videoFrames(videoId);
     const catalogDuration = video.duration_seconds ?? frames.timestamps.at(-1) ?? 0;
     const duration = env.DEMO_MODE ? catalogDuration : await probeRecordingDuration(video.file_path, catalogDuration);
+    // An index built while the file was still being written stops early: rebuild it from the
+    // finished file once, rather than analysing (and archiving) half a recording.
+    const covers = () => (frames.timestamps.at(-1) ?? -Infinity) + (indexed?.intervalSeconds ?? 0) * 2 >= duration;
+    if (!env.DEMO_MODE && frames.timestamps.length && !covers()) {
+      logger.info({ videoId, indexedTo: frames.timestamps.at(-1), duration }, "Re-indexing a recording indexed before it finished");
+      await storyboardsService.delete(videoId).catch(() => undefined);
+      await indexVideoVisually(videoId, AbortSignal.timeout(30 * 60_000));
+      indexed = (await store.indexed([videoId])).get(videoId);
+      frames = await store.videoFrames(videoId);
+      if (!covers()) throw new BadRequestError("The recording's visual index does not cover the whole file");
+    }
     let result;
     if (useProbe) {
       result = detectWithProbe({
@@ -296,24 +382,31 @@ export class RecordingsService {
         options: { sensitivity: settings.sensitivity },
       });
     }
+    const clips: RecordingClip[] = result.clips.map((clip, index) => ({
+      ...clip,
+      id: `c${index + 1}`,
+      keep: !(useProbe && isLikelySkip(clip)),
+      detected: { start_seconds: clip.start_seconds, end_seconds: clip.end_seconds },
+    }));
     const row: ReviewRow = {
       videoId,
-      status: result.clips.length ? "proposed" : "dismissed",
-      clips: result.clips.map((clip, index) => ({
-        ...clip,
-        id: `c${index + 1}`,
-        keep: !(useProbe && isLikelySkip(clip)),
-        detected: { start_seconds: clip.start_seconds, end_seconds: clip.end_seconds },
-      })),
+      status: clips.length ? "proposed" : "dismissed",
+      clips,
       curve: result.curve,
       promptsRevision: revisionOf(settings, useProbe ? "trained" : "prompts"),
+      proposals: clips.map(({ id, start_seconds, end_seconds, peak_seconds, score, label, keep }) => ({ id, start_seconds, end_seconds, peak_seconds, score, label, keep })),
+      savedAt: null,
       deleteOriginal: false,
       error: null,
       analyzedAt: new Date(),
     };
-    await this.save(row);
+    if (!(await this.saveIfCurrent(row, before?.analyzedAt ?? null))) {
+      // Someone saved, rendered or re-analysed while this ran: theirs stands.
+      if (automatic) return this.row(videoId);
+      throw new ConflictError("The review changed while it was being analysed; reload it before analysing again");
+    }
     await this.linkChannelCreator(video);
-    return this.review(userId, videoId);
+    return row;
   }
 
   /** Recordings arrive without a creator; the channel name usually identifies one. */
@@ -341,10 +434,13 @@ export class RecordingsService {
     };
   }
 
-  async updateClips(userId: number, videoId: number, clips: RecordingClip[]) {
+  /** Save confirms every current choice, untouched defaults included. */
+  async updateClips(userId: number, videoId: number, clips: RecordingClip[], origin: ReviewOrigin = {}) {
     const row = await this.row(videoId);
     if (!row) throw new NotFoundError("This recording has not been analysed");
     if (row.status === "rendering") throw new BadRequestError("Clips are being rendered");
+    if (origin.analyzedAt && Date.parse(origin.analyzedAt) !== row.analyzedAt.getTime())
+      throw new ConflictError("This recording was analysed again since you opened it; reload it to review the new highlights");
     const video = await videosService.findById(videoId, userId);
     const duration = video.duration_seconds ?? Infinity;
     for (const clip of clips)
@@ -356,21 +452,35 @@ export class RecordingsService {
       const { detected: _detected, ...rest } = clip;
       return rest;
     });
-    const reviewed = { ...row, clips: next, status: next.some((clip) => clip.keep) ? "proposed" : "dismissed" };
-    // Save confirms every current choice, including untouched defaults. Archive them before acknowledging it.
-    await preserveRecordingTrainingSnapshot(reviewed, video, "save");
-    await this.save(reviewed);
-    await this.recordDecisions(row, video, next);
+    const reviewed: ReviewRow = { ...row, clips: next, status: next.some((clip) => clip.keep) ? "proposed" : "dismissed", savedAt: row.savedAt ?? new Date() };
+    const context: SaveContext = {
+      batch: randomUUID(),
+      queuePosition: origin.queuePosition ?? null,
+      queueSort: origin.queueSort ?? null,
+      audit: isAuditRecording(videoId),
+    };
+    // Archive every current choice before acknowledging the Save.
+    await preserveRecordingTrainingSnapshot(reviewed, video, "save", context);
+    if (!(await this.saveIfCurrent(reviewed, row.analyzedAt)))
+      throw new ConflictError("This recording was analysed again while saving; reload it to review the new highlights");
+    await this.recordDecisions(row, video, next, false, context);
     return this.review(userId, videoId);
   }
 
   /** Training data for what is worth keeping; a failure here never loses the review itself. */
-  private async recordDecisions(row: ReviewRow, video: Video, clips: RecordingClip[], rendered = false) {
+  private async recordDecisions(row: ReviewRow, video: Video, clips: RecordingClip[], rendered = false, context: SaveContext | null = null) {
     try {
       await recordFeedback(
-        { videoId: row.videoId, analyzedAt: row.analyzedAt, promptsRevision: row.promptsRevision, fileName: video.file_name, durationSeconds: video.duration_seconds ?? null },
+        {
+          videoId: row.videoId,
+          analyzedAt: row.analyzedAt,
+          promptsRevision: row.promptsRevision,
+          fileName: video.file_name,
+          durationSeconds: video.duration_seconds ?? null,
+          proposals: row.proposals ?? null,
+        },
         clips,
-        { rendered }
+        { rendered, context }
       );
     } catch (error) {
       logger.warn({ error, videoId: row.videoId }, "Could not record review decisions");
@@ -551,7 +661,7 @@ export class RecordingsService {
     if (!video || video.directory_id !== settings.directoryId) return;
     if (await this.row(videoId)) return;
     const userId = 1;
-    await this.analyze(userId, videoId).catch((error) =>
+    await this.analyze(userId, videoId, { automatic: true }).catch((error) =>
       logger.warn({ error, videoId }, "Automatic highlight analysis failed")
     );
   }
@@ -577,3 +687,12 @@ function startFinalizer() {
 }
 
 export const recordingsService = new RecordingsService();
+
+/** Picks up reviews left rendering by a restart; until now only opening one would finish it. */
+export async function resumeRecordingRenders(): Promise<void> {
+  try {
+    if ((await recordingsService.renderingIds()).length) startFinalizer();
+  } catch (error) {
+    logger.warn({ error }, "Could not resume rendering recordings");
+  }
+}
