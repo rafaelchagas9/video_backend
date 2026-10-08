@@ -630,3 +630,90 @@ describe("edit processor helpers", () => {
     );
   });
 });
+
+describe("edit filter graph source irregularities", () => {
+  const plain: EditTimelineConfig = {
+    segments: [
+      { start: 0, end: 10 },
+      { start: 20, end: 30 },
+    ],
+  };
+
+  it("pads a video dropout at each cut when the source fps is known", () => {
+    const graph = buildEditFilterComplex(plain, true, { sourceFps: 30 });
+    expect(graph.filterComplex).toContain(
+      "[0:v]fps=fps=30:start_time=0:round=near,trim=duration=10,setpts=PTS-STARTPTS[v0]"
+    );
+  });
+
+  it("scales every segment to the canvas when a segment changes resolution", () => {
+    const graph = buildEditFilterComplex(plain, true, {
+      sourceWidth: 720,
+      sourceHeight: 960,
+      segmentDimensions: [
+        { width: 720, height: 960 },
+        { width: 0, height: 0 },
+      ],
+    });
+    expect(graph.filterComplex).toContain("scale=w=720:h=960");
+    expect(graph.filterComplex).toContain("[vsegment1]");
+  });
+
+  it("fits frames of a segment that changes size mid-stream onto a fixed canvas", () => {
+    const graph = buildEditFilterComplex(plain, true, {
+      sourceWidth: 720,
+      sourceHeight: 960,
+      sourceFps: 30,
+      encodingMode: "sw_decode",
+      segmentDimensions: [
+        { width: 720, height: 960 },
+        { width: 0, height: 0 },
+      ],
+    });
+    expect(graph.filterComplex).toContain(
+      "[2:v]fps=fps=30:start_time=0:round=near,scale=w=720:h=960:force_original_aspect_ratio=decrease:force_divisible_by=2:eval=frame[vfit1];color=c=black:s=720x960:r=30[vcanvas1];[vcanvas1][vfit1]overlay=x=(W-w)/2:y=(H-h)/2:eval=frame:shortest=1,trim=duration=10,setpts=PTS-STARTPTS[v1]"
+    );
+    expect(graph.filterComplex).not.toContain("[vfit0]");
+  });
+
+  it("keeps the filter graph when only a mixed-size segment's frames change size", () => {
+    const args = buildEditFfmpegArgs({
+      inputPath: "/input/source.mkv",
+      outputPath: "/output/edited.mkv",
+      timeline: plain,
+      output: { ...request().output, audio_codec: "aac" },
+      hasSourceAudio: true,
+      sourceWidth: 720,
+      sourceHeight: 960,
+      segmentDimensions: [
+        { width: 720, height: 960 },
+        { width: 0, height: 0 },
+      ],
+      vaapiDevice: "/dev/dri/renderD128",
+      bitrate: "4M",
+      maxrate: "5M",
+      bufsize: "10M",
+      encodingMode: "sw_decode",
+    });
+    const reinit = args.indexOf("-reinit_filter");
+    expect(args.filter((arg) => arg === "-reinit_filter")).toHaveLength(1);
+    expect(args.slice(reinit, reinit + 4)).toEqual([
+      "-reinit_filter",
+      "0",
+      "-ss",
+      "20",
+    ]);
+  });
+
+  it("leaves uniform sources untouched", () => {
+    const graph = buildEditFilterComplex(plain, true, {
+      sourceWidth: 720,
+      sourceHeight: 960,
+      segmentDimensions: [
+        { width: 720, height: 960 },
+        { width: 720, height: 960 },
+      ],
+    });
+    expect(graph.filterComplex).not.toContain("scale=");
+  });
+});

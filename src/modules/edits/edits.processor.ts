@@ -78,6 +78,8 @@ function shouldRetryWithSoftwareDecode(error: unknown): boolean {
   );
 }
 
+const EDIT_FFMPEG_STALL_MS = 3 * 60_000;
+
 function formatNumber(value: number): string {
   return Number(value.toFixed(6)).toString();
 }
@@ -115,6 +117,8 @@ export type EditEncodingMode = "hw" | "sw_decode";
 export interface BuildEditFilterComplexOptions {
   sourceWidth?: number | null;
   sourceHeight?: number | null;
+  sourceFps?: number | null;
+  segmentDimensions?: ReadonlyArray<{ width: number; height: number } | null>;
   encodingMode?: EditEncodingMode;
 }
 
@@ -142,6 +146,13 @@ function evenDimension(
   return Math.max(2, Math.floor(dimension / 2) * 2);
 }
 
+/** probeSegmentDimensions reports a segment whose frames change size as 0x0. */
+function hasMixedSizes(
+  dimensions: { width: number; height: number } | null | undefined
+): boolean {
+  return dimensions?.width === 0;
+}
+
 /** Build a deterministic filter graph without touching FFmpeg or the filesystem. */
 export function buildEditFilterComplex(
   timeline: EditTimelineConfig,
@@ -153,24 +164,57 @@ export function buildEditFilterComplex(
   const hardwareDecode = (options.encodingMode ?? "hw") === "hw";
   const concatInputs: string[] = [];
   const segments = timeline.segments;
-  const normalizeSegments = segments.some(
-    (segment) =>
-      segment.transform?.crop !== undefined ||
-      (segment.transform?.rotate ?? 0) !== 0
-  );
   const canvasWidth = evenDimension(options.sourceWidth, 1920);
   const canvasHeight = evenDimension(options.sourceHeight, 1080);
+  const sizeDiffersFromCanvas = (index: number): boolean => {
+    const dimensions = options.segmentDimensions?.[index];
+    return (
+      !!dimensions &&
+      (dimensions.width !== canvasWidth || dimensions.height !== canvasHeight)
+    );
+  };
+  const normalizeSegments = segments.some(
+    (segment, index) =>
+      segment.transform?.crop !== undefined ||
+      (segment.transform?.rotate ?? 0) !== 0 ||
+      sizeDiffersFromCanvas(index)
+  );
+  const sourceFps =
+    options.sourceFps && options.sourceFps > 0 && options.sourceFps <= 240
+      ? options.sourceFps
+      : null;
 
   segments.forEach((segment, index) => {
     const videoInput = includeAudio ? index * 2 : index;
     const speed = segment.speed ?? 1;
     const sourceDuration = segment.end - segment.start;
+    // Input seeking already rebases timestamps to the segment start. fps pads a
+    // source video dropout at the cut with the first frame (instead of letting
+    // PTS-STARTPTS slide the clip earlier than its audio), then trim is applied
+    // so the segment is exactly the requested length.
     const setpts =
       speed === 1
         ? "setpts=PTS-STARTPTS"
         : `setpts=(PTS-STARTPTS)/${formatNumber(speed)}`;
+    const alignStart =
+      sourceFps !== null
+        ? `fps=fps=${formatNumber(sourceFps)}:start_time=0:round=near,`
+        : "";
+    let segmentInput = `[${videoInput}:v]${alignStart}`;
+    if (hasMixedSizes(options.segmentDimensions?.[index])) {
+      // The input runs with -reinit_filter 0, so frames change size inside the
+      // graph. Only per-frame scale and overlay follow that; pad keeps its first
+      // size and fills the rest with garbage. Rebuilding the graph instead
+      // deadlocks the concat, so fit every frame onto a fixed canvas here.
+      const fps = formatNumber(sourceFps ?? 30);
+      filters.push(
+        `[${videoInput}:v]fps=fps=${fps}:start_time=0:round=near,scale=w=${canvasWidth}:h=${canvasHeight}:force_original_aspect_ratio=decrease:force_divisible_by=2:eval=frame[vfit${index}]`,
+        `color=c=black:s=${canvasWidth}x${canvasHeight}:r=${fps}[vcanvas${index}]`
+      );
+      segmentInput = `[vcanvas${index}][vfit${index}]overlay=x=(W-w)/2:y=(H-h)/2:eval=frame:shortest=1,`;
+    }
     filters.push(
-      `[${videoInput}:v]trim=duration=${formatNumber(sourceDuration)},${setpts}[v${index}]`
+      `${segmentInput}trim=duration=${formatNumber(sourceDuration)},${setpts}[v${index}]`
     );
 
     let videoLabel = `[v${index}]`;
@@ -301,6 +345,8 @@ export interface BuildEditFfmpegArgsOptions {
   hasSourceAudio: boolean;
   sourceWidth?: number | null;
   sourceHeight?: number | null;
+  sourceFps?: number | null;
+  segmentDimensions?: BuildEditFilterComplexOptions["segmentDimensions"];
   vaapiDevice: string;
   bitrate: string;
   maxrate: string;
@@ -318,6 +364,8 @@ export function buildEditFfmpegArgs(
     {
       sourceWidth: options.sourceWidth,
       sourceHeight: options.sourceHeight,
+      sourceFps: options.sourceFps,
+      segmentDimensions: options.segmentDimensions,
       encodingMode,
     }
   );
@@ -325,7 +373,7 @@ export function buildEditFfmpegArgs(
   if (encodingMode === "sw_decode") {
     args.push("-threads", "0");
   }
-  for (const segment of options.timeline.segments) {
+  options.timeline.segments.forEach((segment, index) => {
     if (encodingMode === "hw") {
       args.push(
         "-hwaccel",
@@ -335,6 +383,9 @@ export function buildEditFfmpegArgs(
         "-hwaccel_output_format",
         "vaapi"
       );
+    }
+    if (hasMixedSizes(options.segmentDimensions?.[index])) {
+      args.push("-reinit_filter", "0");
     }
     args.push(
       "-ss",
@@ -358,7 +409,7 @@ export function buildEditFfmpegArgs(
         options.inputPath
       );
     }
-  }
+  });
   args.push(
     "-filter_hw_device",
     "va",
@@ -409,6 +460,59 @@ export function buildEditFfmpegArgs(
     options.outputPath
   );
   return args;
+}
+
+async function probeSegmentDimensions(
+  inputPath: string,
+  timeline: EditTimelineConfig,
+  signal: AbortSignal
+): Promise<Array<{ width: number; height: number } | null>> {
+  return Promise.all(
+    timeline.segments.map(
+      (segment) =>
+        new Promise<{ width: number; height: number } | null>((resolve) => {
+          const child = spawn(
+            env.FFPROBE_PATH,
+            [
+              "-v",
+              "error",
+              "-select_streams",
+              "v:0",
+              "-skip_frame",
+              "nokey",
+              "-read_intervals",
+              `${formatNumber(segment.start)}%${formatNumber(segment.end)}`,
+              "-show_entries",
+              "frame=width,height",
+              "-of",
+              "csv=p=0",
+              inputPath,
+            ],
+            { stdio: ["ignore", "pipe", "ignore"], signal }
+          );
+          let out = "";
+          child.stdout.on("data", (chunk: Buffer) => {
+            out += chunk.toString();
+          });
+          child.on("error", () => resolve(null));
+          child.on("close", () => {
+            const sizes = new Set(
+              out
+                .trim()
+                .split(/\r?\n/)
+                .map((line) => line.split(",").slice(0, 2).join("x"))
+                .filter((size) => /^\d+x\d+$/.test(size))
+            );
+            if (sizes.size === 0) return resolve(null);
+            // A mid-segment resolution change reaches the concat filter as
+            // mismatched frames, so report it as a size no canvas can match.
+            if (sizes.size > 1) return resolve({ width: 0, height: 0 });
+            const [width, height] = [...sizes][0]!.split("x").map(Number);
+            resolve({ width: width!, height: height! });
+          });
+        })
+    )
+  );
 }
 
 function terminateProcess(child: ChildProcess): void {
@@ -510,6 +614,15 @@ export class EditsProcessor {
       );
 
       const ffmpegStart = Date.now();
+      const validateOutput = () =>
+        probeRenderedEditOutput(
+          tempOutputPath!,
+          calculateExpectedDuration(timelineConfig),
+          sourceVideo.audio_codec !== null &&
+            timelineConfig.audio?.muted !== true,
+          signal,
+          { path: sourceVideo.file_path, timeline: timelineConfig }
+        );
       await this.runFfmpeg(
         jobId,
         sourceVideo,
@@ -527,14 +640,36 @@ export class EditsProcessor {
 
       if (signal.aborted) throw new EditCancelledError();
       const validationStart = Date.now();
-      const renderedDurations = await probeRenderedEditOutput(
-        tempOutputPath,
-        calculateExpectedDuration(timelineConfig),
-        sourceVideo.audio_codec !== null &&
-          timelineConfig.audio?.muted !== true,
-        signal,
-        { path: sourceVideo.file_path, timeline: timelineConfig }
-      );
+      let renderedDurations: Awaited<ReturnType<typeof validateOutput>>;
+      try {
+        renderedDurations = await validateOutput();
+      } catch (error) {
+        // Hardware decode can drop frames silently; a software-decode render
+        // of the same timeline is the only way to tell that from a bad source.
+        if (
+          !(error instanceof RenderedEditValidationError) ||
+          error.reason === "probe_failed" ||
+          signal.aborted
+        ) {
+          throw error;
+        }
+        logger.warn(
+          { jobId, reason: error.reason },
+          "Rendered edit failed validation, retrying with software decode"
+        );
+        await removeIfPresent(tempOutputPath);
+        await this.runFfmpeg(
+          jobId,
+          sourceVideo,
+          tempOutputPath,
+          outputConfig,
+          timelineConfig,
+          signal,
+          "sw_decode"
+        );
+        if (signal.aborted) throw new EditCancelledError();
+        renderedDurations = await validateOutput();
+      }
       await recordStageSafely(
         { scenario: "editing", videoId, jobId, mode: "process_job" },
         "validate_output",
@@ -686,7 +821,8 @@ export class EditsProcessor {
     outputPath: string,
     outputConfig: EditOutputConfig,
     timeline: EditTimelineConfig,
-    signal: AbortSignal
+    signal: AbortSignal,
+    initialMode: EditEncodingMode = "hw"
   ): Promise<void> {
     if (signal.aborted) throw new EditCancelledError();
 
@@ -720,6 +856,15 @@ export class EditsProcessor {
       });
     };
 
+    const segmentDimensions = await probeSegmentDimensions(
+      sourceVideo.file_path,
+      timeline,
+      signal
+    );
+    // VAAPI frames that change size mid-segment stall even without a graph
+    // rebuild, so those segments are decoded in software.
+    const mixedSize = segmentDimensions.some(hasMixedSizes);
+    const mode: EditEncodingMode = mixedSize ? "sw_decode" : initialMode;
     const buildArgs = (encodingMode: EditEncodingMode): string[] =>
       buildEditFfmpegArgs({
         inputPath: sourceVideo.file_path,
@@ -729,6 +874,8 @@ export class EditsProcessor {
         hasSourceAudio: sourceVideo.audio_codec !== null,
         sourceWidth: sourceVideo.width,
         sourceHeight: sourceVideo.height,
+        sourceFps: sourceVideo.fps,
+        segmentDimensions,
         vaapiDevice: env.VAAPI_DEVICE,
         bitrate,
         maxrate,
@@ -742,7 +889,7 @@ export class EditsProcessor {
         segmentCount: timeline.segments.length,
         hasAudio: sourceVideo.audio_codec !== null,
         audioCodec: outputConfig.audio_codec,
-        encodingMode: "hw",
+        encodingMode: mode,
         seekMode: "per_segment_input",
       },
       "Starting edit FFmpeg process"
@@ -750,14 +897,15 @@ export class EditsProcessor {
     try {
       await this.executeFfmpeg(
         jobId,
-        buildArgs("hw"),
+        buildArgs(mode),
         expectedDuration,
         updateProgress,
         signal,
-        "hw"
+        mode
       );
     } catch (error) {
       if (
+        mode !== "hw" ||
         signal.aborted ||
         error instanceof EditCancelledError ||
         !shouldRetryWithSoftwareDecode(error)
@@ -803,10 +951,21 @@ export class EditsProcessor {
       let settled = false;
       let progressBuffer = "";
       let stderrTail = "";
+      let lastOutTime = -1;
+      let lastAdvanceAt = Date.now();
+      let stalled = false;
+      // A deadlocked filter graph keeps ffmpeg alive while it buffers decoded
+      // input without bound, so stop a render whose output stops advancing.
+      const stallWatchdog = setInterval(() => {
+        if (Date.now() - lastAdvanceAt < EDIT_FFMPEG_STALL_MS) return;
+        stalled = true;
+        terminateProcess(ffmpeg);
+      }, 10_000);
 
       const settle = (error?: Error) => {
         if (settled) return;
         settled = true;
+        clearInterval(stallWatchdog);
         signal.removeEventListener("abort", onAbort);
         if (error) rejectPromise(error);
         else resolvePromise();
@@ -821,8 +980,13 @@ export class EditsProcessor {
         progressBuffer = lines.pop() ?? "";
         for (const line of lines) {
           const match = /^out_time_(?:ms|us)=(\d+)$/.exec(line);
-          if (!match || expectedDuration <= 0) continue;
+          if (!match) continue;
           const seconds = Number.parseInt(match[1], 10) / 1_000_000;
+          if (seconds > lastOutTime) {
+            lastOutTime = seconds;
+            lastAdvanceAt = Date.now();
+          }
+          if (expectedDuration <= 0) continue;
           const progress = Math.min(
             99,
             Math.round((seconds / expectedDuration) * 100)
@@ -837,6 +1001,16 @@ export class EditsProcessor {
       ffmpeg.on("close", (code, closeSignal) => {
         if (signal.aborted) {
           settle(new EditCancelledError());
+        } else if (stalled) {
+          settle(
+            new EditFfmpegProcessError(
+              `FFmpeg edit stalled: no output progress for ${EDIT_FFMPEG_STALL_MS / 1000}s`,
+              stderrTail.trim(),
+              code,
+              closeSignal,
+              encodingMode
+            )
+          );
         } else if (code === 0) {
           logger.info(
             { jobId, encodingMode, seekMode: "per_segment_input" },
