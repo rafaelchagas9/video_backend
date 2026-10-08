@@ -20,6 +20,8 @@ import { loadHighlightProbe, PROBE_STATES, probeThreshold, type HighlightProbe, 
 import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
 import { DEMO_RECORDING_MIN_SECONDS, recordingScope } from "./recordings.scope";
 import { feedbackSummary, markRecordingDiscarded, recordFeedback } from "./recordings.feedback";
+import { recorderAutopilot } from "./recordings.autopilot";
+import { trainingValues } from "./recordings.training-value";
 
 export interface RecordingSettings {
   directoryId: number | null;
@@ -36,6 +38,7 @@ export interface RecordingSettings {
 }
 
 export type RecordingDetector = "trained" | "prompts";
+
 
 export interface TrainedModelInfo {
   version: string;
@@ -190,20 +193,65 @@ export class RecordingsService {
       });
       videos = page.data;
     }
-    const reviews = await this.rows(videos.map((video) => video.id));
+    const [reviews, paired, autopilot, knownSites] = await Promise.all([
+      this.rows(videos.map((video) => video.id)),
+      this.pairedByChannel(),
+      recorderAutopilot.settings(),
+      this.knownChannelSites(),
+    ]);
+    const channelOf = (video: Video) => usernameFromFileName(video.file_name)?.replace(/^@/, "").toLowerCase() ?? null;
+    // Channels removed from GoondVR keep their site in the autopilot's table.
+    const siteOf = new Map([...knownSites, ...(channels ?? []).map((channel) => [channel.username.replace(/^@/, "").toLowerCase(), channel.site] as const)]);
+    const values = trainingValues(
+      videos.flatMap((video) => {
+        const review = reviews.get(video.id);
+        const status = review?.status ?? "pending";
+        if (status !== "pending" && status !== "proposed") return [];
+        return [{ videoId: video.id, status, clips: review?.clips ?? null, channel: channelOf(video) }];
+      }),
+      paired,
+      autopilot.enoughUseful
+    );
     return {
       goondvr: { reachable: channels !== null, channels: linked },
       directory_id: settings.directoryId,
       recordings: videos.map((video) => {
         const review = reviews.get(video.id);
+        const channel = channelOf(video);
         return {
           video,
           status: review?.status ?? "pending",
           clip_count: review?.clips.length ?? 0,
           kept_count: review?.clips.filter((clip) => clip.keep).length ?? 0,
+          channel,
+          site: (channel && siteOf.get(channel)) || null,
+          channel_paired: channel ? (paired.get(channel) ?? 0) : 0,
+          training_value: values.get(video.id) ?? 0,
         };
       }),
     };
+  }
+
+  /** Sites of every channel the autopilot has seen, by lower-cased username, from its `<site>__<username>` ids. */
+  private async knownChannelSites(): Promise<[string, string][]> {
+    if (env.DEMO_MODE) return [];
+    const rows = await db.execute<{ channel_id: string }>(sql`SELECT channel_id FROM recorder_autopilot_channels`);
+    return rows.flatMap((row) => {
+      const [site, ...rest] = String(row.channel_id).split("__");
+      return site && rest.length ? [[rest.join("__").replace(/^@/, "").toLowerCase(), site] as [string, string]] : [];
+    });
+  }
+
+  /** Reviewed recordings with both a kept and a skipped highlight, per lower-cased channel. */
+  private async pairedByChannel(): Promise<Map<string, number>> {
+    if (env.DEMO_MODE) return new Map();
+    const rows = await db.execute<{ channel: string; paired: number }>(sql`
+      SELECT channel, count(*)::int AS paired FROM (
+        SELECT lower(regexp_replace(channel, '^@', '')) AS channel FROM recording_clip_feedback
+        WHERE channel IS NOT NULL GROUP BY 1, video_id
+        HAVING bool_or(verdict = 'keep') AND bool_or(verdict = 'skip')
+      ) t GROUP BY channel`);
+    return new Map(rows.map((row) => [String(row.channel), Number(row.paired)]));
   }
 
   async analyze(userId: number, videoId: number) {
