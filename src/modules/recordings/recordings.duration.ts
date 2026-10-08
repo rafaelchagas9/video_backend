@@ -7,17 +7,23 @@ import { BadRequestError } from "@/utils/errors";
 
 const run = promisify(execFile);
 
-/** Matroska's DURATION tag is the stream end timestamp; format.duration can include an audio-only tail. */
+/**
+ * Matroska's DURATION tag is the stream end timestamp; format.duration can include an audio-only tail.
+ * The catalogued duration is only a fallback for a file ffprobe cannot time.
+ */
 export function usableVideoDuration(probe: EditProbeData, catalogDuration: number): number {
   const video = probe.streams?.find((stream) => stream.codec_type === "video");
   if (!video) throw new BadRequestError("This recording has no video stream");
   const duration = getProbeStreamDuration(video);
   const directDuration = parseProbeNumber(video.duration);
   const videoEnd = duration === null ? null : duration + (directDuration === null ? 0 : Math.max(0, parseProbeNumber(video.start_time) ?? 0));
-  const limits = [catalogDuration, parseProbeNumber(probe.format?.duration), videoEnd]
-    .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
-  if (!limits.length) throw new BadRequestError("Could not inspect the recording's video duration");
-  return Math.min(...limits);
+  const usable = (value: number | null): value is number => value !== null && Number.isFinite(value) && value > 0;
+  const limits = [parseProbeNumber(probe.format?.duration), videoEnd].filter(usable);
+  // The catalog can be stale: a recording indexed while still being written keeps its
+  // partial length (6098 was catalogued at 23s of 68m), so the file itself wins.
+  if (limits.length) return Math.min(...limits);
+  if (usable(catalogDuration)) return catalogDuration;
+  throw new BadRequestError("Could not inspect the recording's video duration");
 }
 
 export async function probeRecordingDuration(path: string, catalogDuration: number): Promise<number> {

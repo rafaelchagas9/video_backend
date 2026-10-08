@@ -77,3 +77,18 @@ it("writes cues that point at their page with in-page offsets", () => {
     xywh: "320,0,320,240",
   });
 });
+
+it("no cue ends before it starts when the duration it was capped at is stale", () => {
+  const vtt = buildPagedStoryboardVtt({
+    videoId: 6098,
+    vttPath: "/s/storyboard_6098_1.vtt",
+    format: "webp",
+    tileWidth: 256,
+    tileHeight: 342,
+    cues: Array.from({ length: 8 }, (_, index) => ({ start: index * 5, end: Math.min(index * 5 + 5, 23.17) })),
+  });
+  const timings = vtt.trim().split("\n\n").slice(1).map((block) => block.split("\n")[0]);
+  expect(timings[4]).toBe("00:00:20.000 --> 00:00:23.170");
+  expect(timings[5]).toBe("00:00:25.000 --> 00:00:30.000");
+  expect(timings[7]).toBe("00:00:35.000 --> 00:00:40.000");
+});

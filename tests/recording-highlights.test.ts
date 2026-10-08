@@ -55,6 +55,12 @@ describe("highlight detection", () => {
     expect(result.clips[0]!.end_seconds - result.clips[0]!.start_seconds).toBeGreaterThan(140);
   });
 
+  it("never proposes a clip that ends before it starts when the duration is short", () => {
+    const input = recording((t) => (t >= 1800 && t < 1920 ? v(1, 0.1, 0.2) : v(0.05 + (t % 7) * 0.01, 1, 0.2)), 3600);
+    const result = detectHighlights({ ...input, durationSeconds: 23, ...prompts });
+    expect(result.clips.every((clip) => clip.end_seconds > clip.start_seconds)).toBe(true);
+  });
+
   it("finds nothing in an evenly idle stream", () => {
     const input = recording((t) => v(0.02 * (t % 3), 1, 0.1), 1200);
     expect(detectHighlights({ ...input, ...prompts }).clips.length).toBeLessThanOrEqual(1);

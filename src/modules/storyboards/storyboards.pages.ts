@@ -126,7 +126,11 @@ export function buildPagedStoryboardVtt(input: {
       input.tileWidth,
       input.tileHeight
     );
-    vtt += `${formatVttTime(cue.start)} --> ${formatVttTime(cue.end)}\n`;
+    // A stale catalogue duration once ended every later cue before it began (6098 at 23s),
+    // and players drop such cues; a tile always lasts until the next one.
+    const next = input.cues[index + 1]?.start ?? cue.start + (cue.start - (input.cues[index - 1]?.start ?? 0) || 1);
+    const end = cue.end > cue.start ? cue.end : next;
+    vtt += `${formatVttTime(cue.start)} --> ${formatVttTime(end)}\n`;
     vtt += `/api/videos/${input.videoId}/storyboard/pages/${page}.${input.format}?v=${version}#xywh=${x},${y},${input.tileWidth},${input.tileHeight}\n\n`;
   });
   return vtt;

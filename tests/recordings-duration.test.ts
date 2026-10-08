@@ -21,8 +21,13 @@ describe("recording video duration", () => {
   });
   it("uses direct stream duration plus its start, and falls back when a stream duration is absent", () => {
     expect(usableVideoDuration({ format: { duration: 12 }, streams: [{ codec_type: "video", start_time: 1, duration: 9 }] }, 12)).toBe(10);
-    expect(usableVideoDuration({ format: { duration: 12 }, streams: [{ codec_type: "video" }] }, 11)).toBe(11);
+    expect(usableVideoDuration({ format: { duration: 12 }, streams: [{ codec_type: "video" }] }, 11)).toBe(12);
+    expect(usableVideoDuration({ streams: [{ codec_type: "video" }] }, 11)).toBe(11);
     expect(() => usableVideoDuration({ streams: [] }, 12)).toThrow("no video stream");
+  });
+  it("trusts the file over a catalogue entry left from a partly written recording", () => {
+    const finished = { format: { duration: "4102.037333" }, streams: [{ codec_type: "video", start_time: "0", duration: "4102.026" }] };
+    expect(usableVideoDuration(finished, 23.170044)).toBe(4102.026);
   });
   it("preserves earlier, rendered and running clips and rejects kept audio-only ranges", () => {
     const earlier = { ...clip, end_seconds: 1300 };

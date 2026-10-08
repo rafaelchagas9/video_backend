@@ -156,9 +156,13 @@ function shapeClips(
       votes.set(labels[index]!, (votes.get(labels[index]!) ?? 0) + Math.max(0, scores[index] ?? 0));
     }
     const label = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+    const clipStart = Math.max(0, Math.round(start - options.padSeconds));
+    const clipEnd = Math.min(durationSeconds || Infinity, Math.round(end + options.padSeconds));
+    // Frames past the end mean the duration is wrong; never propose a clip that ends before it starts.
+    if (clipEnd <= clipStart) continue;
     clips.push({
-      start_seconds: Math.max(0, Math.round(start - options.padSeconds)),
-      end_seconds: Math.min(durationSeconds || Infinity, Math.round(end + options.padSeconds)),
+      start_seconds: clipStart,
+      end_seconds: clipEnd,
       peak_seconds: Math.round(timestamps[peak]!),
       score: Math.round((sum / (run.to - run.from + 1)) * 100) / 100,
       label,
