@@ -21,6 +21,11 @@ type DemoDownload = {
   tags: string[];
 };
 
+// DEMO_MEDIA_SOURCE=synthetic renders small ffmpeg test clips instead of calling
+// yt-dlp. It exists for offline environments such as Claude cloud sessions.
+const SYNTHETIC = process.env.DEMO_MEDIA_SOURCE === "synthetic";
+const SYNTHETIC_SECONDS = Number(process.env.DEMO_SYNTHETIC_SECONDS || 12);
+
 const HD_FORMAT =
   "bv*[ext=webm][height<=1080]+ba[ext=webm]/b[ext=webm][height<=1080]";
 const AV1_HD_FALLBACK =
@@ -677,6 +682,59 @@ async function probeVideo(filePath: string) {
   };
 }
 
+async function generateSyntheticVideo(
+  entry: DemoDownload,
+  index: number,
+  videoPath: string,
+  thumbnailPath: string
+) {
+  const seconds = SYNTHETIC_SECONDS + (index % 5) * 3;
+  const label = entry.title.replace(/[^A-Za-z0-9 ]/g, "").slice(0, 40);
+  await run([
+    "ffmpeg",
+    "-y",
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    `testsrc2=size=640x360:rate=24:duration=${seconds}`,
+    "-f",
+    "lavfi",
+    "-i",
+    `sine=frequency=${220 + index * 20}:duration=${seconds}`,
+    "-vf",
+    `hue=h=${(index * 37) % 360},drawbox=x=0:y=0:w=iw:h=40:color=black@0.6:t=fill,drawtext=text='${label}':x=10:y=12:fontsize=18:fontcolor=white`,
+    "-c:v",
+    "libvpx-vp9",
+    "-b:v",
+    "300k",
+    "-deadline",
+    "realtime",
+    "-cpu-used",
+    "8",
+    "-g",
+    "48",
+    "-c:a",
+    "libopus",
+    "-shortest",
+    videoPath,
+  ]);
+  await run([
+    "ffmpeg",
+    "-y",
+    "-v",
+    "error",
+    "-ss",
+    "1",
+    "-i",
+    videoPath,
+    "-frames:v",
+    "1",
+    thumbnailPath,
+  ]);
+}
+
 async function getBestAvailableHeight(youtubeId: string): Promise<number> {
   const output = await run(
     [
@@ -970,8 +1028,15 @@ async function main() {
       ? await probeVideo(videoPath)
       : null;
     let bestAvailableHeight = 0;
+    let mediaChanged = false;
 
-    if (!currentProbe || currentProbe.height < 1080) {
+    if (SYNTHETIC) {
+      if (!currentProbe) {
+        await generateSyntheticVideo(entry, index, videoPath, thumbnailPath);
+        currentProbe = await probeVideo(videoPath);
+        mediaChanged = true;
+      }
+    } else if (!currentProbe || currentProbe.height < 1080) {
       try {
         bestAvailableHeight = await getBestAvailableHeight(entry.id);
       } catch (error) {
@@ -980,10 +1045,10 @@ async function main() {
     }
 
     const needsDownload =
-      !currentProbe ||
+      !SYNTHETIC &&
+      (!currentProbe ||
       (bestAvailableHeight > 0 &&
-        bestAvailableHeight > (currentProbe.height || 0));
-    let mediaChanged = false;
+        bestAvailableHeight > (currentProbe.height || 0)));
 
     if (needsDownload) {
       try {

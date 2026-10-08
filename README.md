@@ -240,3 +240,16 @@ MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V, MPEG, MPV, OGM, RMVB
 - **Thumbnails/Storyboards**: FFmpeg with configurable quality, format, size
 - **Conversion**: VAAPI hardware acceleration (Linux/Intel GPU), fallback software
 - **Vision**: InsightFace and NudeNet via the native Python/ONNX Runtime service; see its setup guide for the pinned runtime.
+
+### Demo mode in Claude cloud sessions
+
+Cloud sessions have no access to YouTube, so `DEMO_MEDIA_SOURCE=synthetic`
+makes `demo:download` render small ffmpeg test clips instead of calling
+`yt-dlp` (`DEMO_SYNTHETIC_SECONDS` sets the base clip length). The committed
+`.claude/hooks/session-start.sh` installs dependencies and generates this media
+(about 30 MB, gitignored, ~30 s) when `CLAUDE_CODE_REMOTE=true`. Then:
+
+```bash
+scripts/cloud-demo.sh start   # backend on :3000, no PostgreSQL needed
+scripts/cloud-demo.sh stop
+```
