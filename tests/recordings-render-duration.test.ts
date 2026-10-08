@@ -3,6 +3,7 @@ import { RecordingsService, recordingsService } from "@/modules/recordings/recor
 import { videosService } from "@/modules/videos/videos.service";
 import { editsService } from "@/modules/edits/edits.service";
 import * as duration from "@/modules/recordings/recordings.duration";
+import * as snapshots from "@/modules/recordings/recordings.snapshots.store";
 
 const spies: ReturnType<typeof spyOn>[] = [];
 afterEach(() => { for (const spy of spies.splice(0)) spy.mockRestore(); });
@@ -10,6 +11,7 @@ afterEach(() => { for (const spy of spies.splice(0)) spy.mockRestore(); });
 for (const combine of [false, true]) {
   it(`caps an existing failed review before queueing (${combine ? "combined" : "separate"})`, async () => {
     const service = new RecordingsService();
+    spies.push(spyOn(snapshots, "preserveRecordingTrainingSnapshot").mockResolvedValue());
     const row = { videoId: 5847, status: "proposed", deleteOriginal: false, error: "Video rendering failed", analyzedAt: new Date(), promptsRevision: "test", curve: [], clips: [
       { id: "c4", keep: true, start_seconds: 1138, end_seconds: 2068.808, peak_seconds: 1240, score: 1, label: "highlight", job_id: null },
     ] };

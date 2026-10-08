@@ -22,6 +22,8 @@ import { DEMO_RECORDING_MIN_SECONDS, recordingScope } from "./recordings.scope";
 import { feedbackSummary, markRecordingDiscarded, recordFeedback } from "./recordings.feedback";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { trainingValues } from "./recordings.training-value";
+import { preserveRecordingTrainingSnapshot } from "./recordings.snapshots.store";
+import { keptRecordingSeconds } from "./recordings.kept-duration";
 
 export interface RecordingSettings {
   directoryId: number | null;
@@ -223,6 +225,7 @@ export class RecordingsService {
           status: review?.status ?? "pending",
           clip_count: review?.clips.length ?? 0,
           kept_count: review?.clips.filter((clip) => clip.keep).length ?? 0,
+          kept_seconds: keptRecordingSeconds(review?.clips ?? [], video.duration_seconds),
           channel,
           site: (channel && siteOf.get(channel)) || null,
           channel_paired: channel ? (paired.get(channel) ?? 0) : 0,
@@ -353,7 +356,10 @@ export class RecordingsService {
       const { detected: _detected, ...rest } = clip;
       return rest;
     });
-    await this.save({ ...row, clips: next, status: next.some((clip) => clip.keep) ? "proposed" : "dismissed" });
+    const reviewed = { ...row, clips: next, status: next.some((clip) => clip.keep) ? "proposed" : "dismissed" };
+    // Save confirms every current choice, including untouched defaults. Archive them before acknowledging it.
+    await preserveRecordingTrainingSnapshot(reviewed, video, "save");
+    await this.save(reviewed);
     await this.recordDecisions(row, video, next);
     return this.review(userId, videoId);
   }
@@ -389,6 +395,8 @@ export class RecordingsService {
     const source = await videosService.findById(videoId, userId);
     const duration = env.DEMO_MODE ? source.duration_seconds ?? Infinity : await probeRecordingDuration(source.file_path, source.duration_seconds ?? Infinity);
     const boundedClips = capRecordingClips(row.clips, duration);
+    // Refuse to start new jobs when the reviewed training data cannot be retained.
+    await preserveRecordingTrainingSnapshot({ ...row, clips: boundedClips }, source, "render-requested");
     const stem = basename(source.file_name).replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "_");
     const output = (fileName: string) => ({
       directory_id: settings.clipsDirectoryId!,
@@ -422,7 +430,16 @@ export class RecordingsService {
         clips.push({ ...clip, job_id: job.id });
       }
     }
-    await this.save({ ...row, clips, deleteOriginal, status: "rendering", error: null });
+    const rendering: ReviewRow = { ...row, clips, deleteOriginal, status: "rendering", error: null };
+    // Jobs now exist: persist their IDs before any optional lineage update can fail.
+    await this.save(rendering);
+    try {
+      await preserveRecordingTrainingSnapshot(rendering, source, "rendering");
+    } catch (error) {
+      rendering.error = "Rendering started, but the training snapshot lineage could not be updated. The original is retained until the archive is available.";
+      await this.save(rendering);
+      logger.warn({ error, videoId }, "Could not update rendering training snapshot");
+    }
     await this.recordDecisions(row, source, clips, true);
     startFinalizer();
     return this.review(userId, videoId);
@@ -469,8 +486,20 @@ export class RecordingsService {
       if (tagIds.length) await videosBulkService.bulkUpdateTags({ videoIds: outputs, tagIds, action: "add" });
     }
     const done: ReviewRow = { ...row, clips, status: failures.length ? "proposed" : "done", error: failures[0] ?? null };
+    // Completed jobs remain completed even when archive storage is temporarily unavailable.
     await this.save(done);
-    if (!failures.length && row.deleteOriginal && source && outputs.length) await this.deleteOriginal(source);
+    let archived = false;
+    if (source) {
+      try {
+        await preserveRecordingTrainingSnapshot(done, source, "render-finished");
+        archived = true;
+      } catch (error) {
+        done.error = failures[0] ?? "Clips finished, but the training snapshot lineage could not be updated. The original has been retained.";
+        await this.save(done);
+        logger.warn({ error, videoId }, "Could not update completed training snapshot; original retained");
+      }
+    }
+    if (!failures.length && archived && row.deleteOriginal && source && outputs.length) await this.deleteOriginal(source);
     return done;
   }
 
@@ -496,6 +525,8 @@ export class RecordingsService {
 
   /** Through GoondVR when it owns the file, so its per-channel quota counters stay truthful. */
   private async remove(source: Video) {
+    const review = await this.row(source.id);
+    if (review) await preserveRecordingTrainingSnapshot(review, source, "before-delete");
     // The demo drives the real GoondVR, but its library videos are never GoondVR's files.
     const owned = env.DEMO_MODE ? undefined : (await goondvr.recordings()).find((recording) => recording.name === source.file_name);
     if (owned?.active) throw new BadRequestError("GoondVR is still recording this file");
