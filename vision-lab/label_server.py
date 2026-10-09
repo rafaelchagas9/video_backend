@@ -407,6 +407,26 @@ def review() -> dict:
     return {"items": items[:300], "total": len(items), "model": model_status(state, stale)}
 
 
+@app.get("/api/queue")
+def queue() -> dict:
+    """Scenes channel_queue.py picked for labelling, those not labelled yet first."""
+    path = DATA / "label_queue.json"
+    if isinstance(source, DemoSource) or not path.exists():
+        return {"items": [], "done": 0}
+    recordings, labels = source.recordings(), all_labels()
+    items, done = [], 0
+    for item in json.loads(path.read_text())["items"]:
+        rec = recordings.get(item["video_id"])
+        if not rec:
+            continue
+        frames = list(range(item["start"], item["end"] + 1))
+        if all(index in labels.get(item["video_id"], {}) for index in frames):
+            done += 1
+            continue
+        items.append(item | {"frames": frames, "interval": rec["interval"]})
+    return {"items": items, "done": done}
+
+
 @app.get("/api/suggestions")
 def suggest() -> dict:
     state, stale = label_model().state()

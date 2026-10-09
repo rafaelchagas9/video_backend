@@ -159,7 +159,7 @@ main { flex: 1; }
   <div class="brand">Scene labels <span>· highlight training data</span></div>
   <button class="picker" id="picker" title="All recordings (R)"><b id="pChannel">—</b><span class="when" id="pWhen"></span><span class="when">▾</span></button>
   <span id="demo"></span>
-  <div class="tabs"><button id="tabLabel" class="on">Label</button><button id="tabReview">Review <span class="count" id="reviewCount">…</span></button></div>
+  <div class="tabs"><button id="tabLabel" class="on">Label</button><button id="tabReview">Review <span class="count" id="reviewCount">…</span></button><button id="tabQueue">Queue <span class="count" id="queueCount">…</span></button></div>
   <div class="spacer"></div>
   <div class="overall"><div class="meter" id="meter"></div><span id="overall"></span></div>
   <button class="picker" id="exportBtn" title="Train on every label and use it for Kura's highlights"><b>Send model to Kura</b><span class="when" id="exportInfo"></span></button>
@@ -173,6 +173,7 @@ main { flex: 1; }
 <main>
 <div class="wrap scene" id="scene"></div>
 <div class="wrap scene" id="review" hidden></div>
+<div class="wrap scene" id="queue" hidden></div>
 <div class="dock"><div class="wrap" id="dock"></div></div>
 </main>
 
@@ -399,8 +400,9 @@ addEventListener("keydown", e => {
     e.preventDefault(); return;
   }
   if ($("drawer").classList.contains("open")) { if (e.key === "Escape" || e.key === "r") closeDrawer(); return; }
-  if (e.key === "Tab") { setMode(mode === "label" ? "review" : "label"); e.preventDefault(); return; }
+  if (e.key === "Tab") { setMode({ label: "review", review: "queue", queue: "label" }[mode]); e.preventDefault(); return; }
   if (mode === "review") { reviewKey(e); return; }
+  if (mode === "queue") { queueKey(e); return; }
   if (BY_KEY[e.key] && cur < scenes.length) apply(BY_KEY[e.key]);
   else if (e.key === "ArrowRight" || e.key === "l") go(cur + 1);
   else if (e.key === "ArrowLeft" || e.key === "h") go(cur - 1);
@@ -533,14 +535,81 @@ function reviewKey(e) {
   else return;
   e.preventDefault();
 }
+// ---------- queue: scenes picked for channels whose labels are lopsided (channel_queue.py) ----------
+let queue = { items: [], done: 0, index: 0 };
+const WHY = {
+  wrong: "You skipped this stretch as “Detector got it wrong” or “Pussy covered”.",
+  high: "The detector scores this nude or explicit.",
+  mid: "The detector is unsure here.",
+  low: "The detector scores this idle — this channel has almost no idle labels.",
+};
+async function loadQueue() {
+  try { const data = await (await fetch("/api/queue")).json(); queue = { ...queue, items: data.items, done: data.done }; } catch {}
+  queue.index = Math.min(queue.index, Math.max(0, queue.items.length - 1));
+  $("queueCount").textContent = queue.items.length;
+  if (mode === "queue") renderQueue();
+}
+function renderQueue() {
+  const el = $("queue"), it = queue.items[queue.index];
+  if (!it) {
+    el.innerHTML = `<div class="empty"><h2>Queue done</h2><p>${queue.done} scenes labelled. Send the model to Kura only after the evaluation says it helps.</p></div>`;
+    $("dock").innerHTML = ""; return;
+  }
+  const n = it.end - it.start + 1, shown = sampleOf(it.frames);
+  el.innerHTML = `
+    <div class="scene-head">
+      <h2>Scene ${queue.index + 1} <span style="color:var(--faint);font-weight:500">/ ${queue.items.length}</span></h2>
+      <span class="range">${it.channel} · ${when(it.file_name)} · ${fmt(it.start * it.interval)} – ${fmt((it.end + 1) * it.interval)} · ${dur(n * it.interval)}</span>
+      <span class="spacer"></span>
+      <div class="nav"><button id="qPrev" ${queue.index === 0 ? "disabled" : ""}><kbd>←</kbd> Previous</button>
+      <button id="qNext" ${queue.index >= queue.items.length - 1 ? "disabled" : ""}>Skip <kbd>→</kbd></button></div>
+    </div>
+    <div class="frames" style="grid-template-columns:repeat(${Math.min(4, shown.length)}, 1fr)">${shown.map(i =>
+      `<div class="frame" data-i="${i}" data-v="${it.video_id}"><img src="${frameUrl(i, it.video_id)}" alt=""><span class="t">${fmt(i * it.interval)}</span></div>`).join("")}</div>
+    <p class="hint">${WHY[it.why] || ""} One label covers all ${n} frames; if the scene is mixed, open it in the labeller and split it.</p>`;
+  $("qPrev").onclick = () => { queue.index--; renderQueue(); };
+  $("qNext").onclick = () => { queue.index++; renderQueue(); };
+  $("dock").innerHTML = LABELS.map(x => `<button class="lab" data-l="${x.id}" style="--c:var(--${x.id})">
+      <span class="name"><span class="dot" style="background:var(--${x.id})"></span>${x.name}<kbd>${x.key}</kbd></span><span class="def">${x.def}</span></button>`).join("")
+    + `<button class="lab tool" data-act="open"><span class="name">Open<kbd>O</kbd></span><span class="def">Split it in the labeller</span></button>`;
+  $("dock").querySelectorAll("[data-l]").forEach(b => b.onclick = () => labelQueued(b.dataset.l));
+  $("dock").querySelector("[data-act=open]").onclick = () => openInLabeler(it);
+  for (const next of queue.items.slice(queue.index + 1, queue.index + 3))
+    for (const i of sampleOf(next.frames)) new Image().src = frameUrl(i, next.video_id);
+}
+async function labelQueued(label) {
+  const it = queue.items[queue.index]; if (!it) return;
+  try {
+    const r = await fetch("/api/labels", { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ video_id: it.video_id, frames: it.frames, label }) });
+    if (!r.ok) throw new Error(r.status);
+  } catch { toast("Couldn't save — is the label server still running?"); return; }
+  byLabel[label] = (byLabel[label] || 0) + it.frames.length; renderOverall();
+  if (rec && rec.id === it.video_id) it.frames.forEach(i => labels[i] = label);
+  queue.items.splice(queue.index, 1); queue.done++;
+  $("queueCount").textContent = queue.items.length;
+  renderQueue();
+}
+function queueKey(e) {
+  const it = queue.items[queue.index];
+  if (it && BY_KEY[e.key]) labelQueued(BY_KEY[e.key]);
+  else if (it && e.key === "o") openInLabeler(it);
+  else if (e.key === "ArrowRight" && queue.index < queue.items.length - 1) { queue.index++; renderQueue(); }
+  else if (e.key === "ArrowLeft" && queue.index > 0) { queue.index--; renderQueue(); }
+  else if (e.key === "r") openDrawer();
+  else return;
+  e.preventDefault();
+}
 function setMode(m) {
   mode = m;
   $("tabLabel").classList.toggle("on", m === "label"); $("tabReview").classList.toggle("on", m === "review");
+  $("tabQueue").classList.toggle("on", m === "queue");
   $("tlBlock").hidden = $("scene").hidden = m !== "label";
   $("review").hidden = m !== "review";
+  $("queue").hidden = m !== "queue";
   $("picker").style.visibility = m === "label" ? "" : "hidden";
-  try { history.replaceState(null, "", m === "review" ? "#review" : "#"); } catch {}
-  if (m === "review") { renderReview(); loadReview(); } else if (rec) render();
+  try { history.replaceState(null, "", m === "label" ? "#" : "#" + m); } catch {}
+  if (m === "review") { renderReview(); loadReview(); } else if (m === "queue") { renderQueue(); loadQueue(); } else if (rec) render();
   scrollTo({ top: 0 });
 }
 // Frames the model in Kura was trained on; `unsure` frames never count.
@@ -570,10 +639,12 @@ $("exportBtn").onclick = async () => {
 };
 $("tabLabel").onclick = () => setMode("label");
 $("tabReview").onclick = () => setMode("review");
+$("tabQueue").onclick = () => setMode("queue");
 
 loadList().then(() => {
-  loadSuggestions(); loadReview(); loadExportInfo();
+  loadSuggestions(); loadReview(); loadQueue(); loadExportInfo();
   if (location.hash === "#review") setMode("review");
+  if (location.hash === "#queue") setMode("queue");
   let last = null; try { last = +localStorage.getItem("lastRec"); } catch {}
   const start = recs.find(r => r.id === last) || recs.find(r => r.labeled < r.count) || recs[0];
   if (start) open(start.id);
