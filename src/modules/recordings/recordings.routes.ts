@@ -383,7 +383,7 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       schema: {
         tags: ["recordings"],
         summary: "Labelling tasks outside the review queue",
-        description: "Recall-audit windows (was anything here worth keeping?) and refinements of past keeps (worth saving or nice to watch?), answered or not.",
+        description: "Recall-audit windows (was anything here worth keeping?) and versus pairs of one channel's keeps (which is worth its storage, and which part?), answered or not.",
         response: { 200: anyData },
       },
     },
@@ -396,15 +396,25 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       schema: {
         tags: ["recordings"],
         summary: "Answer a labelling task",
-        description: "keep or skip for a recall audit, save or watch for a refine; null reopens it.",
+        description: "keep or skip for a recall audit; a, b, both or neither for a versus pair, with each winner's best part; null reopens it.",
         params: z.object({ taskId: z.coerce.number().int().positive() }),
-        body: z.object({ answer: z.string().max(16).nullable(), reasons: z.array(z.string().trim().min(1).max(60)).max(16).optional() }),
+        body: z.object({
+          answer: z.string().max(16).nullable(),
+          reasons: z.array(z.string().trim().min(1).max(60)).max(16).optional(),
+          detail: z
+            .object({
+              best: z
+                .record(z.enum(["a", "b"]), z.object({ start_seconds: z.number().min(0), end_seconds: z.number().positive(), accepted: z.boolean() }))
+                .optional(),
+            })
+            .optional(),
+        }),
         response: { 200: anyData },
       },
     },
     async (request) => ({
       success: true as const,
-      data: await answerLabelTask(request.params.taskId, request.body.answer, request.body.reasons ?? []),
+      data: await answerLabelTask(request.params.taskId, request.body.answer, request.body.reasons ?? [], request.body.detail ?? null),
     })
   );
 

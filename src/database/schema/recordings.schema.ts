@@ -189,13 +189,14 @@ export const recorderAutopilotOutcomesTable = pgTable("recorder_autopilot_outcom
 });
 
 /**
- * Labelling tasks outside the review queue: recall-audit windows (is anything here worth keeping?)
- * and refinement of past keeps (worth saving or nice to watch?). Each row is its own label and
+ * Labelling tasks outside the review queue: recall-audit windows (is anything here worth keeping?),
+ * versus pairs of keeps from one channel (which is worth its storage, and which part of it?) and
+ * the retired refine tasks (worth saving or nice to watch?). Each row is its own label and
  * outlives the recording (no foreign key).
  */
 export const recordingLabelTasksTable = pgTable("recording_label_tasks", {
   id: serial("id").primaryKey(),
-  /** recall-audit | refine */
+  /** recall-audit | versus | refine (retired: a whole-clip yes/no mixed length with worth) */
   kind: text("kind").notNull(),
   /** The round the task was drawn in, e.g. recall-audit-1. */
   batch: text("batch").notNull(),
@@ -212,8 +213,10 @@ export const recordingLabelTasksTable = pgTable("recording_label_tasks", {
   channel: text("channel"),
   /** Stratum details (detector score, the decision a refine labels) for analysis. */
   context: jsonb("context").$type<Record<string, unknown>>().notNull().default({}),
-  /** keep | skip on audits, save | watch on refines; null while open. */
+  /** keep | skip on audits, save | watch on refines, a | b | both | neither on versus; null while open. */
   answer: text("answer"),
+  /** What came with the answer: on versus, the best part of each winner the reviewer accepted or moved. */
+  detail: jsonb("detail").$type<Record<string, unknown>>(),
   reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
   answeredAt: timestamp("answered_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

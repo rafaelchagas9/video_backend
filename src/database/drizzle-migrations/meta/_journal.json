@@ -400,6 +400,13 @@
       "when": 1791583235485,
       "tag": "0056_stage2_labels",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1791584935914,
+      "tag": "0057_label_task_detail",
+      "breakpoints": true
     }
   ]
 }

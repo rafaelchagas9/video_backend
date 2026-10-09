@@ -1,0 +1,1 @@
+ALTER TABLE "recording_label_tasks" ADD COLUMN "detail" jsonb;
