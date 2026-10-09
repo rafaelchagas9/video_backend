@@ -32,6 +32,7 @@ export interface LabelTask {
   kind: LabelTaskKind;
   batch: string;
   stratum: string;
+  position: number;
   video_id: number;
   file_name: string;
   duration_seconds: number | null;
@@ -91,6 +92,7 @@ export async function listLabelTasks(): Promise<{ tasks: LabelTask[] }> {
       kind: row.kind as LabelTaskKind,
       batch: String(row.batch),
       stratum: String(row.stratum),
+      position: Number(row.position),
       video_id: Number(row.video_id),
       file_name: String(row.file_name),
       duration_seconds: row.duration_seconds === null ? null : Number(row.duration_seconds),
