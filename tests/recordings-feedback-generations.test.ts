@@ -54,6 +54,21 @@ describe("feedback rows", () => {
     expect(row!.rendered).toBe(true);
   });
 
+  it("logs each proposal's baseline rank, the review order and refinements of keeps only", () => {
+    const proposals = [{ ...proposal("c1", 0, 30), score: 0.5 }, { ...proposal("c2", 100, 1300), score: 0.9 }];
+    const context = { batch: "b1", queuePosition: null, queueSort: null, audit: false, reviewOrder: "best" };
+    const rows = feedbackRows(source(proposals), [
+      { ...clip("c1", 0, 30, false), refinement: "save" },
+      { ...clip("c2", 100, 1300, true), refinement: "watch" },
+      clip("added-1", 2000, 2100, true),
+    ], { context });
+    const by = (id: string) => rows.find((row) => row.clipId === id)!;
+    expect([by("c2").baselineRank, by("c1").baselineRank, by("added-1").baselineRank]).toEqual([1, 2, null]);
+    expect(by("c2").baselineScore).toBeGreaterThan(by("c1").baselineScore!);
+    expect([by("c1").refinement, by("c2").refinement, by("added-1").refinement]).toEqual([null, "watch", null]);
+    for (const row of rows) expect(row.reviewOrder).toBe("best");
+  });
+
   it("finds the clip a proposal went into by its peak, else by overlap", () => {
     expect(mergeTarget(proposal("c2", 60, 90), [clip("c1", 10, 100, true)])?.id).toBe("c1");
     expect(mergeTarget({ start_seconds: 60, end_seconds: 90, peak_seconds: 89 }, [clip("c1", 50, 70, true)])?.id).toBe("c1");

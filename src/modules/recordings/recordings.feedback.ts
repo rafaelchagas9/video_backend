@@ -2,6 +2,7 @@ import { and, eq, notInArray, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { recordingClipFeedbackTable, type RecordingClip, type RecordingProposal } from "@/database/schema";
+import { baselineOrder, baselineScore } from "./recordings.baseline";
 import { usernameFromFileName } from "./recordings.goondvr";
 
 /**
@@ -46,6 +47,8 @@ export interface SaveContext {
   queuePosition: number | null;
   queueSort: string | null;
   audit: boolean;
+  /** The order the reviewer stepped through highlights in: best (baseline) | timeline. */
+  reviewOrder?: string | null;
 }
 
 /**
@@ -56,7 +59,7 @@ export const confirmedDecisions = sql`(
   SELECT f.* FROM recording_clip_feedback f
   JOIN (SELECT video_id, max(analyzed_at) AS analyzed_at FROM recording_clip_feedback GROUP BY video_id) latest
     ON latest.video_id = f.video_id AND latest.analyzed_at = f.analyzed_at
-  WHERE f.merged_into IS NULL
+  WHERE f.merged_into IS NULL AND f.label_type = 'triage'
 )`;
 
 /* The demo database resets on every start, like its reviews. */
@@ -99,10 +102,25 @@ export function feedbackRows(
     recordingSeconds: source.durationSeconds,
     labelType: LABEL_TYPE,
     ...(options.context
-      ? { saveBatch: options.context.batch, queuePosition: options.context.queuePosition, queueSort: options.context.queueSort, audit: options.context.audit }
+      ? {
+          saveBatch: options.context.batch,
+          queuePosition: options.context.queuePosition,
+          queueSort: options.context.queueSort,
+          audit: options.context.audit,
+          reviewOrder: options.context.reviewOrder ?? null,
+        }
       : {}),
     ...(options.channel ? { channelKeptSeconds: options.channel.keptSeconds, channelRenderedSeconds: options.channel.renderedSeconds } : {}),
     updatedAt: new Date(),
+  };
+  // Ranked over what detection proposed: stored proposals, else the clips' detected edges.
+  const ranked = source.proposals
+    ? source.proposals
+    : clips.map((clip) => ({ ...clip, ...(clip.detected ?? {}) }));
+  const ranks = new Map(baselineOrder(ranked).map((id, index) => [id, index + 1]));
+  const baseline = (id: string) => {
+    const proposal = ranked.find((entry) => entry.id === id);
+    return proposal && ranks.has(id) ? { baselineRank: ranks.get(id)!, baselineScore: baselineScore(proposal) } : { baselineRank: null, baselineScore: null };
   };
   const rows: FeedbackRow[] = clips.map((clip) => {
     const proposal = proposals.get(clip.id);
@@ -123,6 +141,9 @@ export function feedbackRows(
       rendered: Boolean(options.rendered || clip.job_id || clip.output_video_id) && clip.keep,
       mergedInto: null,
       shownDefault: shown(clip.id),
+      refinement: clip.keep ? (clip.refinement ?? null) : null,
+      refinementAt: clip.keep && clip.refinement ? new Date() : null,
+      ...baseline(clip.id),
     };
   });
   const current = new Set(clips.map((clip) => clip.id));
@@ -146,6 +167,8 @@ export function feedbackRows(
       // A proposal can only leave the list by a merge; one with no overlap left is still accounted for.
       mergedInto: target?.id ?? "removed",
       shownDefault: shown(proposal.id),
+      refinement: null,
+      ...baseline(proposal.id),
     });
   }
   return rows;
@@ -173,6 +196,33 @@ async function channelFootage(channel: string | null, videoId: number): Promise<
   return { keptSeconds: Number(row?.kept ?? 0), renderedSeconds: Number(row?.rendered ?? 0) };
 }
 
+export interface ChannelKeeps {
+  /** Kept clips and their seconds in the channel's other recordings, and how many were refined. */
+  keptClips: number;
+  keptSeconds: number;
+  worthSaving: number;
+  niceToWatch: number;
+}
+
+/** What the channel's other recordings already hold, for refining a keep relative to it. */
+export async function channelKeeps(channel: string, videoId: number): Promise<ChannelKeeps> {
+  const rows: Pick<FeedbackRow, "startSeconds" | "endSeconds" | "refinement">[] = env.DEMO_MODE
+    ? confirmedDemoRows().filter(
+        (row) => row.videoId !== videoId && row.verdict === "keep" && row.channel && channelKey(row.channel) === channelKey(channel)
+      )
+    : (
+        await db.execute<{ start_seconds: number; end_seconds: number; refinement: string | null }>(sql`
+          SELECT f.start_seconds, f.end_seconds, f.refinement FROM ${confirmedDecisions} f
+          WHERE f.video_id <> ${videoId} AND f.verdict = 'keep' AND lower(regexp_replace(f.channel, '^@', '')) = ${channelKey(channel)}`)
+      ).map((row) => ({ startSeconds: Number(row.start_seconds), endSeconds: Number(row.end_seconds), refinement: row.refinement }));
+  return {
+    keptClips: rows.length,
+    keptSeconds: Math.round(rows.reduce((sum, row) => sum + row.endSeconds - row.startSeconds, 0)),
+    worthSaving: rows.filter((row) => row.refinement === "save").length,
+    niceToWatch: rows.filter((row) => row.refinement === "watch").length,
+  };
+}
+
 /**
  * Records the review's current decisions. Highlights added by hand and removed since lose
  * their rows; proposals merged away keep theirs, pointing at what they joined.
@@ -191,7 +241,14 @@ export async function recordFeedback(
       if (row.videoId === source.videoId && row.analyzedAt.getTime() === source.analyzedAt.getTime() && !ids.includes(row.clipId)) demoFeedback.delete(key);
     for (const row of rows) {
       const earlier = demoFeedback.get(demoKey(row));
-      demoFeedback.set(demoKey(row), { ...earlier, ...row, rendered: Boolean(earlier?.rendered || row.rendered) });
+      const refinement = row.verdict === "keep" ? (row.refinement ?? earlier?.refinement ?? null) : null;
+      demoFeedback.set(demoKey(row), {
+        ...earlier,
+        ...row,
+        rendered: Boolean(earlier?.rendered || row.rendered),
+        refinement,
+        refinementAt: refinement && refinement === earlier?.refinement ? (earlier.refinementAt ?? null) : refinement ? new Date() : null,
+      });
     }
     return;
   }
@@ -208,7 +265,17 @@ export async function recordFeedback(
         .onConflictDoUpdate({
           target: [recordingClipFeedbackTable.videoId, recordingClipFeedbackTable.analyzedAt, recordingClipFeedbackTable.clipId],
           // Once rendered, a decision stays rendered. Context a call does not carry is left as saved.
-          set: { ...update, rendered: sql`${recordingClipFeedbackTable.rendered} OR ${update.rendered ?? false}` },
+          // A refinement given elsewhere (a refine task) survives a Save that does not carry one;
+          // a skip clears it.
+          set: {
+            ...update,
+            rendered: sql`${recordingClipFeedbackTable.rendered} OR ${update.rendered ?? false}`,
+            refinement: sql`CASE WHEN excluded.verdict = 'skip' THEN NULL ELSE coalesce(excluded.refinement, ${recordingClipFeedbackTable.refinement}) END`,
+            refinementAt: sql`CASE
+              WHEN excluded.verdict = 'skip' THEN NULL
+              WHEN excluded.refinement IS NOT NULL AND excluded.refinement IS DISTINCT FROM ${recordingClipFeedbackTable.refinement} THEN now()
+              ELSE ${recordingClipFeedbackTable.refinementAt} END`,
+          },
         });
     }
   });

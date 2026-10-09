@@ -9,6 +9,8 @@ import { AUTOPILOT_MODES } from "./recordings.autopilot.policy";
 import { goondvr } from "./recordings.goondvr";
 import { RECORDER_SITES, demoChannelPicture, recorderService } from "./recordings.live";
 import { PROBE_STATES } from "./recordings.probe";
+import { RECORDING_REFINEMENTS } from "@/database/schema";
+import { answerLabelTask, listLabelTasks } from "./recordings.label-tasks";
 import { recordingsService } from "./recordings.service";
 
 const videoParams = z.object({ videoId: z.coerce.number().int().positive() });
@@ -24,6 +26,7 @@ const clipSchema = z.object({
   output_video_id: z.number().int().nullable().optional(),
   reasons: z.array(z.string().trim().min(1).max(60)).max(16).optional(),
   detected: z.object({ start_seconds: z.number().min(0), end_seconds: z.number().min(0) }).optional(),
+  refinement: z.enum(RECORDING_REFINEMENTS).nullable().optional(),
 });
 const anyData = z.object({ success: z.literal(true), data: z.any() });
 const channelParams = z.object({ channelId: z.string().min(1).max(200) });
@@ -375,6 +378,37 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
   );
 
   app.get(
+    "/label-tasks",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Labelling tasks outside the review queue",
+        description: "Recall-audit windows (was anything here worth keeping?) and refinements of past keeps (worth saving or nice to watch?), answered or not.",
+        response: { 200: anyData },
+      },
+    },
+    async () => ({ success: true as const, data: await listLabelTasks() })
+  );
+
+  app.put(
+    "/label-tasks/:taskId",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Answer a labelling task",
+        description: "keep or skip for a recall audit, save or watch for a refine; null reopens it.",
+        params: z.object({ taskId: z.coerce.number().int().positive() }),
+        body: z.object({ answer: z.string().max(16).nullable(), reasons: z.array(z.string().trim().min(1).max(60)).max(16).optional() }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => ({
+      success: true as const,
+      data: await answerLabelTask(request.params.taskId, request.body.answer, request.body.reasons ?? []),
+    })
+  );
+
+  app.get(
     "/:videoId",
     {
       schema: { tags: ["recordings"], summary: "Highlight review of a recording", params: videoParams, response: { 200: anyData } },
@@ -418,12 +452,13 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         summary: "Save clip decisions",
         params: videoParams,
         description:
-          "Confirms every current choice. analyzed_at names the analysis being answered (a newer one is a conflict); queue_position and queue_sort say where the recording sat in the review queue.",
+          "Confirms every current choice. analyzed_at names the analysis being answered (a newer one is a conflict); queue_position and queue_sort say where the recording sat in the review queue; review_order which order its highlights were stepped through in.",
         body: z.object({
           clips: z.array(clipSchema).max(60),
           analyzed_at: z.string().datetime().optional(),
           queue_position: z.number().int().min(0).max(10_000).optional(),
           queue_sort: z.string().trim().min(1).max(32).optional(),
+          review_order: z.enum(["best", "timeline"]).optional(),
         }),
         response: { 200: anyData },
       },
@@ -434,6 +469,7 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         analyzedAt: request.body.analyzed_at,
         queuePosition: request.body.queue_position,
         queueSort: request.body.queue_sort,
+        reviewOrder: request.body.review_order,
       }),
     })
   );

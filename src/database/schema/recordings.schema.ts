@@ -18,7 +18,13 @@ export interface RecordingClip {
   reasons?: string[];
   /** The edges detection proposed, before trimming; absent on clips added by hand. */
   detected?: { start_seconds: number; end_seconds: number };
+  /** On a kept clip, the refinement call: worth saving, or only nice to watch, for its channel. */
+  refinement?: RecordingRefinement | null;
 }
+
+/** Refinement of a kept clip, relative to what its channel already has. */
+export const RECORDING_REFINEMENTS = ["save", "watch"] as const;
+export type RecordingRefinement = (typeof RECORDING_REFINEMENTS)[number];
 
 /** A highlight as detection proposed it, before any review: never rewritten by trims or merges. */
 export interface RecordingProposal {
@@ -112,6 +118,17 @@ export const recordingClipFeedbackTable = pgTable(
     /** Kept and rendered footage the channel already had from its other recordings, when this was saved. */
     channelKeptSeconds: doublePrecision("channel_kept_seconds"),
     channelRenderedSeconds: doublePrecision("channel_rendered_seconds"),
+    /**
+     * The refinement label on a kept clip (save | watch), from the review or a refine task; null
+     * until given. A label of its own, separate from the triage verdict.
+     */
+    refinement: text("refinement"),
+    refinementAt: timestamp("refinement_at"),
+    /** The proposal's place (1 = first) in the length+score baseline order, and its baseline logit. */
+    baselineRank: integer("baseline_rank"),
+    baselineScore: doublePrecision("baseline_score"),
+    /** The order the reviewer stepped through highlights in: best (baseline) | timeline; null when not said. */
+    reviewOrder: text("review_order"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -170,3 +187,34 @@ export const recorderAutopilotOutcomesTable = pgTable("recorder_autopilot_outcom
   recordedAt: timestamp("recorded_at"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/**
+ * Labelling tasks outside the review queue: recall-audit windows (is anything here worth keeping?)
+ * and refinement of past keeps (worth saving or nice to watch?). Each row is its own label and
+ * outlives the recording (no foreign key).
+ */
+export const recordingLabelTasksTable = pgTable("recording_label_tasks", {
+  id: serial("id").primaryKey(),
+  /** recall-audit | refine */
+  kind: text("kind").notNull(),
+  /** The round the task was drawn in, e.g. recall-audit-1. */
+  batch: text("batch").notNull(),
+  /** What to play: a recording (or a rendered clip) and the stretch of it. */
+  videoId: integer("video_id").notNull(),
+  startSeconds: doublePrecision("start_seconds").notNull(),
+  endSeconds: doublePrecision("end_seconds").notNull(),
+  /** Why the task was drawn: outside | no-keep | near-miss | new-time for audits, keep for refines. */
+  stratum: text("stratum").notNull(),
+  /** Seconds of the stratum one audit window stands for, to scale its answers back up; null on refines. */
+  weight: doublePrecision("weight"),
+  /** Order within the batch, shuffled across strata so they are answered at the same pace. */
+  position: integer("position").notNull().default(0),
+  channel: text("channel"),
+  /** Stratum details (detector score, the decision a refine labels) for analysis. */
+  context: jsonb("context").$type<Record<string, unknown>>().notNull().default({}),
+  /** keep | skip on audits, save | watch on refines; null while open. */
+  answer: text("answer"),
+  reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+  answeredAt: timestamp("answered_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [uniqueIndex("recording_label_tasks_item").on(table.kind, table.batch, table.videoId, table.startSeconds)]);

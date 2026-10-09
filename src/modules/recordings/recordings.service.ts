@@ -21,7 +21,8 @@ import { detectHighlights, detectWithProbe, isLikelySkip, joinStretches } from "
 import { loadHighlightProbe, PROBE_STATES, probeThreshold, type HighlightProbe, type ProbeState } from "./recordings.probe";
 import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
 import { DEMO_RECORDING_MIN_SECONDS, recordingScope } from "./recordings.scope";
-import { confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type SaveContext } from "./recordings.feedback";
+import { BASELINE, baselineOrder } from "./recordings.baseline";
+import { channelKeeps, confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type SaveContext } from "./recordings.feedback";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { isAuditRecording, trainingValues } from "./recordings.training-value";
 import { preserveRecordingTrainingSnapshot } from "./recordings.snapshots.store";
@@ -72,6 +73,8 @@ export interface ReviewOrigin {
   analyzedAt?: string | undefined;
   queuePosition?: number | undefined;
   queueSort?: string | undefined;
+  /** The order the reviewer stepped through highlights in: best | timeline. */
+  reviewOrder?: string | undefined;
 }
 
 /* Demo reviews live in memory: the demo database resets on every start anyway. */
@@ -421,7 +424,10 @@ export class RecordingsService {
     let row = await this.row(videoId);
     if (row?.status === "rendering") row = (await this.finalize(videoId)) ?? row;
     const video = await videosService.findById(videoId, userId, ["creators"]).catch(() => null);
-    if (!row) return { video, status: "pending", clips: [], curve: [], delete_original: false, error: null, analyzed_at: null, detector: null };
+    if (!row)
+      return { video, status: "pending", clips: [], curve: [], delete_original: false, error: null, analyzed_at: null, detector: null, order: null, channel: null };
+    const ranked = row.proposals ?? row.clips.map((clip) => ({ ...clip, ...(clip.detected ?? {}) }));
+    const channel = video ? usernameFromFileName(video.file_name) : null;
     return {
       video,
       detector: detectorOf(row.promptsRevision),
@@ -431,6 +437,21 @@ export class RecordingsService {
       delete_original: row.deleteOriginal,
       error: row.error,
       analyzed_at: row.analyzedAt.toISOString(),
+      // Best first by the length+score baseline: the default order to step through highlights.
+      order: { version: BASELINE.version, ids: baselineOrder(ranked) },
+      // What the channel already holds, so a keep can be refined relative to it.
+      channel: channel ? await this.channelContext(channel, videoId) : null,
+    };
+  }
+
+  private async channelContext(name: string, videoId: number) {
+    const keeps = await channelKeeps(name, videoId);
+    return {
+      name,
+      kept_clips: keeps.keptClips,
+      kept_seconds: keeps.keptSeconds,
+      worth_saving: keeps.worthSaving,
+      nice_to_watch: keeps.niceToWatch,
     };
   }
 
@@ -447,9 +468,12 @@ export class RecordingsService {
       if (!(clip.end_seconds > clip.start_seconds) || clip.start_seconds < 0 || clip.end_seconds > duration + 1)
         throw new BadRequestError("Every clip must end after it starts, inside the recording");
     // Clips added by hand were never detected; a merge sends back the pair's combined proposal.
+    // A skipped clip carries no refinement.
     const next = clips.map((clip) => {
-      if (!clip.id.startsWith("added-")) return clip;
-      const { detected: _detected, ...rest } = clip;
+      const { refinement, ...base } = clip;
+      const refined = clip.keep && refinement ? { ...base, refinement } : base;
+      if (!clip.id.startsWith("added-")) return refined;
+      const { detected: _detected, ...rest } = refined;
       return rest;
     });
     const reviewed: ReviewRow = { ...row, clips: next, status: next.some((clip) => clip.keep) ? "proposed" : "dismissed", savedAt: row.savedAt ?? new Date() };
@@ -458,6 +482,7 @@ export class RecordingsService {
       queuePosition: origin.queuePosition ?? null,
       queueSort: origin.queueSort ?? null,
       audit: isAuditRecording(videoId),
+      reviewOrder: origin.reviewOrder ?? null,
     };
     // Archive every current choice before acknowledging the Save.
     await preserveRecordingTrainingSnapshot(reviewed, video, "save", context);
