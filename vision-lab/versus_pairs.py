@@ -7,9 +7,12 @@ does not, and it is the comparison Stage 2 learns from. To keep a round to minut
 * pairs come from one channel, preferably two recordings, and only where the baseline
   (recordings.baseline.ts, length + score) can hardly tell them apart, since an obvious pair
   teaches little; no clip appears twice in a round, and no channel more than three times;
-* each clip is offered pre-cut to its best part: the stretch around its strongest frame where the
-  shipped probe stays near its peak, padded, at most 4 minutes. The reviewer accepts it or moves
-  the edges, so every answer also labels "which part is worth storing".
+* each clip is offered pre-cut to its best part: the stretch around its strongest second, by
+  picture (the shipped probe) and sound (audio_features.py: loudness and change, against the
+  recording's own baseline) together, where that stays near its peak, padded, at most 4 minutes.
+  The reviewer accepts it or moves the edges, so every answer also labels "which part to store";
+* each side also names a 15-second snippet, the liveliest sound inside its best part, which the
+  versus screen plays with audio: sound is most of what separates an okay keep from a nice one.
 
 Pairs already asked are never drawn again. Inserted as recording_label_tasks (kind versus).
 
@@ -31,7 +34,7 @@ import numpy as np
 
 import deployed_clipper as dc
 import deployed_data as dd
-from label_server import PG
+from label_server import DATA, PG
 
 ROUND = 20
 PER_CHANNEL = 3
@@ -49,29 +52,78 @@ def baseline(clip: dd.Clip) -> float:
     return INTERCEPT + PER_LOG_SECOND * math.log(max(1.0, b - a)) + PER_SCORE * clip.score
 
 
-def best_part(t: np.ndarray, scores: np.ndarray, start: float, end: float) -> tuple[float, float]:
-    """The stretch around the strongest frame where the score stays near its peak, padded and capped."""
+SNIPPET = 15.0
+AUDIO = DATA / "audio"
+
+
+def robust_z(x: np.ndarray) -> np.ndarray:
+    median = np.median(x)
+    spread = 1.4826 * np.median(np.abs(x - median)) or 1.0
+    return (x - median) / spread
+
+
+def smooth(x: np.ndarray, seconds: int) -> np.ndarray:
+    kernel = np.ones(seconds) / seconds
+    return np.convolve(x, kernel, "same")
+
+
+def per_second(video_id: int, t: np.ndarray, probe_scores: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+    """(picture, sound) per second of the recording, each 0–1; sound is None without features."""
+    length = int(t[-1] + dd.INTERVAL) + 1
+    picture = np.interp(np.arange(length), t, probe_scores)
+    path = AUDIO / f"{video_id}.npz"
+    if not path.exists():
+        return picture, None
+    z = np.load(path)
+    if "db" not in z.files:
+        return picture, None
+    # Loud and changing, against this recording's own baseline: talk, reactions, moans.
+    activity = smooth(robust_z(z["db"]) + robust_z(z["flux"]), 5)
+    ranks = np.argsort(np.argsort(activity)) / max(1, len(activity) - 1)
+    sound = np.zeros(length)
+    n = min(length, len(ranks))
+    sound[:n] = ranks[:n]
+    return picture, sound
+
+
+def best_part(picture: np.ndarray, sound: np.ndarray | None, start: float, end: float) -> tuple[float, float]:
+    """The stretch around the strongest second, by picture and sound, where that stays near its peak."""
     if end - start <= BEST_MIN * 2:
-        return start, end
-    inside = np.flatnonzero((t >= start) & (t < end))
-    if not len(inside):
-        return start, min(end, start + BEST_MAX)
-    peak = inside[int(np.argmax(scores[inside]))]
-    bar = NEAR_PEAK * scores[peak]
+        return round(start), round(end)
+    a0, b0 = int(start), min(int(end), len(picture))
+    if b0 - a0 < 2:
+        return round(start), round(min(end, start + BEST_MAX))
+    combined = smooth(picture[a0:b0] if sound is None else 0.5 * picture[a0:b0] + 0.5 * sound[a0:b0], 15)
+    peak = int(np.argmax(combined))
+    bar = NEAR_PEAK * combined[peak]
     lo = hi = peak
-    while lo - 1 in inside and scores[lo - 1] >= bar:
+    while lo > 0 and combined[lo - 1] >= bar:
         lo -= 1
-    while hi + 1 in inside and scores[hi + 1] >= bar:
+    while hi < len(combined) - 1 and combined[hi + 1] >= bar:
         hi += 1
-    a, b = max(start, t[lo] - PAD), min(end, t[hi] + dd.INTERVAL + PAD)
+    a, b = max(start, a0 + lo - PAD), min(end, a0 + hi + 1 + PAD)
     if b - a > BEST_MAX:
-        mid = float(t[peak])
+        mid = a0 + peak
         a = max(start, min(mid - BEST_MAX / 2, end - BEST_MAX))
         b = a + BEST_MAX
     if b - a < BEST_MIN:
         mid = (a + b) / 2
         a, b = max(start, mid - BEST_MIN / 2), min(end, mid + BEST_MIN / 2)
     return round(float(a)), round(float(b))
+
+
+def snippet(sound: np.ndarray | None, best: tuple[float, float]) -> tuple[float, float]:
+    """The liveliest 15 seconds of sound inside the best part; its middle without sound features."""
+    a, b = best
+    if b - a <= SNIPPET:
+        return a, b
+    if sound is None or int(b) > len(sound):
+        mid = (a + b) / 2
+        return round(mid - SNIPPET / 2), round(mid + SNIPPET / 2)
+    window = smooth(sound[int(a):int(b)], int(SNIPPET))
+    centre = int(a) + int(np.argmax(window))
+    start = min(max(a, centre - SNIPPET / 2), b - SNIPPET)
+    return round(start), round(start + SNIPPET)
 
 
 def playable() -> dict[int, str]:
@@ -111,7 +163,7 @@ def draw() -> tuple[list[dict], int]:
     done, last_round = asked()
     probe = dc.load_probe()
     keeps: dict[str, list[dict]] = defaultdict(list)
-    scored: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    scored: dict[int, tuple[np.ndarray, np.ndarray | None]] = {}
     for clip in dd.latest_clips():
         if not clip.keep or clip.video_id not in files or (clip.video_id, clip.clip_id) not in ids:
             continue
@@ -120,11 +172,13 @@ def draw() -> tuple[list[dict], int]:
             if found is None or len(found[0]) < 4:
                 continue
             t, v, _ = found
-            scored[clip.video_id] = (t, dc.highlight_scores(dc.classify(probe["W"], probe["b"], dc.context(v, probe["radius"]))))
-        t, scores = scored[clip.video_id]
+            probe_scores = dc.highlight_scores(dc.classify(probe["W"], probe["b"], dc.context(v, probe["radius"])))
+            scored[clip.video_id] = per_second(clip.video_id, t, probe_scores)
+        picture, sound = scored[clip.video_id]
+        best = best_part(picture, sound, clip.start, clip.end)
         keeps[clip.channel].append({
             "feedback_id": ids[(clip.video_id, clip.clip_id)], "video_id": clip.video_id, "file_name": files[clip.video_id],
-            "clip": [clip.start, clip.end], "best": list(best_part(t, scores, clip.start, clip.end)),
+            "clip": [clip.start, clip.end], "best": list(best), "snippet": list(snippet(sound, best)), "sound": sound is not None,
             "score": clip.score, "baseline": round(baseline(clip), 3),
         })
     candidates = []
