@@ -46,11 +46,19 @@ export interface LabelTask {
   answered_at: string | null;
 }
 
+/** A versus pair's sides carry their recording's length, for playing and trimming them. */
+function withDurations(context: Record<string, unknown>, a: unknown, b: unknown): Record<string, unknown> {
+  const side = (value: unknown, duration: unknown) =>
+    value && typeof value === "object" ? { ...value, duration_seconds: duration === null || duration === undefined ? null : Number(duration) } : value;
+  return "a" in context && "b" in context ? { ...context, a: side(context.a, a), b: side(context.b, b) } : context;
+}
+
 export async function listLabelTasks(): Promise<{ tasks: LabelTask[] }> {
   if (env.DEMO_MODE) return { tasks: [] };
   // Tasks whose recording is gone can no longer be played; refine tasks are no longer asked.
   const rows = await db.execute<Record<string, unknown>>(sql`
-    SELECT t.*, coalesce(v.file_name, '') AS file_name, v.duration_seconds
+    SELECT t.*, coalesce(v.file_name, '') AS file_name, v.duration_seconds,
+      (SELECT b.duration_seconds FROM videos b WHERE b.id = (t.context->'b'->>'video_id')::int) AS b_duration_seconds
     FROM recording_label_tasks t
     JOIN videos v ON v.id = t.video_id
     WHERE t.kind <> 'refine'
@@ -69,7 +77,7 @@ export async function listLabelTasks(): Promise<{ tasks: LabelTask[] }> {
       start_seconds: Number(row.start_seconds),
       end_seconds: Number(row.end_seconds),
       channel: (row.channel as string | null) ?? null,
-      context: (row.context as Record<string, unknown>) ?? {},
+      context: withDurations((row.context as Record<string, unknown>) ?? {}, row.duration_seconds, row.b_duration_seconds),
       answer: (row.answer as string | null) ?? null,
       reasons: (row.reasons as string[]) ?? [],
       detail: (row.detail as Record<string, unknown> | null) ?? null,
