@@ -17,11 +17,16 @@ import { BadRequestError, ConflictError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { goondvr, usernameFromFileName } from "./recordings.goondvr";
 import { recorderService } from "./recordings.live";
+import { demoHighlightAnalysis } from "./recordings.demo-fixtures";
 import { detectHighlights, detectWithProbe, isLikelySkip, joinStretches } from "./recordings.highlights";
 import { loadHighlightProbe, PROBE_STATES, probeThreshold, type HighlightProbe, type ProbeState } from "./recordings.probe";
 import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
 import { DEMO_RECORDING_MIN_SECONDS, recordingScope } from "./recordings.scope";
-import { BASELINE, baselineOrder } from "./recordings.baseline";
+import { recordingModelReview, loadRecordingModel } from "./recordings.model";
+import { readRecordingTemporalVersions } from "./recordings.temporal-cache";
+import { recordingTemporalReview, recordingTemporalOriginalProposals, type RecordingTemporalMetadata } from "./recordings.temporal-runtime";
+import { eventsService } from "@/modules/events/events.service";
+import { enqueueRecordingAudio, RECORDING_AUDIO_PIN } from "./recordings.audio-cache";
 import { channelKeeps, confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type SaveContext } from "./recordings.feedback";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { isAuditRecording, trainingValues } from "./recordings.training-value";
@@ -337,6 +342,18 @@ export class RecordingsService {
     if (automatic && before) return before;
     const video = await videosService.findById(videoId, userId);
     await this.assertFinished(video);
+    if (env.DEMO_MODE) {
+      const duration = video.duration_seconds ?? 0;
+      if (!Number.isFinite(duration) || duration <= 0) throw new BadRequestError("This demo video has no duration");
+      const { clips, curve } = demoHighlightAnalysis(duration);
+      const row: ReviewRow = {
+        videoId, status: clips.length ? "proposed" : "dismissed", clips, curve,
+        promptsRevision: "demo:prompts", proposals: clips, savedAt: null, deleteOriginal: false,
+        error: null, analyzedAt: new Date(Math.max(Date.now(), (before?.analyzedAt.getTime() ?? 0) + 1)),
+      };
+      if (!(await this.saveIfCurrent(row, before?.analyzedAt ?? null))) throw new ConflictError("The review changed while it was being analysed; reload it before analysing again");
+      return row;
+    }
     const settings = await this.settings();
     const store = visualSearchStore();
     let indexed = (await store.indexed([videoId])).get(videoId);
@@ -408,6 +425,11 @@ export class RecordingsService {
       if (automatic) return this.row(videoId);
       throw new ConflictError("The review changed while it was being analysed; reload it before analysing again");
     }
+    if (!env.DEMO_MODE && indexed && row.proposals) {
+      // A separate bounded worker owns decoding; this only writes a private generation job.
+      void loadRecordingModel().then((model) => model?.artifact.heads.audio_acceptance?.gate_passed && model.artifact.model_revision === indexed!.modelRevision ? enqueueRecordingAudio({ identity: { video_id: videoId, analyzed_at: row.analyzedAt.toISOString(), index_model_revision: indexed!.modelRevision, storyboard_generated_at: indexed!.storyboardGeneratedAt.toISOString(), frame_count: indexed!.frameCount, audio_model_revision: RECORDING_AUDIO_PIN }, proposals: row.proposals!, source: { path: video.file_path, sizeBytes: video.file_size_bytes } }) : false).catch(() => logger.warn({ videoId }, "Could not queue recording audio features"));
+    }
+    if (!env.DEMO_MODE) void this.prepareTemporalReview(userId, videoId).catch(() => undefined);
     await this.linkChannelCreator(video);
     return row;
   }
@@ -425,9 +447,22 @@ export class RecordingsService {
     if (row?.status === "rendering") row = (await this.finalize(videoId)) ?? row;
     const video = await videosService.findById(videoId, userId, ["creators"]).catch(() => null);
     if (!row)
-      return { video, status: "pending", clips: [], curve: [], delete_original: false, error: null, analyzed_at: null, detector: null, order: null, channel: null };
+      return { video, status: "pending", clips: [], curve: [], delete_original: false, error: null, analyzed_at: null, detector: null, order: null, channel: null, model: null };
+    if (env.DEMO_MODE) {
+      return {
+        video, detector: "prompts" as const, status: row.status, clips: row.clips, curve: row.curve,
+        delete_original: row.deleteOriginal, error: row.error, analyzed_at: row.analyzedAt.toISOString(),
+        order: null, model: null, temporal_versions: null, channel: null,
+      };
+    }
     const ranked = row.proposals ?? row.clips.map((clip) => ({ ...clip, ...(clip.detected ?? {}) }));
     const channel = video ? usernameFromFileName(video.file_name) : null;
+    const model = await recordingModelReview({ videoId, analyzedAt: row.analyzedAt.toISOString(), duration: video?.duration_seconds ?? 0, proposals: ranked, source: video ? { path: video.file_path, sizeBytes: video.file_size_bytes } : undefined, store: visualSearchStore() });
+    const currentPrepared = await this.prepareTemporalReview(userId, videoId);
+    const prepared = currentPrepared?.versions.analyzed_at === row.analyzedAt.toISOString() ? currentPrepared : null;
+    const temporal = prepared?.versions ?? await readRecordingTemporalVersions({ videoId, analyzedAt: row.analyzedAt.toISOString(), duration: video?.duration_seconds ?? 0, proposals: ranked, source: video ? { path: video.file_path, sizeBytes: video.file_size_bytes } : undefined, index: async () => (await visualSearchStore().indexed([videoId])).get(videoId) });
+    if (prepared && model.assessment) model.assessment = { ...model.assessment, cuts: prepared.cuts };
+
     return {
       video,
       detector: detectorOf(row.promptsRevision),
@@ -437,11 +472,27 @@ export class RecordingsService {
       delete_original: row.deleteOriginal,
       error: row.error,
       analyzed_at: row.analyzedAt.toISOString(),
-      // Best first by the length+score baseline: the default order to step through highlights.
-      order: { version: BASELINE.version, ids: baselineOrder(ranked) },
+      // A validated ranking head may reorder the original proposals; decisions and edges stay as saved.
+      order: model.order,
+      model: model.assessment,
+      temporal_versions: temporal,
       // What the channel already holds, so a keep can be refined relative to it.
       channel: channel ? await this.channelContext(channel, videoId) : null,
     };
+  }
+
+  private async prepareTemporalReview(userId: number, videoId: number) {
+    return recordingTemporalReview({
+      metadata: async (): Promise<RecordingTemporalMetadata | null> => {
+        const [row, video, indexed, storyboard] = await Promise.all([this.row(videoId), videosService.findById(videoId, userId).catch(() => null), visualSearchStore().indexed([videoId]), storyboardsService.findByVideoId(videoId)]);
+        const index = indexed.get(videoId) as (RecordingTemporalMetadata["index"] | undefined);
+        const proposals = row ? recordingTemporalOriginalProposals(row.proposals,row.clips) : null;
+        if (!row || !proposals?.length || !video?.duration_seconds || !index?.indexedAt || !storyboard) return null;
+        return { videoId, analyzedAt: row.analyzedAt.toISOString(), duration: video.duration_seconds, proposals, source: {path:video.file_path,sizeBytes:video.file_size_bytes}, index, storyboard };
+      },
+      frames: () => visualSearchStore().videoFrames(videoId),
+      onReady: id => eventsService.broadcastToAuthenticated({type:"recordings:model-ready",message:{video_ids:[id]}}),
+    });
   }
 
   private async channelContext(name: string, videoId: number) {

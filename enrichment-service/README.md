@@ -22,7 +22,7 @@ cp .env.example .env
 ./run.sh
 ```
 
-Alternatively run `uv run python -m enrichment_service.main`. The default port
+Alternatively run `uv run --frozen python -m enrichment_service.main`. The default port
 is 8200. `GET /health` reports service status; FastAPI's `/docs` exposes the
 request and response models for `POST /enrich`.
 
@@ -49,7 +49,7 @@ query results and credentials out of commits. Automated source tests use mocked
 responses:
 
 ```bash
-uv run python -m unittest discover -s . -p 'test_*.py' -v
+.venv/bin/python scripts/run-offline-tests.py
 ```
 
 Image search and social/platform scraping remain possible future sources; they
@@ -99,3 +99,35 @@ import your media library into that application.
 The Bun backend's `DEMO_MODE=true` intercepts all of these routes: provider settings
 are ephemeral, scrapers and drafts are synthetic, and enrichment operates on the
 local demo proposals. No Python service, real provider or library media is accessed.
+
+## HTTP lifecycle and diagnostics
+
+The app owns reusable HTTPX connection pools for normal lookups and long Stash
+operations. Pools close at shutdown and are kept separate between event loops.
+Provider credentials remain per request; no automatic retries are introduced for
+Stash operations that write. `REQUEST_TIMEOUT_SECONDS` controls read/write
+inactivity, while `CONNECT_TIMEOUT_SECONDS` and `POOL_TIMEOUT_SECONDS` default to
+five seconds. Batch/Stash reads retain their existing minimum of 120 seconds.
+These are phase timeouts, not an overall operation deadline. Startup uses the
+checked-in lockfile (`uv run --frozen`) instead of re-resolving dependencies.
+
+Successful source lookups emit only provider/count details at DEBUG. Personal
+lookup names are omitted from application logs; routine HTTP request URLs are
+suppressed unless `LOG_LEVEL=DEBUG` is explicitly selected.
+Warnings and errors remain visible. Set `ACCESS_LOG=true` to opt into Uvicorn
+access logs during diagnosis. There is no PostHog exporter in this service.
+
+The checked-in offline runner requires Linux `unshare` and the already
+provisioned `.venv`; it installs nothing and fails closed if isolation is
+unavailable. Run from this service directory:
+
+```bash
+.venv/bin/python scripts/run-offline-tests.py
+```
+
+The runner clears inherited configuration, disables `.env` loading, refuses
+deployment/provider files, limits writes to disposable fixtures, blocks Python
+network connections, and executes inside a separate network namespace. Tests
+use HTTPX/ASGI mocks, never a real Stash/provider or media library. The script
+resolves its paths from its own location, so an absolute invocation works from
+other directories too.

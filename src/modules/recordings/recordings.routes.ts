@@ -12,6 +12,7 @@ import { PROBE_STATES } from "./recordings.probe";
 import { RECORDING_REFINEMENTS } from "@/database/schema";
 import { answerLabelTask, listLabelTasks } from "./recordings.label-tasks";
 import { recordingsService } from "./recordings.service";
+import { recordingsProcessing } from "./recordings.processing";
 
 const videoParams = z.object({ videoId: z.coerce.number().int().positive() });
 const clipSchema = z.object({
@@ -264,6 +265,37 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
   );
 
   app.get(
+    "/processing",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Recording processing queue status",
+        description: "Whether analysis of new recordings is running or paused, what is being processed and how many are waiting.",
+        response: { 200: anyData },
+      },
+    },
+    async () => ({ success: true as const, data: await recordingsProcessing.status() })
+  );
+
+  app.post(
+    "/processing",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Pause, resume or start the recording processing queue",
+        description: "resume and start are the same: both lift a pause and retry recordings that failed earlier.",
+        body: z.object({ action: z.enum(["pause", "resume", "start"]) }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => {
+      const { action } = request.body;
+      const data = action === "pause" ? await recordingsProcessing.pause() : await recordingsProcessing.resume();
+      return { success: true as const, data };
+    }
+  );
+
+  app.get(
     "/autopilot",
     {
       schema: {
@@ -383,7 +415,7 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       schema: {
         tags: ["recordings"],
         summary: "Labelling tasks outside the review queue",
-        description: "Recall-audit windows (was anything here worth keeping?) and versus pairs of one channel's keeps (which is worth its storage, and which part?), answered or not.",
+        description: "Recall-audit windows and versus pairs within or across creators. A/B records a strict preference between two acceptable candidates; selected cuts are confirmed separately.",
         response: { 200: anyData },
       },
     },
@@ -399,13 +431,19 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         description: "keep or skip for a recall audit; a, b, both or neither for a versus pair, with each winner's best part; null reopens it.",
         params: z.object({ taskId: z.coerce.number().int().positive() }),
         body: z.object({
-          answer: z.string().max(16).nullable(),
+          answer: z.string().max(32).nullable(),
           reasons: z.array(z.string().trim().min(1).max(60)).max(16).optional(),
           detail: z
             .object({
               best: z
-                .record(z.enum(["a", "b"]), z.object({ start_seconds: z.number().min(0), end_seconds: z.number().positive(), accepted: z.boolean() }))
+                .partialRecord(z.enum(["a", "b"]), z.object({ start_seconds: z.number().min(0), end_seconds: z.number().positive(), accepted: z.boolean() }))
                 .optional(),
+              viewing: z.partialRecord(z.enum(["a", "b"]), z.object({
+                preview_started: z.array(z.number().int().min(0).max(2)).max(3),
+                preview_completed: z.array(z.number().int().min(0).max(2)).max(3),
+                full_opened: z.boolean(),
+                full_completed: z.boolean(),
+              })).optional(),
             })
             .optional(),
         }),

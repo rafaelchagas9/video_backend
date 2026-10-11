@@ -500,7 +500,8 @@ export class StoryboardsService {
   async assembleFromFrames(
     videoId: number,
     frames: ExtractedFrame[],
-    videoDuration: number
+    videoDuration: number,
+    options: { visualIndex?: boolean } = {}
   ): Promise<Storyboard> {
     // Delete existing storyboard if present
     const existing = await db
@@ -578,9 +579,10 @@ export class StoryboardsService {
       })
       .returning();
 
-    void import("@/modules/visual-search/visual-search.jobs")
-      .then(({ queueVisualIndex }) => queueVisualIndex(videoId))
-      .catch(() => {});
+    if (options.visualIndex !== false)
+      void import("@/modules/visual-search/visual-search.jobs")
+        .then(({ queueVisualIndex }) => queueVisualIndex(videoId))
+        .catch(() => {});
 
     return this.mapToApiFormat(result[0]);
   }

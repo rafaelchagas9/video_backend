@@ -297,7 +297,21 @@ describe("demo mode runtime route coverage", () => {
     });
   });
 
-  it("requires an explicit manifest record for all 384 primary operations", () => {
+  it("blocks production recording processing status and controls in demo mode", async () => {
+    for (const method of ["GET", "POST"] as const) {
+      const response = await app.inject({
+        method, url: "/api/recordings/processing",
+        ...(method === "POST" ? { payload: { action: "resume" } } : {}),
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json().error.code).toBe("DEMO_MODE_ROUTE_BLOCKED");
+    }
+    const head = await app.inject({ method: "HEAD", url: "/api/recordings/processing" });
+    expect(head.statusCode).toBe(403);
+    expect(head.body).toBe("");
+  });
+
+  it("requires an explicit manifest record for all 388 primary operations", () => {
     const manifestKeys = DEMO_ROUTE_SCENARIOS.map(
       (scenario) => scenario.operationKey
     );
@@ -308,8 +322,8 @@ describe("demo mode runtime route coverage", () => {
     const reviewedKeys = new Set(manifestKeys);
 
     expect(duplicateManifestKeys).toEqual([]);
-    expect(runtimeOperationKeys).toHaveLength(384);
-    expect(manifestKeys).toHaveLength(384);
+    expect(runtimeOperationKeys).toHaveLength(388);
+    expect(manifestKeys).toHaveLength(388);
     expect({
       missingFromRuntime: manifestKeys.filter((key) => !runtimeKeys.has(key)),
       missingFromManifest: runtimeOperationKeys.filter(
@@ -337,15 +351,15 @@ describe("demo mode runtime route coverage", () => {
     }
 
     expect(supportCounts).toEqual({
-      allowed: 384,
-      blocked: 0,
+      allowed: 386,
+      blocked: 2,
       conditional: 0,
     });
     expect(
       DEMO_ROUTE_SCENARIOS.filter(
         (scenario) => scenario.verification === "http-contract"
       )
-    ).toHaveLength(189);
+    ).toHaveLength(191);
   });
 
   it("filters storage review by a ranked creator group", async () => {
@@ -455,11 +469,11 @@ describe("demo mode runtime route coverage", () => {
     }
   });
 
-  it("registers and classifies all 168 generated HEAD counterparts", () => {
+  it("registers and classifies all 170 generated HEAD counterparts", () => {
     const getScenarios = DEMO_ROUTE_SCENARIOS.filter(
       (scenario) => scenario.method === "GET"
     );
-    expect(getScenarios).toHaveLength(168);
+    expect(getScenarios).toHaveLength(170);
 
     for (const scenario of getScenarios) {
       expect(

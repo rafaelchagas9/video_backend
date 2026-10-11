@@ -16,7 +16,15 @@ export function registerRequestTelemetryHooks<Logger extends FastifyBaseLogger>(
   transport: Pick<
     typeof telemetry,
     "captureTelemetryEvent" | "captureTelemetryLog"
-  > = telemetry
+  > = {
+    captureTelemetryEvent: telemetry.captureTelemetryEvent,
+    // The application logger writes locally and exports exactly one sanitized
+    // record. Fastify automatic success logs are disabled at server creation.
+    captureTelemetryLog(level, args) {
+      const log = fastify.log[level] as (...values: unknown[]) => void;
+      log.apply(fastify.log, args);
+    },
+  }
 ): void {
   const {
     getTelemetryDistinctId,

@@ -313,6 +313,7 @@ export class FaceExtractionQueueService {
         outputFormat: config.outputFormat,
         quality: config.quality,
         prefix: "face",
+        signal: context.signal,
       });
       tempDirectory = extracted.tempDirectory;
       await this.dependencies.runStore.update(run.id, {

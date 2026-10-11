@@ -17,6 +17,7 @@ from starlette.datastructures import UploadFile
 from ..clip_engine import TileGrid
 from ..clip_runtime import ClipRuntime
 from ..config import Settings, get_settings
+from ..idle import native_call
 from .detect import _decode_image, _error, require_internal_auth
 
 router = APIRouter(prefix="/v1/embeddings", tags=["embeddings"])
@@ -79,9 +80,11 @@ def get_clip(request: Request) -> ClipRuntime:
     return request.app.state.clip_runtime
 
 
-def _require_ready(clip: ClipRuntime) -> None:
+async def _require_ready(clip: ClipRuntime) -> None:
     if not clip.enabled:
         raise _error(404, "CAPABILITY_DISABLED", "The clip capability is disabled")
+    if clip.state.value == "idle" or clip.is_reloading:
+        await clip.ensure_loaded()
     if not clip.ready:
         raise _error(503, "CAPABILITY_NOT_READY", "The clip capability is still initialising")
 
@@ -93,7 +96,12 @@ async def embed_pages(
     settings: Settings = Depends(get_settings),
     _authenticated: None = Depends(require_internal_auth),
 ) -> PagesResponse:
-    _require_ready(clip)
+    async with clip.activity():
+        return await _embed_pages(request, clip, settings)
+
+
+async def _embed_pages(request: Request, clip: ClipRuntime, settings: Settings) -> PagesResponse:
+    await _require_ready(clip)
     form = await request.form()
     raw = form.get("manifest")
     if not isinstance(raw, str):
@@ -121,7 +129,7 @@ async def embed_pages(
         try:
             image = await asyncio.to_thread(_decode_image, contents, settings)
             grid = TileGrid(page.tile_width, page.tile_height, page.columns, page.count)
-            tiles = await asyncio.to_thread(engine.slice_tiles, image, grid)
+            tiles = await native_call(engine.slice_tiles, image, grid)
         except Exception as error:  # noqa: BLE001 - one bad page must not fail the batch
             detail = getattr(error, "detail", None)
             code = detail.get("code") if isinstance(detail, dict) else "INVALID_PAGE"
@@ -135,7 +143,7 @@ async def embed_pages(
     except TimeoutError as error:
         raise _error(429, "VISION_BUSY", "The clip capability is busy") from error
     try:
-        vectors = await asyncio.to_thread(engine.embed_images, prepared)
+        vectors = await native_call(engine.embed_images, prepared)
     finally:
         clip.image_slot.release()
 
@@ -163,13 +171,18 @@ async def embed_text(
     settings: Settings = Depends(get_settings),
     _authenticated: None = Depends(require_internal_auth),
 ) -> TextResponse:
-    _require_ready(clip)
+    async with clip.activity():
+        return await _embed_text(body, clip, settings)
+
+
+async def _embed_text(body: TextRequest, clip: ClipRuntime, settings: Settings) -> TextResponse:
+    await _require_ready(clip)
     if len(body.texts) > settings.clip_max_texts:
         raise _error(413, "BATCH_TOO_LARGE", f"More than {settings.clip_max_texts} texts")
     if any(not text.strip() or len(text) > 1000 for text in body.texts):
         raise _error(400, "INVALID_TEXT", "Texts must be non-empty and at most 1000 characters")
     engine = clip.require_engine()
-    vectors = await asyncio.to_thread(engine.embed_texts, body.texts)
+    vectors = await native_call(engine.embed_texts, body.texts)
     return TextResponse(
         model_revision=engine.model_revision,
         dimension=engine.dimension,

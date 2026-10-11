@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "observed_channel_partial_order_v1",
+  "policy": "current-acceptability-versus-v2",
+  "semantics_sha256": "4123cea0dabb1f7011e4d61952cc6b057924985c1af420c3362d1c87185fff2c",
+  "status": "source_audit_before_real_export",
+  "source_sha256": "6a83e6af3d6b4f93d2cefd52600c015307b8acf71e60f7aa73eef6b5b5f1b3ea",
+  "test_sha256": "73fbcba007ea62b3cebeb2a30384e7c595fc9fb0c6437749494fa00bf868c426",
+  "synthetic_tests_passed": 9,
+  "expected": {
+    "observed_sides": 40,
+    "current_accepted": 36,
+    "current_rejected": 4,
+    "strict_edges": 8,
+    "strict_edge_channels": 7,
+    "independent_saved_cuts": 28
+  },
+  "identity": "Exact shared v2 task/side/offered range; feedback id/video/clip/frozen analysis generation; canonical same-channel private join; current frozen visual index recorded privately without claiming it is task-time index",
+  "scope": "Only saved direct comparisons; no trained model, probabilities, inferred complete/transitive order, future replacement or permanent-storage label",
+  "output": "Pseudonymous numeric training receipt plus separate private identity mapping, both0600 within0700 directory; immutable outputs; no source paths",
+  "failure": "Unknown source/side/generation/range/channel, contradiction, duplicate edge, cycle or changed output fails closed",
+  "correction": "Bind authoritative private video/offer metadata after shared verification for sparse public feature rows; no new target or outputs",
+  "supersedes": "export_spec.json"
+}

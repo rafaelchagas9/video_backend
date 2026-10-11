@@ -116,6 +116,8 @@ class FaceEngineProtocol(Protocol):
 
     def detect(self, image: np.ndarray) -> list[dict]: ...
 
+    def observe_visibility(self, image: np.ndarray) -> dict: ...
+
     def get_active_providers(self) -> list[str]: ...
 
     def get_embedding_dimension(self) -> int: ...
@@ -162,6 +164,24 @@ class InsightFaceDetectorAdapter:
                         message="Detector failed to analyze the image",
                     )
                 )
+        return outcomes
+
+    def analyze_visibility_batch(self, images: Sequence[DecodedImage]) -> list[DetectorItemOutcome]:
+        """Return one aggregate observation per valid image, including face-zero."""
+        outcomes: list[DetectorItemOutcome] = []
+        for image in images:
+            try:
+                observation = self._engine.observe_visibility(image.pixels)
+                outcomes.append(DetectorItemResult(findings=(Finding(
+                    capability="face_visibility", label="visibility",
+                    score=observation["max_confidence"],
+                    box=NormalizedBox(x1=0, y1=0, x2=0, y2=0),
+                    metadata=observation,
+                ),)))
+            except Exception:
+                outcomes.append(DetectorItemError(
+                    code="VISIBILITY_UNAVAILABLE", message="GPU face visibility observation unavailable",
+                ))
         return outcomes
 
     def _analyze_image(self, image: DecodedImage) -> list[Finding]:

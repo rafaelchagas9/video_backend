@@ -71,3 +71,34 @@ describe("request telemetry HTTP hooks", () => {
     }
   });
 });
+
+
+describe("routine request telemetry volume", () => {
+  it("keeps a burst of successful polling quiet while retaining subsequent errors", async () => {
+    const original = env.POSTHOG_CAPTURE_REQUEST_METRICS;
+    env.POSTHOG_CAPTURE_REQUEST_METRICS = false;
+    const events: unknown[] = [];
+    const logs: unknown[] = [];
+    const app = Fastify({ logController: new Fastify.LogController({ disableRequestLogging: true }) });
+    registerRequestTelemetryHooks(app, {
+      captureTelemetryEvent(...args) { events.push(args); },
+      captureTelemetryLog(...args) { logs.push(args); },
+    });
+    app.get("/api/multiplayer-remote/sessions/1/join-requests/pending", async () => ({ pending: [] }));
+    app.get("/failure", async () => { throw new Error("Synthetic terminal error"); });
+    try {
+      for (let index = 0; index < 1000; index++) {
+        const response = await app.inject("/api/multiplayer-remote/sessions/1/join-requests/pending");
+        expect(response.statusCode).toBe(200);
+      }
+      expect(events).toHaveLength(0);
+      expect(logs).toHaveLength(0);
+      expect((await app.inject("/failure")).statusCode).toBe(500);
+      expect(events).toHaveLength(1);
+      expect(logs).toHaveLength(1);
+    } finally {
+      env.POSTHOG_CAPTURE_REQUEST_METRICS = original;
+      await app.close();
+    }
+  });
+});

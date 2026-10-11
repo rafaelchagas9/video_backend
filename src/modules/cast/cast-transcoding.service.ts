@@ -12,6 +12,7 @@ import {
 } from "fs/promises";
 import { join, resolve } from "path";
 import { env } from "@/config/env";
+import { assertSafeTestStoragePath } from "@/config/test-isolation";
 import { resolveDemoAssetPath } from "@/database/demo";
 import { videosService } from "@/modules/videos/videos.service";
 import { AppError, NotFoundError } from "@/utils/errors";
@@ -128,11 +129,11 @@ const ENCODING_ATTEMPTS: CastEncodingMode[] = [
 ];
 
 export function getCastTranscodeRoot(): string {
-  if (!env.DEMO_MODE) return resolve(env.CAST_TRANSCODE_DIR);
-  return resolveDemoAssetPath(
-    join(env.DEMO_ASSETS_DIR, "runtime", "cast-transcodes"),
-    { mustExist: false }
-  );
+  const root = !env.DEMO_MODE
+    ? resolve(env.CAST_TRANSCODE_DIR)
+    : resolveDemoAssetPath(join(env.DEMO_ASSETS_DIR, "runtime", "cast-transcodes"), { mustExist: false });
+  assertSafeTestStoragePath(root, process.env.NODE_ENV === "test" || env.NODE_ENV === "test" ? "test" : env.NODE_ENV);
+  return root;
 }
 
 export class CastTranscodingService {

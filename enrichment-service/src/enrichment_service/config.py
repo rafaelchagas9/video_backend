@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SERVICE_DIR = Path(__file__).resolve().parents[2]
@@ -50,10 +51,13 @@ class Settings(BaseSettings):
     provider_config_path: str = str(_SERVICE_DIR / "data" / "providers.json")
 
     # HTTP
-    request_timeout_seconds: float = 30.0
+    request_timeout_seconds: float = Field(default=30.0, gt=0)
+    connect_timeout_seconds: float = Field(default=5.0, gt=0)
+    pool_timeout_seconds: float = Field(default=5.0, gt=0)
 
     # Logging
     log_level: str = "INFO"
+    access_log: bool = False
 
 
 @lru_cache

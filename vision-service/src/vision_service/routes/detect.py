@@ -92,7 +92,10 @@ def require_internal_auth(
 
 def _decode_image(contents: bytes, settings: Settings) -> np.ndarray:
     nparr = np.frombuffer(contents, np.uint8)
-    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    try:
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    except cv2.error as error:
+        raise _error(400, "INVALID_IMAGE", "Image data could not be decoded") from error
     if image is None:
         raise _error(400, "INVALID_IMAGE", "Image data could not be decoded")
 

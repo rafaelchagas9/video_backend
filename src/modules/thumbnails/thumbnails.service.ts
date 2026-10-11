@@ -1,7 +1,7 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
-import { stat } from "fs/promises";
-import ffmpeg from "fluent-ffmpeg";
+import { stat, unlink } from "fs/promises";
+import { runMediaProcess } from "@/utils/media-process";
 import { eq } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { thumbnailsTable } from "@/database/schema";
@@ -23,8 +23,10 @@ export class ThumbnailsService {
 
   async generate(
     videoId: number,
-    input?: GenerateThumbnailInput
+    input?: GenerateThumbnailInput,
+    signal?: AbortSignal
   ): Promise<Thumbnail> {
+    signal?.throwIfAborted();
     if (env.DEMO_MODE) {
       return demoMediaAssetsService.generateThumbnail(videoId, input);
     }
@@ -82,81 +84,53 @@ export class ThumbnailsService {
     const filename = `thumbnail_${videoId}_${Date.now()}.${format}`;
     const outputPath = join(env.THUMBNAILS_DIR, filename);
 
-    return new Promise((resolve, reject) => {
-      const stderrLines: string[] = [];
-
-      // Build command manually instead of using .screenshots()
-      // because .screenshots() uses complex filtergraph which conflicts with -vf
-      const command = ffmpeg(video.file_path)
-        .inputOptions([
-          "-hwaccel",
-          "vaapi",
-          "-hwaccel_device",
-          env.VAAPI_DEVICE,
-        ])
-        .seekInput(timestamp)
-        .frames(1)
-        .outputOptions([
-          "-an", // no audio
-          "-sn", // no subtitles
-          "-dn", // no data streams
-          "-vf",
-          `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
-          ...this.getQualityOptions(format, env.THUMBNAIL_QUALITY),
-        ])
-        .output(outputPath);
-
-      command
-        .on("start", (cmdLine) => {
-          logger.debug({ cmd: cmdLine, videoId }, "ffmpeg thumbnail start");
-        })
-        .on("stderr", (line) => {
-          stderrLines.push(line);
-        })
-        .on("end", async () => {
-          try {
-            // Get file size
-            const stats = await stat(outputPath);
-            const fileSize = stats.size;
-
-            // Insert into DB
-            const result = await db
-              .insert(thumbnailsTable)
-              .values({
-                videoId,
-                filePath: outputPath,
-                fileSizeBytes: fileSize,
-                timestampSeconds: timestamp,
-                width,
-                height,
-              })
-              .returning({ id: thumbnailsTable.id })
-              .then((rows) => rows[0] || null);
-
-            if (!result) {
-              throw new Error("Failed to save thumbnail record");
-            }
-
-            const thumbnail = await this.findById(result.id);
-            resolve(thumbnail);
-          } catch (error) {
-            const normalizedError =
-              error instanceof Error ? error : new Error(String(error));
-            reject(normalizedError);
-          }
-        })
-        .on("error", (err, _stdout, stderr) => {
-          const stderrOutput = stderr || stderrLines.join("\n");
-          const message = stderrOutput || err?.message || String(err);
-          const error = new Error(`FFmpeg thumbnail error: ${message}`);
-          logger.error(
-            { videoId, stderrOutput, originalError: err?.message },
-            "ffmpeg thumbnail failed"
-          );
-          reject(error);
-        })
-        .run();
-    });
+    const args = [
+      "-nostdin",
+      "-y",
+      ...(env.VAAPI_DEVICE
+        ? ["-hwaccel", "vaapi", "-hwaccel_device", env.VAAPI_DEVICE]
+        : []),
+      "-ss",
+      String(timestamp),
+      "-i",
+      video.file_path,
+      "-frames:v",
+      "1",
+      "-an",
+      "-sn",
+      "-dn",
+      "-vf",
+      `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+      ...this.getQualityOptions(format, env.THUMBNAIL_QUALITY),
+      outputPath,
+    ];
+    logger.debug({ args, videoId }, "ffmpeg thumbnail start");
+    try {
+      await runMediaProcess(env.FFMPEG_PATH, args, {
+        label: "FFmpeg thumbnail",
+        timeoutMs: 5 * 60_000,
+        signal,
+        includeStderr: true,
+      });
+    } catch (error) {
+      await unlink(outputPath).catch(() => {});
+      throw error;
+    }
+    const fileSize = (await stat(outputPath)).size;
+    const result = await db
+      .insert(thumbnailsTable)
+      .values({
+        videoId,
+        filePath: outputPath,
+        fileSizeBytes: fileSize,
+        timestampSeconds: timestamp,
+        width,
+        height,
+      })
+      .returning({ id: thumbnailsTable.id })
+      .then((rows) => rows[0] || null);
+    if (!result) throw new Error("Failed to save thumbnail record");
+    return this.findById(result.id);
   }
 
   /**
@@ -165,10 +139,12 @@ export class ThumbnailsService {
    */
   async saveFromFrame(
     videoId: number,
-    frame: ExtractedFrame
+    frame: ExtractedFrame,
+    signal?: AbortSignal
   ): Promise<Thumbnail> {
+    signal?.throwIfAborted();
     if (env.DEMO_MODE) {
-      return this.generate(videoId);
+      return this.generate(videoId, undefined, signal);
     }
 
     // Delete existing thumbnail if present
@@ -196,16 +172,21 @@ export class ThumbnailsService {
       `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`
     );
 
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(frame.filePath)
-        .outputOptions(outputOptions)
-        .output(outputPath)
-        .on("end", () => resolve())
-        .on("error", (err) =>
-          reject(err instanceof Error ? err : new Error(String(err)))
-        )
-        .run();
-    });
+    try {
+      await runMediaProcess(
+        env.FFMPEG_PATH,
+        ["-nostdin", "-y", "-i", frame.filePath, ...outputOptions, outputPath],
+        {
+          label: "FFmpeg thumbnail",
+          timeoutMs: 5 * 60_000,
+          signal,
+          includeStderr: true,
+        }
+      );
+    } catch (error) {
+      await unlink(outputPath).catch(() => {});
+      throw error;
+    }
 
     // Get file size
     const stats = await stat(outputPath);

@@ -138,6 +138,12 @@ class ClipEngine:
         self.embed_images([blank])
         self.embed_texts(["warmup"])
 
+    def close(self) -> None:
+        """Drop both ONNX sessions and tokenizer after all inference has completed."""
+        self._vision = None
+        self._text = None
+        self._tokenizer = None
+
 
 def _normalize(matrix: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)

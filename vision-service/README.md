@@ -90,6 +90,35 @@ precision's directory. A new execution configuration compiles and warms up once.
 Existing cache directories are retained. Changes take effect when the service
 restarts. See [MIGraphX provider options](https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html).
 
+`MODEL_IDLE_TIMEOUT_SECONDS=1800` unloads face, NudeNet and SigLIP2 sessions
+after 30 minutes without inference **for that capability**. Each of faces,
+nudity and SigLIP2 has an independent timer using the same configured timeout.
+Set it to `0` to disable unloading. A face request keeps only faces resident;
+text and storyboard embeddings keep only SigLIP2 resident. A batch requesting
+faces and nudity reserves both and resets both timers when it finishes.
+The countdown starts after the capability's last request or model initialization
+finishes. Active or queued work and initialization protect only that capability.
+Health checks and capability discovery reset none of the timers. The watchdog
+checks at most every 30 seconds, so unloading can happen up to 30 seconds after
+the deadline.
+
+The next inference loads only the requested capability, reusing the compiled
+disk cache. Concurrent requests share the same reload. The first request pays
+the model loading/warmup latency; a cache miss can still require slow compilation.
+The process stays running, so Python/native libraries retain some baseline RAM
+and GPU runtime memory even after model sessions are released.
+
+Idle capabilities report `state: "idle"`, `ready: true`, and an empty provider
+list: readiness means they can accept work and reload on demand. Model and
+taxonomy revisions stay unchanged. Health polling never reloads models. Actual
+initialization or inference failures continue to report their existing errors.
+
+On the RX 7800 XT host (2026-10-07), isolated real-model checks using the existing
+compiled cache measured reload plus synthetic inference at 3.9 seconds for faces,
+1.7 seconds for NudeNet, and 16.3 seconds for SigLIP2. SigLIP2 unloading reduced
+that test process's resident RAM from 8.8 to 1.6 GiB and VRAM from 2.0 GiB to
+157 MiB. These are per-capability tests, not combined service memory totals.
+
 ## API and readiness
 
 The default address is `http://localhost:8100`. FastAPI `/docs` and
@@ -156,3 +185,24 @@ uv lock --check
 Contract tests with mocked detectors do not establish live GPU readiness or model
 accuracy. The remaining owner/browser and corpus acceptance is tracked in
 [the vision acceptance note](../plans/007-vision-service-nudity-analysis-bookmarks.md).
+
+
+### Offline unit-test runner
+
+Use the isolated runner for routine verification:
+
+```bash
+python3 scripts/run-offline-tests.py
+```
+
+It uses the already provisioned `.venv`, clears inherited environment variables,
+creates a disconnected Linux network namespace, and refuses to run if `unshare`
+is missing or isolation cannot be established. Model engines and real ONNX
+sessions are forbidden; detector tests use fake factories and synthetic images.
+Deployment `.env` loading and global-app compiled-cache writes are disabled;
+opening deployed settings, model files, or persistent compiled caches is forbidden.
+The runner does not install dependencies, download weights, or start a server.
+It also accepts invocation by absolute path from another working directory.
+
+These checks cover contracts, admission, cancellation, idle unloading, and image
+geometry. They do not establish live GPU performance or model accuracy.

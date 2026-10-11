@@ -244,7 +244,7 @@ const envSchema = z.object({
   POSTHOG_SERVICE_VERSION: z.string().default("0.1.0"),
   POSTHOG_LOG_LEVEL: z
     .enum(["debug", "info", "warn", "error", "fatal"])
-    .default("info"),
+    .default("warn"),
   POSTHOG_CAPTURE_REQUEST_METRICS: z
     .string()
     .default("false")

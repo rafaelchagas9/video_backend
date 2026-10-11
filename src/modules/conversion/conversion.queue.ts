@@ -4,6 +4,7 @@
  * restart can replay them safely.
  */
 import { redis } from "bun";
+import { guardDefaultQueueClient } from "@/config/test-isolation";
 import { logger } from "@/utils/logger";
 import { env } from "@/config/env";
 import type { QueueJobPayload } from "./conversion.types";
@@ -61,7 +62,7 @@ export class ConversionQueue {
   private recoveryProvider: RecoveryProvider | null = null;
 
   constructor(
-    private readonly redisClient: ConversionQueueRedisClient = redis
+    private readonly redisClient: ConversionQueueRedisClient = guardDefaultQueueClient(redis, () => process.env.NODE_ENV === "test" || env.NODE_ENV === "test" ? "test" : env.NODE_ENV)
   ) {
     this.concurrency = Math.max(1, env.CONVERSION_MAX_CONCURRENT);
   }

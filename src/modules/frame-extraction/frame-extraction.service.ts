@@ -7,7 +7,7 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import { unlink, readdir, rmdir, stat as statAsync } from "fs/promises";
-import ffmpeg from "fluent-ffmpeg";
+import { runMediaProcess } from "@/utils/media-process";
 import { logger } from "@/utils/logger";
 import { InternalServerError } from "@/utils/errors";
 import { env } from "@/config/env";
@@ -48,6 +48,7 @@ export class FrameExtractionService {
   async extractFrames(
     options: FrameExtractionOptions
   ): Promise<FrameExtractionResult> {
+    options.signal?.throwIfAborted();
     const startTime = Date.now();
 
     const {
@@ -62,6 +63,7 @@ export class FrameExtractionService {
       quality = this.defaultQuality,
       tempDir = this.defaultTempDir,
       prefix = "frame",
+      signal,
     } = options;
 
     // Calculate number of frames to extract
@@ -91,6 +93,7 @@ export class FrameExtractionService {
         outputFormat,
         quality,
         prefix,
+        signal,
       });
 
       // Collect extracted frame metadata
@@ -169,6 +172,7 @@ export class FrameExtractionService {
     quality?: number;
     targetWidth?: number;
     targetHeight?: number;
+    signal?: AbortSignal;
   }): Promise<string> {
     const {
       videoPath,
@@ -178,7 +182,10 @@ export class FrameExtractionService {
       quality = this.defaultQuality,
       targetWidth,
       targetHeight,
+      signal,
     } = params;
+
+    signal?.throwIfAborted();
 
     // Ensure output directory exists
     if (!existsSync(outputDir)) {
@@ -202,50 +209,47 @@ export class FrameExtractionService {
     // Quality options based on format
     const qualityOptions = this.getQualityOptions(outputFormat, quality);
 
-    return new Promise<string>((resolve, reject) => {
-      const command = ffmpeg(videoPath)
-        .inputOptions([
+    try {
+      await runMediaProcess(
+        env.FFMPEG_PATH,
+        [
+          "-nostdin",
+          "-y",
           "-hwaccel",
           "vaapi",
           "-hwaccel_device",
           env.VAAPI_DEVICE,
-        ])
-        .seekInput(timestampSeconds)
-        .frames(1)
-        .outputOptions([
-          "-an", // No audio
-          "-sn", // No subtitles
-          "-dn", // No data streams
+          "-ss",
+          String(timestampSeconds),
+          "-i",
+          videoPath,
+          "-frames:v",
+          "1",
+          "-an",
+          "-sn",
+          "-dn",
           ...qualityOptions,
-        ]);
-
-      // Add scale filter if specified
-      if (scaleFilter) {
-        command.outputOptions(["-vf", scaleFilter]);
-      }
-
-      command
-        .output(outputPath)
-        .on("end", () => {
-          logger.debug(
-            { outputPath, timestamp: timestampSeconds },
-            "Single frame extracted"
-          );
-          resolve(outputPath);
-        })
-        .on("error", (err) => {
-          logger.error(
-            { error: err, videoPath, timestamp: timestampSeconds },
-            "Single frame extraction error"
-          );
-          reject(
-            new InternalServerError("Failed to extract frame from video", {
-              cause: err,
-            })
-          );
-        })
-        .run();
-    });
+          ...(scaleFilter ? ["-vf", scaleFilter] : []),
+          outputPath,
+        ],
+        {
+          label: "Single frame extraction",
+          timeoutMs: 5 * 60_000,
+          signal,
+          includeStderr: true,
+        }
+      );
+      logger.debug(
+        { outputPath, timestamp: timestampSeconds },
+        "Single frame extracted"
+      );
+      return outputPath;
+    } catch (error) {
+      await unlink(outputPath).catch(() => {});
+      throw new InternalServerError("Failed to extract frame from video", {
+        cause: error,
+      });
+    }
   }
 
   /**
@@ -258,6 +262,7 @@ export class FrameExtractionService {
     keyframesOnly: boolean;
     targetWidth?: number;
     targetHeight?: number;
+    signal?: AbortSignal;
     outputFormat: string;
     quality: number;
     prefix: string;
@@ -272,6 +277,7 @@ export class FrameExtractionService {
       outputFormat,
       quality,
       prefix,
+      signal,
     } = params;
 
     // Build scale filter if dimensions specified
@@ -308,45 +314,31 @@ export class FrameExtractionService {
       ? ["-qscale:v", seqQuality.toString()]
       : this.getQualityOptions(seqFormat, quality);
 
-    return new Promise<void>((resolve, reject) => {
-      const inputOptions = [
-        "-hwaccel",
-        "vaapi",
-        "-hwaccel_device",
-        env.VAAPI_DEVICE,
-      ];
-
-      if (keyframesOnly) {
-        inputOptions.push("-skip_frame", "nokey");
-      }
-
-      ffmpeg(videoPath)
-        .inputOptions(inputOptions)
-        .outputOptions([
-          "-vf",
-          filterChain,
-          "-an", // No audio
-          "-sn", // No subtitles
-          "-dn", // No data streams
-          ...qualityOptions,
-        ])
-        .output(outputPattern)
-        .on("start", (commandLine) => {
-          logger.debug({ commandLine }, "FFmpeg frame extraction command");
-        })
-        .on("end", () => {
-          logger.debug({ outputPattern }, "FFmpeg frame extraction completed");
-          resolve();
-        })
-        .on("error", (err) => {
-          logger.error(
-            { error: err, videoPath },
-            "FFmpeg frame extraction error"
-          );
-          reject(err);
-        })
-        .run();
+    const args = [
+      "-nostdin",
+      "-y",
+      ...(env.VAAPI_DEVICE
+        ? ["-hwaccel", "vaapi", "-hwaccel_device", env.VAAPI_DEVICE]
+        : []),
+      ...(keyframesOnly ? ["-skip_frame", "nokey"] : []),
+      "-i",
+      videoPath,
+      "-vf",
+      filterChain,
+      "-an",
+      "-sn",
+      "-dn",
+      ...qualityOptions,
+      outputPattern,
+    ];
+    logger.debug({ args }, "FFmpeg frame extraction command");
+    await runMediaProcess(env.FFMPEG_PATH, args, {
+      label: "Frame extraction",
+      timeoutMs: 30 * 60_000,
+      signal,
+      includeStderr: true,
     });
+    logger.debug({ outputPattern }, "FFmpeg frame extraction completed");
   }
 
   /**
@@ -507,9 +499,7 @@ export function getFrameExtractionService(): FrameExtractionService {
     // Will be configured from env in next phase
     const tempDir = process.env.FRAME_EXTRACTION_TEMP_DIR || "/dev/shm";
     const format = (process.env.FRAME_EXTRACTION_FORMAT || "jpg") as
-      | "jpg"
-      | "webp"
-      | "png";
+      "jpg" | "webp" | "png";
     const quality = parseInt(process.env.FRAME_EXTRACTION_QUALITY || "90", 10);
 
     serviceInstance = new FrameExtractionService(tempDir, format, quality);

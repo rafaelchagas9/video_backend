@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import ffmpeg from "fluent-ffmpeg";
+import { runMediaProcess } from "@/utils/media-process";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { videosService } from "@/modules/videos/videos.service";
 import { storyboardsService } from "@/modules/storyboards/storyboards.service";
@@ -99,6 +99,9 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
       }
 
       const video = await videosService.findById(id);
+      const probeController = new AbortController();
+      const cancelProbe = () => probeController.abort();
+      request.raw.once("aborted", cancelProbe);
       const audioMeta = await new Promise<{
         present: boolean;
         codec: string | null;
@@ -109,8 +112,67 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
         end_time: number | null;
         covers_video: boolean | null;
       }>((resolve) => {
-        ffmpeg.ffprobe(video.file_path, (err, metadata) => {
-          if (err) {
+        runMediaProcess(
+          env.FFPROBE_PATH,
+          [
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_format",
+            "-of",
+            "json",
+            video.file_path,
+          ],
+          {
+            label: "Editing metadata inspection",
+            timeoutMs: 30_000,
+            signal: probeController.signal,
+          }
+        )
+          .then(({ stdout }) => {
+            const metadata = JSON.parse(stdout) as {
+              streams: Array<
+                EditProbeStream & {
+                  codec_name?: string;
+                  channels?: number;
+                  sample_rate?: string | number;
+                }
+              >;
+            };
+            const audio = metadata.streams.find(
+              (stream) => stream.codec_type === "audio"
+            );
+            const audioStart = audio
+              ? getProbeStreamStart(audio as EditProbeStream)
+              : null;
+            const audioDuration = audio
+              ? getProbeStreamDuration(audio as EditProbeStream)
+              : null;
+            const audioEnd =
+              audioStart !== null && audioDuration !== null
+                ? audioStart + audioDuration
+                : null;
+            const coversVideo = !audio
+              ? false
+              : audioStart !== null &&
+                  audioEnd !== null &&
+                  video.duration_seconds !== null
+                ? audioStart <= 0.5 && audioEnd >= video.duration_seconds - 0.5
+                : null;
+            resolve({
+              present: Boolean(audio),
+              codec: audio?.codec_name ?? video.audio_codec,
+              channels: audio?.channels ?? null,
+              sample_rate: audio?.sample_rate
+                ? Number.parseInt(audio.sample_rate.toString(), 10)
+                : null,
+              start_time: audioStart,
+              duration: audioDuration,
+              end_time: audioEnd,
+              covers_video: coversVideo,
+            });
+          })
+          .catch(() => {
             resolve({
               present: video.audio_codec !== null,
               codec: video.audio_codec,
@@ -121,42 +183,8 @@ export async function videoEditsRoutes(fastify: FastifyInstance) {
               end_time: null,
               covers_video: null,
             });
-            return;
-          }
-          const audio = metadata.streams.find(
-            (stream) => stream.codec_type === "audio"
-          );
-          const audioStart = audio
-            ? getProbeStreamStart(audio as EditProbeStream)
-            : null;
-          const audioDuration = audio
-            ? getProbeStreamDuration(audio as EditProbeStream)
-            : null;
-          const audioEnd =
-            audioStart !== null && audioDuration !== null
-              ? audioStart + audioDuration
-              : null;
-          const coversVideo = !audio
-            ? false
-            : audioStart !== null &&
-                audioEnd !== null &&
-                video.duration_seconds !== null
-              ? audioStart <= 0.5 && audioEnd >= video.duration_seconds - 0.5
-              : null;
-          resolve({
-            present: Boolean(audio),
-            codec: audio?.codec_name ?? video.audio_codec,
-            channels: audio?.channels ?? null,
-            sample_rate: audio?.sample_rate
-              ? Number.parseInt(audio.sample_rate.toString(), 10)
-              : null,
-            start_time: audioStart,
-            duration: audioDuration,
-            end_time: audioEnd,
-            covers_video: coversVideo,
           });
-        });
-      });
+      }).finally(() => request.raw.removeListener("aborted", cancelProbe));
 
       const storyboard = await storyboardsService.findByVideoId(id);
 

@@ -1,6 +1,6 @@
 """Lifecycle for the SigLIP2 embedding capability.
 
-Loading and the first MIGraphX compile take minutes, so the engine loads in the background
+The first uncached MIGraphX compile can take minutes, so the engine loads in the background
 after startup and reports "initializing" until a warm inference has completed. The other
 capabilities never wait on it.
 """
@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import nullcontext
 
 from .clip_engine import ClipEngine
 from .config import Settings
+from .idle import IdleModelManager, native_call
 from .runtime import RuntimeState
 
 logger = logging.getLogger(__name__)
@@ -23,19 +25,34 @@ CAPABILITY = "clip"
 class ClipRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.idle_manager: IdleModelManager | None = None
         self.state = RuntimeState.CREATED if settings.clip_enabled else RuntimeState.STOPPED
         self.failure_code: str | None = None
         self.engine: ClipEngine | None = None
         self._task: asyncio.Task[None] | None = None
+        self._reload_from_idle = False
         self._image_slot = asyncio.Semaphore(1)
+
+    def activity(self):
+        return self.idle_manager.request("clip") if self.idle_manager else nullcontext()
 
     @property
     def enabled(self) -> bool:
         return self.settings.clip_enabled
 
     @property
+    def is_loading(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    @property
+    def is_reloading(self) -> bool:
+        return self._reload_from_idle and self.is_loading
+
+    @property
     def ready(self) -> bool:
-        return self.state == RuntimeState.READY and self.engine is not None
+        return self.state == RuntimeState.IDLE or (
+            self.state == RuntimeState.READY and self.engine is not None
+        )
 
     @property
     def model_revision(self) -> str:
@@ -55,8 +72,9 @@ class ClipRuntime:
 
     async def _load(self) -> None:
         started = time.monotonic()
+        engine = None
         try:
-            engine = await asyncio.to_thread(
+            engine = await native_call(
                 ClipEngine,
                 self.settings.model_cache_dir / "siglip2" / self.settings.clip_model,
                 self.settings.get_clip_onnx_providers(),
@@ -64,16 +82,21 @@ class ClipRuntime:
                 self.settings.clip_fp16_enabled,
                 self.settings.clip_text_threads,
             )
-            await asyncio.to_thread(engine.warm)
+            await native_call(engine.warm)
         except asyncio.CancelledError:
             raise
         except Exception:
+            if engine is not None:
+                await native_call(engine.close)
             self.state = RuntimeState.FAILED
             self.failure_code = "DETECTOR_INITIALIZATION_FAILED"
             logger.exception("SigLIP2 embedding capability failed to initialise")
             return
         self.engine = engine
+        self.failure_code = None
         self.state = RuntimeState.READY
+        if self.idle_manager:
+            self.idle_manager.touch(CAPABILITY)
         logger.info(
             "Vision detector warm capability=%s seconds=%.1f providers=%s",
             CAPABILITY,
@@ -81,9 +104,32 @@ class ClipRuntime:
             engine.providers,
         )
 
-    async def stop(self) -> None:
+    async def ensure_loaded(self) -> None:
+        if self.state == RuntimeState.IDLE:
+            self._reload_from_idle = True
+            self._task = None
+            self.start_background()
+        # Share the reload with concurrent requests without cancelling native work.
         if self._task is not None and not self._task.done():
-            self._task.cancel()
+            await asyncio.shield(self._task)
+
+    async def unload_idle(self) -> bool:
+        if self.is_loading or self.engine is None:
+            return False
+        engine = self.engine
+        self.engine = None
+        await native_call(engine.close)
+        self._task = None
+        self._reload_from_idle = False
+        self.state = RuntimeState.IDLE
+        return True
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            await asyncio.shield(self._task)
+        if self.engine is not None:
+            await native_call(self.engine.close)
+        self._task = None
         self.engine = None
         self.state = RuntimeState.STOPPED
 

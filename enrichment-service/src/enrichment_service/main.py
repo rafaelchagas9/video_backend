@@ -6,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .http_client import http_lifespan
 from .config import get_settings
 from .routes import enrich_router, health_router
 from .routes.providers import router as providers_router
@@ -20,11 +21,18 @@ def setup_logging() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    # HTTPX logs every successful request at INFO (including provider URLs).
+    # Retain warnings/errors while leaving detailed wire diagnostics opt-in.
+    transport_level = logging.DEBUG if settings.log_level.upper() == "DEBUG" else logging.WARNING
+    logging.getLogger("httpx").setLevel(transport_level)
+    logging.getLogger("httpcore").setLevel(transport_level)
+
 
 def create_app() -> FastAPI:
     setup_logging()
 
     app = FastAPI(
+        lifespan=http_lifespan,
         title="Creator Enrichment Service",
         description=(
             "Discovers candidate metadata (images, socials, aliases, fields) for "
@@ -59,6 +67,7 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         reload=False,
+        access_log=settings.access_log,
         log_level=settings.log_level.lower(),
     )
 

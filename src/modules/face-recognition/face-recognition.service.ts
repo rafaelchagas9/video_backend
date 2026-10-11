@@ -689,7 +689,8 @@ export class FaceRecognitionService {
   async processVideo(
     videoId: number,
     videoPath: string,
-    videoDuration: number
+    videoDuration: number,
+    options: { faces?: boolean; visualIndex?: boolean } = {}
   ): Promise<void> {
     if (env.DEMO_MODE) return faceRecognitionDemoService.processVideo(videoId);
     logger.info({ videoId }, "Starting unified video processing");
@@ -723,13 +724,16 @@ export class FaceRecognitionService {
       await storyboardsService.assembleFromFrames(
         videoId,
         result.frames,
-        videoDuration
+        videoDuration,
+        { visualIndex: options.visualIndex }
       );
       logger.info({ videoId }, "Storyboard assembled from extracted frames");
 
-      const faceQueue = getDurableFaceExtractionQueue();
-      await faceQueue.queueExtraction(videoId);
-      logger.info({ videoId }, "Face extraction queued");
+      if (options.faces !== false) {
+        const faceQueue = getDurableFaceExtractionQueue();
+        await faceQueue.queueExtraction(videoId);
+        logger.info({ videoId }, "Face extraction queued");
+      }
     } finally {
       try {
         await frameService.cleanupFrames(result.tempDirectory, {

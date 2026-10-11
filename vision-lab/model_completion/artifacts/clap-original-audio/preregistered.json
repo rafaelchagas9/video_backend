@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "status": "source_only_not_executed",
+  "primary_hypothesis": "Frozen sound-event CLAP adds complementary information to Gemma semantics for structured preferred-span ranking. Omitted material is not labeled unacceptable.",
+  "extractor": {
+    "source": "model_completion/clap_original_audio.py",
+    "sha256": "c95614dbae223494ba2fe7b6d859248c2ff61e3a177475a66933a3a17987363b",
+    "tests": "model_completion/clap_original_audio_test.py",
+    "test_sha256": "0f02d65121b7bf98373260dbc20d9388a936a3d257e878cc9bbc92962cbf9719",
+    "synthetic_contract_tests_passed": 11
+  },
+  "official_model": {
+    "repo": "laion/larger_clap_general",
+    "revision": "ada0c23a36c4e8582805bb38fec3905903f18b41",
+    "weight_file": "pytorch_model.bin",
+    "weight_bytes": 776444665,
+    "weight_sha256": "314eb00cce6ad68d25237b8446b659ccdb136ed4672c1bca470f142f72455026",
+    "commit_source": "https://huggingface.co/laion/larger_clap_general/commit/ada0c23a36c4e8582805bb38fec3905903f18b41",
+    "weight_source": "https://huggingface.co/laion/larger_clap_general/blob/main/pytorch_model.bin",
+    "loader": {
+      "local_files_only": true,
+      "trust_remote_code": false,
+      "weights_only": true,
+      "use_safetensors": false,
+      "dtype": "float32"
+    }
+  },
+  "input_receipts": {
+    "audio_reuse_manifest.json": "7dc237cabf892430bf72a67c0c69c704fac16cf165408a13309c82b1faebfde1",
+    "dense-original-audio/numeric_manifest.json": "2af6760422a96951d99cbe6797ce128751a6f6e3ccd2cf102af16b121a31eb43"
+  },
+  "cohort": {
+    "original_targets": 21,
+    "whole_channels": 10,
+    "windows": 1149,
+    "window_seconds": 20,
+    "sampling": "Exact preexisting dense20s absolute offsets including original-end-aligned final window; no target-dependent sampling. Five incomplete-original tails excluded identically."
+  },
+  "recipe": {
+    "id": "clap-general-original-dense20s-two10s-unitmean-16k-to48k-v1",
+    "source": "Verified neutral mono16k SSD FLACs only; size/mtime/SHA and actual samplerate/channels/frames before reading. Original source fingerprint carried without stat or original reads.",
+    "decode": "SoundFile seek/read exactly320000 finite samples; truncated inputs rejected without padding; no FFmpeg",
+    "resample": "scipy.signal.resample_poly up3/down1 once20s\u2192960000 float32 samples",
+    "halves": "Split deterministic first480000/last480000 samples, each10s at48k; no random crop or fusion. Exactly model input length.",
+    "pooling": "Normalize each512-dimensional half vector, equal mean, normalize final512 vector",
+    "limitation": "Existing16k mono stages omit original frequencies above8kHz and stereo cues. Upsampling does not restore either."
+  },
+  "outputs": {
+    "directory": "data/model-completion-20261010/joint-gemma/dense-original-clap",
+    "privacy": "Numeric vectors, pseudonymous row/group, numeric ranges and SHA/fingerprints only; no source paths/video IDs/transcripts/raw temp audio. Files0600/directories0700.",
+    "checkpoint": "Atomic after each two20s windows; prefix offsets/decoded/resampled/half sample counts; planned offsets; complete flag; exact model/recipe/receipt/stage/source/original-range identity. Partial checkpoints excluded from primary evaluation."
+  },
+  "resources": {
+    "extraction_total_seconds": 1200,
+    "includes": "Imports, waiting, stage/hash checks, model load, synthetic inference, benchmark, full extraction and numeric checkpoint writes. External process deadline required by root.",
+    "shared_lock": "data/models/recording-audio-jobs/.worker.lock nonblocking before output writes",
+    "idle_guard": "Existing media-worker guard before load and each batch; initial GPU idle guard. No competing FFmpeg or GPU job.",
+    "priority": "nice10, single sequential SSD reader",
+    "CPU_threads": 2,
+    "batch_windows": 2,
+    "GPU_memory_ceiling_GiB": 8,
+    "synthetic": "Generated440Hz tone20s; repeat deterministic unit512 inference before private reads.",
+    "throughput": "First8 label-independent private windows checkpointed once. Continue only if1.5\u00d7measured per-window walltime\u00d7remaining windows+30s reserve fits original deadline. No extensions/retries.",
+    "downloads": "None in extractor. Separately authorized public pinned weights+config metadata only after reviewer pin/SHA/size/disk check; no credentials/media uploads/cloud."
+  },
+  "cpu_comparison": {
+    "owner": "inference_completion_audit",
+    "primary": "Existing28 pooled features +trainfold-only CLAP PCA16 =44 features, fixedC1 symmetric original-balanced structured gold-vs64 label-independent alternative spans.",
+    "control": "Exact same44 dimensions and cohort: existing28 +16 zero components; no new model/family/C grid.",
+    "transforms": "All PCA/scaling fit only inner/outer training originals. Existing exact structured interval grid/pooling/weights/ties unchanged; heldout candidate edges never use gold.",
+    "folds": "5 outer and3 inner whole-channel folds; identity versus argmax policy selected only on inner folds; unseen original fallback unchanged.",
+    "gates": "Mean IoU>identity+.02; retained gold duration>=.97; p10>=.9; at least3 clips shortened>=5s;5000 paired-channel bootstrap gain lower>0 and retention lower>=.97; matched control gain lower>0; exact zero-mass diagnostic unchanged."
+  },
+  "forbidden": [
+    "Original videos/audio reads or stats",
+    "HDD media",
+    "GPU finetuning",
+    "New labels/queue",
+    "Cloud uploads/credits",
+    "DB/product/model publication",
+    "Automatic checkpoint rerun",
+    "Outer-selected recipe or gate relaxation"
+  ]
+}

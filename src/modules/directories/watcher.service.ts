@@ -241,6 +241,12 @@ export class WatcherService {
     // 2. Generate thumbnail from extracted frames
     // 3. Generate storyboard from extracted frames
     // 4. Queue face extraction from extracted frames
+    const { recordingScope } = await import("@/modules/recordings/recordings.scope");
+    const { recordingsProcessing } = await import("@/modules/recordings/recordings.processing");
+    const recordingsDirectoryId = await recordingScope()
+      .then((scope) => scope.directoryId)
+      .catch(() => null);
+    let recordingsQueued = false;
     for (const videoId of this.newVideoIds) {
       try {
         // Get video details
@@ -251,6 +257,12 @@ export class WatcherService {
             { videoId },
             "Skipping video processing - duration not available"
           );
+          continue;
+        }
+
+        // Recordings have their own pausable queue and skip face extraction.
+        if (recordingsDirectoryId && video.directory_id === recordingsDirectoryId) {
+          recordingsQueued = true;
           continue;
         }
 
@@ -284,6 +296,11 @@ export class WatcherService {
       { count: this.newVideoIds.length },
       "Videos queued for unified processing"
     );
+
+    if (recordingsQueued)
+      await recordingsProcessing.kick().catch((error) =>
+        logger.warn({ error }, "Could not start recordings processing")
+      );
 
     // Clear local queue
     this.newVideoIds = [];

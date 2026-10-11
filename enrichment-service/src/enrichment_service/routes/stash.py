@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..http_client import http_client
 from ..config import get_settings
 from ..providers import Provider, configured_providers
 from ..sources import stash_bridge
@@ -48,7 +49,7 @@ async def stash() -> AsyncIterator[StashClient]:
     bridge = stash_bridge(get_settings())
     if bridge is None:
         raise HTTPException(409, "Configure the Stash bridge first")
-    async with httpx.AsyncClient(timeout=max(get_settings().request_timeout_seconds, 120)) as client:
+    async with http_client(timeout=max(get_settings().request_timeout_seconds, 120)) as client:
         try:
             yield StashClient(bridge, client)
         except StashError as exc:
@@ -169,7 +170,7 @@ async def performer_identity(request: IdentityRequest):
     source = StashBoxSource(name=provider.id, endpoint=provider.endpoint, api_key=provider.api_key,
                             auth_style=provider.auth_style, dialect=provider.dialect, exact_endpoint=provider.exact_endpoint)
     results = []
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout_seconds) as client:
+    async with http_client(timeout=get_settings().request_timeout_seconds) as client:
         for external_id in dict.fromkeys(request.ids):
             try:
                 results.append(await source.performer_identity(client, external_id))

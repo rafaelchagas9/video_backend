@@ -3,6 +3,7 @@ import type { ReadStream } from "fs";
 import { extname } from "path";
 import { VIDEO_MIME_TYPES } from "@/config/constants";
 import { env } from "@/config/env";
+import { parseRangeHeader } from "./streaming-range";
 import { videosService } from "./videos.service";
 import { AppError } from "@/utils/errors";
 import { fileExists } from "@/utils/file-utils";
@@ -23,61 +24,6 @@ export interface StreamResult {
     "Accept-Ranges": "bytes";
     "Content-Range"?: string;
   };
-}
-
-interface ParsedRange {
-  start: number;
-  end: number;
-}
-
-/**
- * Parse HTTP Range header
- * Format: "bytes=start-end" or "bytes=start-" (open-ended)
- */
-function parseRangeHeader(
-  rangeHeader: string,
-  fileSize: number,
-  maxChunkBytes: number
-): ParsedRange | null {
-  const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
-
-  if (!match) {
-    return null;
-  }
-
-  const startStr = match[1];
-  const endStr = match[2];
-
-  let start: number;
-  let end: number;
-
-  if (startStr === "" && endStr !== "") {
-    // Suffix range: "-500" means last 500 bytes
-    const suffixLength = parseInt(endStr, 10);
-    start = Math.max(0, fileSize - suffixLength);
-    end = fileSize - 1;
-  } else if (startStr !== "" && endStr === "") {
-    // Open-ended: "500-" means from byte 500 to end
-    start = parseInt(startStr, 10);
-    end = Math.min(start + maxChunkBytes - 1, fileSize - 1);
-  } else if (startStr !== "" && endStr !== "") {
-    // Full range: "500-999"
-    start = parseInt(startStr, 10);
-    end = parseInt(endStr, 10);
-
-    if (end - start + 1 > maxChunkBytes) {
-      end = start + maxChunkBytes - 1;
-    }
-  } else {
-    return null;
-  }
-
-  // Validate range
-  if (start > end || start >= fileSize || end >= fileSize) {
-    return null;
-  }
-
-  return { start, end };
 }
 
 /**

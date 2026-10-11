@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
+import { registerTestStorageRoot } from "@/config/test-isolation";
+let unregisterRoot: (() => void) | undefined;
 
 process.env.NODE_ENV = "test";
 process.env.POSTGRES_USER ||= "demo-cast-boundary-test";
@@ -22,6 +24,7 @@ let originalConfig: {
 beforeAll(async () => {
   rmSync(testRoot, { recursive: true, force: true });
   mkdirSync(demoAssetsRoot, { recursive: true });
+  unregisterRoot = registerTestStorageRoot(demoAssetsRoot);
   mkdirSync(staleProductionSession, { recursive: true });
   writeFileSync(join(staleProductionSession, "sentinel.txt"), "private");
   const old = new Date(0);
@@ -43,6 +46,7 @@ afterAll(async () => {
   env.DEMO_MODE = originalConfig.demoMode;
   env.DEMO_ASSETS_DIR = originalConfig.demoAssetsDir;
   env.CAST_TRANSCODE_DIR = originalConfig.castTranscodeDir;
+  unregisterRoot?.();
   rmSync(testRoot, { recursive: true, force: true });
 });
 

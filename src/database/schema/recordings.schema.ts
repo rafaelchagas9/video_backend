@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, doublePrecision, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { videosTable } from "./videos.schema";
 
@@ -196,7 +197,7 @@ export const recorderAutopilotOutcomesTable = pgTable("recorder_autopilot_outcom
  */
 export const recordingLabelTasksTable = pgTable("recording_label_tasks", {
   id: serial("id").primaryKey(),
-  /** recall-audit | versus | refine (retired: a whole-clip yes/no mixed length with worth) */
+  /** recall-audit | versus | version-versus (preference only) | whole-verdict | refine (retired) */
   kind: text("kind").notNull(),
   /** The round the task was drawn in, e.g. recall-audit-1. */
   batch: text("batch").notNull(),
@@ -220,4 +221,12 @@ export const recordingLabelTasksTable = pgTable("recording_label_tasks", {
   reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
   answeredAt: timestamp("answered_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => [uniqueIndex("recording_label_tasks_item").on(table.kind, table.batch, table.videoId, table.startSeconds)]);
+}, (table) => [
+  // A connected comparison round deliberately reuses a clip in different pairs.
+  uniqueIndex("recording_label_tasks_versus_position")
+    .on(table.kind, table.batch, table.position)
+    .where(sql`${table.kind} = 'versus'`),
+  uniqueIndex("recording_label_tasks_nonversus_item")
+    .on(table.kind, table.batch, table.videoId, table.startSeconds)
+    .where(sql`${table.kind} <> 'versus'`),
+]);

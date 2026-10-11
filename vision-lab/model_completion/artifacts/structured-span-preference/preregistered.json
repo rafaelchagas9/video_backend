@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "status": "preregistered_before_real_fit",
+  "policy": {
+    "primary": "span_content_C1",
+    "control": "span_geometry_C1",
+    "C": 1.0,
+    "cohort": "21 complete immutable originals / 10 channels / 1149 validated dense 20s windows; same five incomplete originals excluded from both heads",
+    "target": "Human final selected interval is preferred to label-independent alternative spans; omitted material is not assigned a bad/negative frame label",
+    "features": "Overlap-weighted pooled audio train-fold PCA16 + frozen SigLIP train-fold PCA8 + log(seconds), duration_fraction, start_fraction, end_fraction; geometry control zeros the first24",
+    "pca": "Training-original windows only; every original total1, weighted centering/randomized SVD, seed29, n_iter3; no gold-conditioned frame selection",
+    "scaling": "All28 symmetric gold-minus-alternative features, weighted StandardScaler fit only on training pairs; no centering at inference because pairwise differences cancel means",
+    "candidates": "All legal spans from original endpoints plus every validated dense window start/end, duration >= min(5,original seconds), no duration cap; no held-out gold endpoints injected",
+    "alternatives": "Exactly64 uniformly indexed label-independent grid alternatives per original (or all if fewer); remove exact self-comparison after sampling, do not replace it",
+    "training": "C1 liblinear symmetric logistic, no intercept, max_iter2000, seed29; gold-minus-alternative positive and its negation negative; each original total80 signed sample weight, no class_weight",
+    "decision": "Argmax legal span; score ties within1e-10 prefer original then longer then earlier start/end",
+    "policies": [
+      "identity",
+      "argmax"
+    ],
+    "policy_selection": "Outer5/inner3 whole channels; each fixed family chooses argmax only if inner macro IoU improves identity and retention >=.97 / p10 >=.9, otherwise identity",
+    "gate": "Primary IoU > identity+.02, macro retention >=.97, p10 >=.9, >=3 cuts shortened >=5s; 5000 paired-channel bootstrap lower gain >0 and lower retention >=.97; paired control gain lower >0; exact zero-mass guard",
+    "seconds": 90,
+    "no_new_representations": true,
+    "pooling_limitation": "20s overlapping-window vectors pooled by overlap, not a fresh exact-span encoding; no extrapolation and no claim omitted content is worthless",
+    "production": "Envelope remains disabled pending independent review and runtime parity; no media/GPU/cloud/new labels/DB writes"
+  },
+  "source_sha256": "a25fe895d4ef888b5dfc42cbce0ae2e57d20cfc5be50ff099096808c69642db7",
+  "synthetic_tests": {
+    "path": "structured_span_preference_test.py",
+    "passed": 10,
+    "sha256": "bd2b364d86c73ad01f7bed5ef28279fffcadf9ad0a01d0e69a5440407f2ae57a"
+  },
+  "frozen_input_sha256": {
+    "actual_fine_cohort.json": "89b0f672d79d00ea9401e8b56b633a9459b48292c6b0455d66fb25e32abe78c9",
+    "cohort.json": "95140bf0814fa371f76e9d2797dd83b329210875909076f120336a3764c8664a",
+    "private_snapshot.json": "e94051b6545f1c5efe3d049afe720c8c65ccfce12970ce7da2e9d1f1c393bf2c",
+    "joint-gemma/audio_reuse_manifest.json": "7dc237cabf892430bf72a67c0c69c704fac16cf165408a13309c82b1faebfde1"
+  },
+  "no_real_fit_or_evaluation_yet": true,
+  "external_timeout_backup_seconds": 95
+}

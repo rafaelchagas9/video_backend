@@ -244,6 +244,28 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await first
 
+    async def test_repeated_cancellation_keeps_native_admission_until_completion(self) -> None:
+        engine = BlockingEngine()
+        runtime = VisionRuntime(
+            make_settings(max_concurrent_inferences=1, inference_acquire_timeout_seconds=0.01),
+            engine_factory=lambda: engine,
+        )
+        await runtime.start()
+        self.addAsyncCleanup(runtime.stop)
+        first = asyncio.create_task(runtime.detect(np.zeros((1, 1, 3), dtype=np.uint8)))
+        try:
+            self.assertTrue(await asyncio.to_thread(engine.entered.wait, 1))
+            for _ in range(3):
+                first.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(first.done())
+            with self.assertRaises(RuntimeBusyError):
+                await runtime.detect(np.zeros((1, 1, 3), dtype=np.uint8))
+        finally:
+            engine.release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await first
+
     async def test_initialization_failure_keeps_liveness_but_fails_readiness(self) -> None:
         def fail() -> FakeEngine:
             raise RuntimeError("model unavailable")
@@ -332,6 +354,18 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(captured.exception.detail["code"], code)
             finally:
                 await upload.close()
+
+    async def test_native_image_decoder_errors_return_invalid_image(self) -> None:
+        import cv2
+        upload = make_upload(b"malformed image fixture")
+        try:
+            with patch("vision_service.routes.detect.cv2.imdecode", side_effect=cv2.error("decoder failure")):
+                with self.assertRaises(HTTPException) as failure:
+                    await detect_faces(file=upload, runtime=self.runtime, settings=make_settings())
+            self.assertEqual(failure.exception.status_code, 400)
+            self.assertEqual(failure.exception.detail["code"], "INVALID_IMAGE")
+        finally:
+            await upload.close()
 
     async def test_inference_failure_log_does_not_include_image_or_filename(self) -> None:
         runtime = SimpleNamespace(

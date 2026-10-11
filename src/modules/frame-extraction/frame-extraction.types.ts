@@ -18,6 +18,7 @@ export interface ExtractedFrame {
  * Frame extraction options
  */
 export interface FrameExtractionOptions {
+  signal?: AbortSignal; // Cancel and reap extraction before cleanup
   videoId: number; // Video ID
   videoPath: string; // Path to video file
   videoDuration: number; // Duration in seconds

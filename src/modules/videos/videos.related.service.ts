@@ -14,6 +14,7 @@ import type {
   RelatedVideosResult,
   Video,
 } from "./videos.types";
+import { RelatedEmptyCache } from "./related-empty-cache";
 import { videosService } from "./videos.service";
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -88,9 +89,12 @@ interface RelatedVideoRow {
 type TagFamilyMap = Map<number, Set<number>>;
 
 export class VideosRelatedService {
+  private readonly emptyCache = new RelatedEmptyCache();
   async invalidateForVideos(videoIds: number[], executor: typeof db | DrizzleTransaction = db): Promise<void> {
     const ids = [...new Set(videoIds)];
     if (!ids.length) return;
+    // A changed candidate can create matches for any previously empty source.
+    this.emptyCache.clear();
     await executor.delete(videoRelatedScoresTable).where(or(
       inArray(videoRelatedScoresTable.sourceVideoId, ids),
       inArray(videoRelatedScoresTable.relatedVideoId, ids),
@@ -159,6 +163,13 @@ export class VideosRelatedService {
       };
     }
 
+    if (!options.refresh) {
+      const computedAt = this.emptyCache.get(userId, sourceVideoId);
+      if (computedAt) return {
+        data: [],
+        meta: { computed_at: computedAt.toISOString(), refreshed: false, candidate_count: 0 },
+      };
+    }
     let refreshed = false;
     const cacheState = await this.getCacheState(sourceVideoId);
     const isStale = cacheState.computedAt
@@ -222,7 +233,8 @@ export class VideosRelatedService {
       .orderBy(desc(videoRelatedScoresTable.score))
       .limit(limit);
 
-    const latestComputedAt = rows[0]?.computedAt ?? cacheState.computedAt;
+    const latestComputedAt = rows[0]?.computedAt
+      ?? this.emptyCache.get(userId, sourceVideoId) ?? cacheState.computedAt;
 
     return {
       data: rows.map((row) => ({
@@ -241,6 +253,7 @@ export class VideosRelatedService {
   }
 
   async refreshScores(userId: number, sourceVideoId: number): Promise<void> {
+    const cacheGeneration = this.emptyCache.generation;
     const source = await this.getFeatureRow(userId, sourceVideoId);
     if (!source) {
       await videosService.findById(sourceVideoId, userId);
@@ -254,21 +267,27 @@ export class VideosRelatedService {
       .filter((candidate) => candidate.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    await db
-      .delete(videoRelatedScoresTable)
-      .where(eq(videoRelatedScoresTable.sourceVideoId, sourceVideoId));
-
-    if (scored.length > 0) {
-      const computedAt = new Date();
-      await db.insert(videoRelatedScoresTable).values(
-        scored.map((candidate) => ({
+    const computedAt = new Date();
+    await db.transaction(async (tx) => {
+      // Serialize replacements for this source, including empty replacements.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(74291, ${sourceVideoId}::int)`);
+      await tx.delete(videoRelatedScoresTable)
+        .where(eq(videoRelatedScoresTable.sourceVideoId, sourceVideoId));
+      if (scored.length > 0) {
+        await tx.insert(videoRelatedScoresTable).values(scored.map((candidate) => ({
           sourceVideoId,
           relatedVideoId: candidate.videoId,
           score: candidate.score,
           reasonsJson: JSON.stringify(candidate.reasons),
           computedAt,
-        })),
-      );
+        })));
+      }
+    });
+    if (cacheGeneration === this.emptyCache.generation) {
+      this.emptyCache.forget(userId, sourceVideoId);
+      if (scored.length === 0) {
+        this.emptyCache.remember(userId, sourceVideoId, computedAt.getTime(), cacheGeneration);
+      }
     }
   }
 
@@ -343,29 +362,42 @@ export class VideosRelatedService {
         v.created_at,
         v.updated_at,
         t.id as thumbnail_id,
-        ARRAY_REMOVE(ARRAY_AGG(DISTINCT vt.tag_id), NULL) as tag_ids,
-        ARRAY_REMOVE(ARRAY_AGG(DISTINCT vc.creator_id), NULL) as creator_ids,
-        ARRAY_REMOVE(ARRAY_AGG(DISTINCT vst.studio_id), NULL) as studio_ids,
-        ARRAY_REMOVE(ARRAY_AGG(DISTINCT pv.playlist_id), NULL) as playlist_ids,
+        vt.tag_ids,
+        vc.creator_ids,
+        vst.studio_ids,
+        pv.playlist_ids,
         COALESCE(vs.play_count, 0) as play_count,
         vs.last_played_at,
         EXISTS (
           SELECT 1 FROM favorites f
           WHERE f.user_id = ${userId} AND f.video_id = v.id
         ) as is_favorite,
-        AVG(r.rating) as avg_rating
+        r.avg_rating
       FROM videos v
       LEFT JOIN (
         SELECT DISTINCT ON (video_id) id, video_id FROM thumbnails
       ) t ON t.video_id = v.id
-      LEFT JOIN video_tags vt ON vt.video_id = v.id
-      LEFT JOIN video_creators vc ON vc.video_id = v.id
-      LEFT JOIN video_studios vst ON vst.video_id = v.id
-      LEFT JOIN playlist_videos pv ON pv.video_id = v.id
+      LEFT JOIN (
+        SELECT video_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT tag_id), NULL) as tag_ids
+        FROM video_tags GROUP BY video_id
+      ) vt ON vt.video_id = v.id
+      LEFT JOIN (
+        SELECT video_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT creator_id), NULL) as creator_ids
+        FROM video_creators GROUP BY video_id
+      ) vc ON vc.video_id = v.id
+      LEFT JOIN (
+        SELECT video_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT studio_id), NULL) as studio_ids
+        FROM video_studios GROUP BY video_id
+      ) vst ON vst.video_id = v.id
+      LEFT JOIN (
+        SELECT video_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT playlist_id), NULL) as playlist_ids
+        FROM playlist_videos GROUP BY video_id
+      ) pv ON pv.video_id = v.id
       LEFT JOIN video_stats vs ON vs.video_id = v.id AND vs.user_id = ${userId}
-      LEFT JOIN ratings r ON r.video_id = v.id
+      LEFT JOIN (
+        SELECT video_id, AVG(rating) as avg_rating FROM ratings GROUP BY video_id
+      ) r ON r.video_id = v.id
       WHERE ${whereCondition}
-      GROUP BY v.id, t.id, vs.play_count, vs.last_played_at
     `);
 
     return Array.isArray(rows) ? (rows as unknown as RelatedFeatureRow[]) : [];

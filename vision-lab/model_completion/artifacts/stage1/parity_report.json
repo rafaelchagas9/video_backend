@@ -1,0 +1,122 @@
+{
+  "production_schema_validated": true,
+  "production_python_ts_parity": true,
+  "tested_recordings": 5,
+  "tested_duration_cases": 10,
+  "runtime": {
+    "detector": "trained",
+    "sensitivity": 1.0,
+    "threshold": 0.45000000000000007,
+    "highlight_states": [
+      "nude",
+      "explicit"
+    ],
+    "matches_evaluated_threshold": true
+  },
+  "checks": [
+    {
+      "sample": "s000",
+      "duration_seconds": 1459.233,
+      "clips": 1,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s000",
+      "duration_seconds": 1458.25,
+      "clips": 1,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s001",
+      "duration_seconds": 1816,
+      "clips": 1,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s001",
+      "duration_seconds": 1813.25,
+      "clips": 1,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s002",
+      "duration_seconds": 2469.345,
+      "clips": 1,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s002",
+      "duration_seconds": 2468.25,
+      "clips": 1,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s003",
+      "duration_seconds": 82.001,
+      "clips": 1,
+      "curve_points": 16,
+      "exact_match": true
+    },
+    {
+      "sample": "s003",
+      "duration_seconds": 78.25,
+      "clips": 1,
+      "curve_points": 16,
+      "exact_match": true
+    },
+    {
+      "sample": "s004",
+      "duration_seconds": 7251.809,
+      "clips": 3,
+      "curve_points": 240,
+      "exact_match": true
+    },
+    {
+      "sample": "s004",
+      "duration_seconds": 7248.25,
+      "clips": 3,
+      "curve_points": 240,
+      "exact_match": true
+    }
+  ],
+  "positive_audit_coverage": [
+    {
+      "audit": "a014",
+      "window_seconds": 240.0,
+      "candidate_covered_seconds": 240.0,
+      "coverage_fraction": 1.0,
+      "has_proposal_overlap": true,
+      "stratum": "new-time"
+    },
+    {
+      "audit": "a030",
+      "window_seconds": 240.0,
+      "candidate_covered_seconds": 240.0,
+      "coverage_fraction": 1.0,
+      "has_proposal_overlap": true,
+      "stratum": "new-time"
+    },
+    {
+      "audit": "a040",
+      "window_seconds": 240.0,
+      "candidate_covered_seconds": 240.0,
+      "coverage_fraction": 1.0,
+      "has_proposal_overlap": true,
+      "stratum": "new-time"
+    }
+  ],
+  "positive_audits_covered": 3,
+  "positive_audits_total": 3,
+  "production_changed": false,
+  "candidate_sha256": "da968dbf33bc6308f64e67749aea6efcec167305ce8fe3fe569f353c2b0201f4",
+  "limitations": [
+    "Duration fixtures use saved numeric feedback durations and a fractional synthetic end cap; raw source durations were not probed.",
+    "Positive audit windows identify useful stretches, not exact frame-by-frame useful-event timestamps."
+  ]
+}

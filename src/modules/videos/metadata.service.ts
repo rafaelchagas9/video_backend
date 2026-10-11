@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import ffmpeg from "fluent-ffmpeg";
+import { runMediaProcess } from "@/utils/media-process";
 import { env } from "@/config/env";
 import { logger } from "@/utils/logger";
 import type { VideoMetadata } from "./videos.types";
@@ -15,10 +14,6 @@ const parseNullableNumber = (value: unknown): number | null => {
   return null;
 };
 
-// Other media services still use fluent-ffmpeg's shared executable configuration.
-ffmpeg.setFfmpegPath(env.FFMPEG_PATH);
-ffmpeg.setFfprobePath(env.FFPROBE_PATH);
-
 export class MetadataService {
   constructor(private readonly probeTimeoutMs = 30_000) {}
 
@@ -29,8 +24,8 @@ export class MetadataService {
     if (signal?.aborted) throw new Error("Metadata inspection cancelled");
     const startTime = Date.now();
 
-    return new Promise((resolve, reject) => {
-      const child = spawn(
+    try {
+      const { stdout } = await runMediaProcess(
         env.FFPROBE_PATH,
         [
           "-v",
@@ -41,90 +36,49 @@ export class MetadataService {
           "json",
           filePath,
         ],
-        { stdio: ["ignore", "pipe", "pipe"] }
+        { label: "Metadata inspection", timeoutMs: this.probeTimeoutMs, signal }
       );
-      let output = "";
-      let failure: Error | undefined;
-      const stop = (message: string) => {
-        failure ??= new Error(message);
-        if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+      const duration = Date.now() - startTime;
+      const metadata = JSON.parse(stdout);
+      const videoStream = metadata.streams.find(
+        (s: any) => s.codec_type === "video"
+      );
+      const audioStream = metadata.streams.find(
+        (s: any) => s.codec_type === "audio"
+      );
+
+      const result: VideoMetadata = {
+        duration_seconds: parseNullableNumber(metadata.format.duration),
+        width: videoStream?.width || null,
+        height: videoStream?.height || null,
+        codec: videoStream?.codec_name || null,
+        bitrate: metadata.format.bit_rate
+          ? parseInt(metadata.format.bit_rate.toString())
+          : null,
+        fps: this.extractFps(videoStream),
+        audio_codec: audioStream?.codec_name || null,
       };
-      const abort = () => stop("Metadata inspection cancelled");
-      const timeout = setTimeout(
-        () => stop("Metadata inspection timed out"),
-        this.probeTimeoutMs
+
+      logger.debug(
+        {
+          filePath,
+          durationMs: duration,
+          metadata: {
+            duration: result.duration_seconds,
+            resolution: `${result.width}x${result.height}`,
+            codec: result.codec,
+          },
+        },
+        `ffprobe completed in ${duration}ms`
       );
-      timeout.unref();
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) abort();
-      child.stdout.on("data", (chunk: Buffer) => {
-        if (failure) return;
-        output += chunk.toString();
-        if (output.length > 1_048_576)
-          stop("Metadata inspection output is too large");
-      });
-      child.stderr.resume();
-      child.on("error", () => {
-        failure ??= new Error("Metadata inspection could not start");
-      });
-      child.on("close", (code) => {
-        clearTimeout(timeout);
-        signal?.removeEventListener("abort", abort);
-        const duration = Date.now() - startTime;
-
-        if (failure || code !== 0) {
-          const error = failure ?? new Error("Metadata inspection failed");
-          logger.error(
-            { filePath, error, durationMs: duration },
-            `ffprobe failed after ${duration}ms`
-          );
-          return reject(error);
-        }
-
-        try {
-          const metadata = JSON.parse(output);
-          const videoStream = metadata.streams.find(
-            (s: any) => s.codec_type === "video"
-          );
-          const audioStream = metadata.streams.find(
-            (s: any) => s.codec_type === "audio"
-          );
-
-          const result: VideoMetadata = {
-            duration_seconds: parseNullableNumber(metadata.format.duration),
-            width: videoStream?.width || null,
-            height: videoStream?.height || null,
-            codec: videoStream?.codec_name || null,
-            bitrate: metadata.format.bit_rate
-              ? parseInt(metadata.format.bit_rate.toString())
-              : null,
-            fps: this.extractFps(videoStream),
-            audio_codec: audioStream?.codec_name || null,
-          };
-
-          logger.debug(
-            {
-              filePath,
-              durationMs: duration,
-              metadata: {
-                duration: result.duration_seconds,
-                resolution: `${result.width}x${result.height}`,
-                codec: result.codec,
-              },
-            },
-            `ffprobe completed in ${duration}ms`
-          );
-
-          resolve(result);
-        } catch (error) {
-          logger.error(
-            { filePath, error, durationMs: duration },
-            `Metadata parsing failed after ${duration}ms`
-          );
-          reject(error);
-        }
-      });
-    });
+      return result;
+    } catch (error) {
+      logger.error(
+        { filePath, error, durationMs: Date.now() - startTime },
+        "Metadata inspection failed"
+      );
+      throw error;
+    }
   }
 
   private extractFps(stream: any): number | null {

@@ -80,6 +80,11 @@ export function createDemoFixtureFiles(root: string) {
       bitrate: 1000000,
       audioCodec: "opus",
       title,
+      stats: index < 3 ? {
+        playCount: 1, totalWatchSeconds: 120, lastPositionSeconds: 60,
+        lastPlayedAt: "2026-01-02T12:00:00.000Z",
+        lastWatchAt: "2026-01-02T12:00:00.000Z",
+      } : {},
       creators: [`Creator ${(index % 42) + 1}`],
       studios: index === 43 ? [] : [`Studio ${(index % 21) + 1}`],
       tags: [document.tags[index % 46]!.name],

@@ -2,9 +2,9 @@
 
 import logging
 
-import httpx
 from fastapi import APIRouter
 
+from ..http_client import http_client
 from ..config import get_settings
 from ..models import BatchEnrichRequest, Candidate, EnrichRequest, EnrichResponse
 from ..sources import build_sources, stash_bridge
@@ -44,13 +44,13 @@ async def enrich(request: EnrichRequest) -> EnrichResponse:
         available = {s.name for s in sources}
         errors.extend(f"{name}: source is unavailable or incompatible with this operation" for name in request.sources if name not in available)
 
-    async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+    async with http_client(timeout=settings.request_timeout_seconds) as client:
         for source in sources:
             try:
                 found = await source.search(request, client)
                 candidates.extend(found)
                 sources_used.append(source.name)
-                logger.info("source=%s name=%r candidates=%d", source.name, request.name, len(found))
+                logger.debug("source=%s candidates=%d", source.name, len(found))
             except Exception as exc:  # noqa: BLE001 - report, don't abort the run
                 errors.append(_error(source.name, exc))
                 logger.warning("source failed: %s", errors[-1])
@@ -79,7 +79,7 @@ async def enrich_batch(batch: BatchEnrichRequest) -> list[EnrichResponse]:
     scene_ids = [r.stash_scene_id or "" for r in batch.requests]
     limit = max(r.limit for r in batch.requests)
 
-    async with httpx.AsyncClient(timeout=max(settings.request_timeout_seconds, 120)) as client:
+    async with http_client(timeout=max(settings.request_timeout_seconds, 120)) as client:
         locals_by_scene = {}
         for request in batch.requests:
             if request.stash_scene_id:
@@ -88,6 +88,7 @@ async def enrich_batch(batch: BatchEnrichRequest) -> list[EnrichResponse]:
             try:
                 found = await source.search_scenes_batch(client, [s for s in scene_ids if s], locals_by_scene, limit)
             except Exception as exc:  # noqa: BLE001
+                logger.warning("source failed: %s", _error(source.name, exc))
                 for response in responses:
                     response.errors.append(_error(source.name, exc))
                 continue

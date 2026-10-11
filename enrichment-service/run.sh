@@ -8,7 +8,7 @@ cd "${SCRIPT_DIR}"
 
 # Sync deps if the venv is missing, then launch.
 if [ ! -d ".venv" ]; then
-  uv sync
+  uv sync --frozen
 fi
 
-exec uv run python -m enrichment_service.main
+exec uv run --frozen python -m enrichment_service.main

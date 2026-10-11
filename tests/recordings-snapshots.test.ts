@@ -105,4 +105,27 @@ describe("reviewed recording training snapshots", () => {
     await expect(store.save(review, index, load)).rejects.toThrow("incomplete or incompatible");
     expect(loads).toBe(1);
   });
+  it("freezes validated numeric audio alongside original decisions and preserves it when source access is gone", async () => {
+    const store = await archive(), embedding = Array(768).fill(0); embedding[0] = 1;
+    const audio = { modelRevision: "google/embeddinggemma-2@914f7f89142e33e77833254d9c9b90c3cef7303b", proposals: [{ id: "c1", start_seconds: 0, end_seconds: 5, embedding }] };
+    const first = await store.save(review, index, async () => frames(), async () => audio);
+    expect(first.audio_features?.bytes).toBeLessThan(1024 * 1024);
+    const bytes = await readFile(join(store.root, "1", first.audio_features!.file));
+    expect(JSON.parse(bytes.toString())).toEqual(audio);
+    expect(bytes.toString()).not.toContain("source_path");
+    const deleted = await store.save({ ...review, event: "before-delete" }, index, async () => { throw new Error("features already frozen"); });
+    expect(deleted.audio_features).toEqual(first.audio_features);
+    expect(deleted.clips).toEqual(review.clips);
+  });
+  it("retains the original when an archived audio checksum fails or incoming ranges are incompatible", async () => {
+    const store = await archive(), embedding = Array(768).fill(0); embedding[0] = 1;
+    const audio = { modelRevision: "google/embeddinggemma-2@914f7f89142e33e77833254d9c9b90c3cef7303b", proposals: [{ id: "c1", start_seconds: 0, end_seconds: 5, embedding }] };
+    const first = await store.save(review, index, async () => frames(), async () => audio), before = await readFile(manifestPath(store));
+    await expect(store.save(review, index, async () => frames(), async () => ({ ...audio, proposals: [{ ...audio.proposals[0]!, end_seconds: 9 }] }))).rejects.toThrow("original proposals");
+    expect(await readFile(manifestPath(store))).toEqual(before);
+    const path = join(store.root, "1", first.audio_features!.file), bytes = await readFile(path); bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1; await writeFile(path, bytes);
+    await expect(store.save({ ...review, event: "before-delete" }, index, async () => frames())).rejects.toThrow("original must be retained");
+    expect(await readFile(manifestPath(store))).toEqual(before);
+  });
+
 });

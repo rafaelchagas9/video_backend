@@ -200,38 +200,19 @@ export type SeededVideo = {
 };
 
 function installExternalServiceMocks(): void {
-  mock.module("fluent-ffmpeg", () => ({
-    default: {
-      setFfmpegPath: mock(() => undefined),
-      setFfprobePath: mock(() => undefined),
-      ffprobe: mock(
-        (
-          _path: string,
-          callback: (error: Error | null, metadata: unknown) => void
-        ) =>
-          callback(null, {
-            streams: [
-              {
-                codec_type: "video",
-                codec_name: "h264",
-                width: 1920,
-                height: 1080,
-                r_frame_rate: "30/1",
-              },
-              {
-                codec_type: "audio",
-                codec_name: "aac",
-                channels: 2,
-                sample_rate: "48000",
-              },
-            ],
-            format: {
-              duration: "120",
-              bit_rate: "8000000",
-            },
-          })
-      ),
-    },
+  mock.module("@/utils/media-process", () => ({
+    runMediaProcess: mock(async () => ({
+      stdout: JSON.stringify({
+        streams: [
+          { codec_type: "video", codec_name: "h264", width: 1920,
+            height: 1080, r_frame_rate: "30/1" },
+          { codec_type: "audio", codec_name: "aac", channels: 2,
+            sample_rate: "48000" },
+        ],
+        format: { duration: "120", bit_rate: "8000000" },
+      }),
+      stderr: "",
+    })),
   }));
 
   mock.module("@/modules/directories/watcher.service", () => ({
@@ -686,6 +667,7 @@ function installExternalServiceMocks(): void {
     sanitizeTelemetryUrl: mock((url: string) => url),
     shouldCaptureLog: mock(() => false),
     shouldTrackRequestMetrics: mock(() => false),
+    getRequestTelemetryLogLevel: mock(() => null),
     shutdownTelemetry: mock(async () => undefined),
   }));
 }

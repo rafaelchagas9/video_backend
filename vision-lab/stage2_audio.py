@@ -71,10 +71,11 @@ def sound_features(clip: dd.Clip) -> list[float] | None:
 
 def held_out(X: np.ndarray, y: np.ndarray, folds: np.ndarray) -> np.ndarray:
     out = np.zeros(len(y))
-    mean, std = X.mean(0), X.std(0) + 1e-9
-    Z = (X - mean) / std
     for fold in range(FOLDS):
         train = folds != fold
+        # Held-out channels must not influence normalization.
+        mean, std = X[train].mean(0), X[train].std(0) + 1e-9
+        Z = (X - mean) / std
         out[~train] = LogisticRegression(C=1.0).fit(Z[train], y[train]).decision_function(Z[~train])
     return out
 

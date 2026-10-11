@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     max_batch_bytes: int = Field(default=32 * 1024 * 1024, ge=1)
     max_concurrent_inferences: int = Field(default=1, ge=1)
     inference_acquire_timeout_seconds: float = Field(default=0.1, gt=0)
+    model_idle_timeout_seconds: float = Field(default=1800, ge=0, allow_inf_nan=False)
 
     # Optional backend-to-service authentication. Disabled when unset.
     internal_api_secret: SecretStr | None = None

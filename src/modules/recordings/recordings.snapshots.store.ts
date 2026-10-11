@@ -1,5 +1,6 @@
 /** Read existing stored embeddings only; this path never invokes the vision service or reads media. */
 import { resolve } from "node:path";
+import { stat } from "node:fs/promises";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
@@ -7,20 +8,35 @@ import { videoVisualIndexTable, type RecordingClip, type RecordingProposal } fro
 import type { Video } from "@/modules/videos/videos.types";
 import { BadRequestError } from "@/utils/errors";
 import { LABEL_TYPE, type SaveContext } from "./recordings.feedback";
+import { readRecordingAudioCache, RECORDING_AUDIO_PIN } from "./recordings.audio-cache";
 import { usernameFromFileName } from "./recordings.goondvr";
 import { RecordingTrainingSnapshots, snapshotFeatureIdentity, type SnapshotIndex, type SnapshotReview } from "./recordings.snapshots";
+
+function storageRoot(): string {
+  const root = env.NODE_ENV === "test" ? process.env.TEST_STORAGE_ROOT : process.cwd();
+  if (!root) throw new Error("Training snapshot tests require TEST_STORAGE_ROOT");
+  return resolve(root, "data/recording-training-snapshots");
+}
+
+/** Existing archives protect legacy decisions that predate savedAt. Existence is not integrity proof. */
+export async function hasRecordingTrainingSnapshot(review: Pick<Review, "videoId" | "analyzedAt">): Promise<boolean> {
+  const path = resolve(storageRoot(), String(review.videoId), `review-${review.analyzedAt.getTime()}.json`);
+  return stat(path).then(() => true).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  });
+}
 
 let archive: RecordingTrainingSnapshots | null = null;
 function snapshots(): RecordingTrainingSnapshots {
   if (!archive) {
     // Production uses data/. Tests must never publish snapshots in the real workspace.
-    const root = env.NODE_ENV === "test" ? process.env.TEST_STORAGE_ROOT : process.cwd();
-    if (!root) throw new Error("Training snapshot tests require TEST_STORAGE_ROOT");
-    archive = new RecordingTrainingSnapshots(resolve(root, "data/recording-training-snapshots"));
+    archive = new RecordingTrainingSnapshots(storageRoot());
   }
   return archive;
 }
 
+export type SnapshotVideo = Pick<Video, "id" | "file_name" | "file_path" | "file_hash" | "file_size_bytes" | "duration_seconds" | "width" | "height" | "codec" | "audio_codec" | "fps">;
 interface Review {
   videoId: number;
   analyzedAt: Date;
@@ -37,7 +53,7 @@ const indexOf = (row: typeof videoVisualIndexTable.$inferSelect): SnapshotIndex 
 });
 
 /** `save` carries the Save's context; later events (render, delete) keep the manifest's but do not know it. */
-export async function preserveRecordingTrainingSnapshot(review: Review, video: Video, event: SnapshotReview["event"], save: SaveContext | null = null): Promise<void> {
+export async function preserveRecordingTrainingSnapshot(review: Review, video: SnapshotVideo, event: SnapshotReview["event"], save: SaveContext | null = null): Promise<void> {
   if (env.DEMO_MODE) return;
   const source = { videoId: video.id, fileName: video.file_name, fileHash: video.file_hash,
     fileSizeBytes: video.file_size_bytes, durationSeconds: video.duration_seconds, width: video.width,
@@ -64,6 +80,11 @@ export async function preserveRecordingTrainingSnapshot(review: Review, video: V
         return { timestamps: rows.map((frame) => Number(frame.timestamp_seconds)),
           vectors: rows.map((frame) => Float32Array.from(JSON.parse(frame.embedding) as number[])) };
       });
+    }, async () => {
+      const proposals = review.proposals ?? review.clips.map((clip) => ({ ...clip, ...(clip.detected ?? {}) }));
+      const cached = await readRecordingAudioCache({ identity: { video_id: video.id, analyzed_at: review.analyzedAt.toISOString(), index_model_revision: index.modelRevision, storyboard_generated_at: index.storyboardGeneratedAt, frame_count: index.frameCount, audio_model_revision: RECORDING_AUDIO_PIN }, proposals, source: { path: video.file_path, sizeBytes: video.file_size_bytes }, freshSource: event === "before-delete" });
+      if (!cached.embeddings.size) return null;
+      return { modelRevision: RECORDING_AUDIO_PIN, proposals: proposals.filter((proposal) => cached.embeddings.has(proposal.id)).map(({ id, start_seconds, end_seconds }) => ({ id, start_seconds, end_seconds, embedding: cached.embeddings.get(id)! })) };
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "snapshot storage is unavailable";

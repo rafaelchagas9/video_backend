@@ -1,4 +1,4 @@
-import { eq, inArray, and, sql, desc, asc } from "drizzle-orm";
+import { eq, inArray, and, sql, desc, asc, type SQL } from "drizzle-orm";
 import { db } from "@/config/drizzle";
 import {
   videosTable,
@@ -21,6 +21,7 @@ import { videosDemoService } from "./videos.demo.service";
 import { videoRelationshipsService } from "./videos.relationships.service";
 import { editsDemoService } from "@/modules/edits/edits.demo.service";
 import { demoRepository } from "@/database/demo";
+import { preserveRecordingReviewsBeforeDeletion } from "@/modules/recordings/recordings.deletion-preflight";
 import { storyboardAssetPaths } from "@/modules/storyboards/storyboards.pages";
 
 /**
@@ -54,7 +55,12 @@ export class VideosBulkService {
    * Note: This should be called from the main videosService.delete() method
    * to ensure proper file cleanup
    */
-  async bulkDelete(ids: number[]): Promise<void> {
+  async bulkDelete(ids: number[], options: {
+    /** Internal archival cleanup: the recorder removes its source after the active-job FK guard. */
+    removeSource?: (video: { id: number; filePath: string; fileName: string }) => Promise<void>;
+    /** Trusted internal callers can bind deletion to the exact reviewed catalog generation. */
+    catalogGuard?: SQL;
+  } = {}): Promise<void> {
     if (ids.length === 0) return;
     await this.assertNoActiveEditJobs(ids);
     if (env.DEMO_MODE) {
@@ -63,10 +69,11 @@ export class VideosBulkService {
     }
 
     try {
+      await preserveRecordingReviewsBeforeDeletion(ids);
       // Reject the entire request before touching any database row or file.
       // 1. Fetch source file paths for the videos being deleted
       const videos = await db
-        .select({ filePath: videosTable.filePath })
+        .select({ id: videosTable.id, filePath: videosTable.filePath, fileName: videosTable.fileName })
         .from(videosTable)
         .where(inArray(videosTable.id, ids));
 
@@ -75,7 +82,27 @@ export class VideosBulkService {
 
       // 3. Delete catalog rows first. The active-video FK is the race-safe
       // backstop: no physical file is touched if a job became active meanwhile.
-      await db.delete(videosTable).where(inArray(videosTable.id, ids));
+      if (options.catalogGuard) {
+        await db.transaction(async (tx) => {
+          // Lock the parent and existing review before checking the next statement's
+          // generation predicate; a concurrent Save must complete first or wait.
+          await tx.execute(sql`SELECT id FROM videos WHERE id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)}) FOR UPDATE`);
+          await tx.execute(sql`SELECT video_id FROM recording_reviews WHERE video_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)}) FOR UPDATE`);
+          const deleted = await tx.delete(videosTable)
+            .where(and(inArray(videosTable.id, ids), options.catalogGuard))
+            .returning({ id: videosTable.id });
+          if (deleted.length !== videos.length)
+            throw new ConflictError("The recording changed during archival; its original is retained");
+        });
+      } else {
+        await db.delete(videosTable).where(inArray(videosTable.id, ids));
+      }
+
+      // Recorder-owned files must still exist when its quota counters are updated.
+      // A failure leaves the physical source intact for the archival retry receipt.
+      if (options.removeSource) {
+        for (const video of videos) await options.removeSource(video);
+      }
 
       // 4. Delete source and derived files (no-op when already unavailable).
       const fs = await import("fs");

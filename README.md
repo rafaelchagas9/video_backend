@@ -105,7 +105,10 @@ on excluded routes, independently of this setting. HTTP diagnostic logs retain
 failures and requests taking at least two seconds; successful playback streams,
 Cast assets, hover video previews, SSE and WebSockets are excluded from slow
 request logging because their response lifetime can include playback. Existing
-application logs, exception capture and `POSTHOG_LOG_LEVEL` remain unchanged.
+application exception capture remains enabled. `POSTHOG_LOG_LEVEL` defaults to
+`warn`; routine Fastify request logs are disabled, and each retained HTTP
+diagnostic goes through the application logger once. Explicit debug/info logging
+can still be enabled when investigating an incident.
 
 ## Demo Mode
 
@@ -194,7 +197,21 @@ bun run test:files -- tests/example.test.ts tests/integration/example.integratio
 
 `bun run test:unit` and `bun run test:integration` also isolate every file in a
 separate process. Test-mode PostgreSQL access fails closed unless the active
-target is the loopback `test_user@conversor_video_test` database.
+target is the loopback `test_user@conversor_video_test` database. Each file gets
+fresh temporary media/demo directories, synthetic fixtures, disabled telemetry
+credentials and unreachable default service endpoints; cleanup runs afterward.
+Never point tests at a personal library or a deployed service.
+
+For an additional network boundary around unit tests on Linux:
+
+```bash
+unshare --user --map-root-user --net bash -c 'ip link set lo up && bun run test:unit'
+```
+
+Integration helpers create disposable PostgreSQL containers without library
+mounts. See the [vision offline runner](vision-service/README.md) for its separate
+model and network isolation. The [upgrade notes](BACKEND_UPGRADE.md) document the
+checks performed for this change.
 
 ## API
 

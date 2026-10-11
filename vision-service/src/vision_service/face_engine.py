@@ -1,6 +1,8 @@
 """Face detection and embedding extraction engine using InsightFace."""
 
+import hashlib
 import logging
+from pathlib import Path
 import time
 
 import numpy as np
@@ -199,6 +201,37 @@ class FaceEngine:
             }
             for face in faces
         ]
+
+    def observe_visibility(self, image: np.ndarray) -> dict:
+        """Detection only on the existing GPU session; never recognize identities.
+
+        Explicit 640 input matches the experimental SCRFD preprocessing recipe.
+        A CPU-only session is an unavailable observation, not an observed negative.
+        Shared runtime admission serializes this call with face recognition.
+        """
+        detector = self.app_high.det_model
+        providers = detector.session.get_providers()
+        if not any(name in {"MIGraphXExecutionProvider", "CUDAExecutionProvider", "ROCMExecutionProvider", "TensorrtExecutionProvider", "DmlExecutionProvider"} for name in providers):
+            raise RuntimeError("Face visibility requires the existing GPU detector")
+        if detector.det_thresh != 0.5 or detector.nms_thresh != 0.4:
+            raise RuntimeError("Face visibility detector thresholds differ")
+        model_path = Path(detector.model_file)
+        model_sha = getattr(self, "_visibility_model_sha", None)
+        if model_sha is None:
+            model_sha = hashlib.sha256(model_path.read_bytes()).hexdigest()
+            self._visibility_model_sha = model_sha
+        if model_sha != "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91":
+            raise RuntimeError("Face visibility model bytes differ")
+        boxes, _landmarks = detector.detect(image, input_size=(640, 640))
+        scores = [float(box[4]) for box in boxes]
+        if any(not np.isfinite(score) or not 0.5 <= score <= 1 for score in scores):
+            raise ValueError("Face visibility confidence is invalid")
+        return {
+            "detected": bool(scores), "max_confidence": max(scores, default=0.0),
+            "model_sha256": model_sha, "input_size": [640, 640],
+            "confidence": 0.5, "nms": 0.4, "providers": providers,
+            "identity_embeddings": False, "service": "shared-vision",
+        }
 
     def get_embedding_dimension(self) -> int:
         recognition = self.app_high.models.get("recognition")

@@ -303,6 +303,10 @@ allowed DELETE /api/videos/{id}/preview
 allowed GET /api/visual-search/status
 allowed GET /api/discovery/home
 allowed GET /api/recordings/
+blocked GET /api/recordings/processing http-contract
+blocked POST /api/recordings/processing http-contract
+allowed GET /api/recordings/label-tasks
+allowed PUT /api/recordings/label-tasks/{taskId}
 allowed GET /api/recordings/feedback
 allowed GET /api/recordings/settings
 allowed GET /api/recordings/autopilot

@@ -1,4 +1,6 @@
 import { redis } from "bun";
+import { env } from "@/config/env";
+import { guardDefaultQueueClient } from "@/config/test-isolation";
 import { logger } from "@/utils/logger";
 import { captureTelemetryException } from "@/utils/telemetry";
 import type { EditQueuePayload } from "./edits.types";
@@ -47,7 +49,7 @@ export class EditsQueue {
   private readonly activeControllers = new Map<number, AbortController>();
   private readonly activeRuns = new Set<Promise<void>>();
 
-  constructor(private readonly redisClient: EditQueueRedisClient = redis) {}
+  constructor(private readonly redisClient: EditQueueRedisClient = guardDefaultQueueClient(redis, () => process.env.NODE_ENV === "test" || env.NODE_ENV === "test" ? "test" : env.NODE_ENV)) {}
 
   async enqueue(payload: EditQueuePayload): Promise<void> {
     await this.redisClient.send("LPUSH", [QUEUE_KEY, JSON.stringify(payload)]);

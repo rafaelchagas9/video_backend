@@ -312,6 +312,16 @@ async def analyze(
             f"Batch exceeds the {settings.max_batch_bytes} byte limit",
         )
 
+    async with runtime.activity(*parsed.capabilities):
+        return await _analyze_uploads(parsed, upload_items, runtime, settings)
+
+
+async def _analyze_uploads(
+    parsed: AnalyzeManifest,
+    upload_items: list[_UploadItem],
+    runtime: VisionRuntime,
+    settings: Settings,
+) -> AnalyzeResponse:
     buffered: list[_BufferedItem] = []
     for upload_item in upload_items:
         item = upload_item.item

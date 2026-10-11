@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "kind": "observed_channel_partial_order_v1",
+  "policy": "current-acceptability-versus-v2",
+  "semantics_sha256": "4123cea0dabb1f7011e4d61952cc6b057924985c1af420c3362d1c87185fff2c",
+  "status": "source_audit_before_real_export",
+  "source_sha256": "ac440f78019ca709ec4a3eb97d0ca6950e5a6c380639fc5e3e41af86feca89c5",
+  "test_sha256": "2b7a9576d928414cd50bb67bcc52984b69b149d0dc81c0f221f7a111d2ab1616",
+  "synthetic_tests_passed": 8,
+  "expected": {
+    "observed_sides": 40,
+    "current_accepted": 36,
+    "current_rejected": 4,
+    "strict_edges": 8,
+    "strict_edge_channels": 7,
+    "independent_saved_cuts": 28
+  },
+  "identity": "Exact shared v2 task/side/offered range; feedback id/video/clip/frozen analysis generation; canonical same-channel private join; current frozen visual index recorded privately without claiming it is task-time index",
+  "scope": "Only saved direct comparisons; no trained model, probabilities, inferred complete/transitive order, future replacement or permanent-storage label",
+  "output": "Pseudonymous numeric training receipt plus separate private identity mapping, both0600 within0700 directory; immutable outputs; no source paths",
+  "failure": "Unknown source/side/generation/range/channel, contradiction, duplicate edge, cycle or changed output fails closed"
+}

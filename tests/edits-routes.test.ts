@@ -120,39 +120,22 @@ mock.module("@/modules/edits/edits.service", () => ({
 mock.module("@/modules/edits/edits.demo.service", () => ({
   editsDemoService: {},
 }));
-mock.module("fluent-ffmpeg", () => ({
-  default: {
-    ffprobe: mock(
-      (
-        _path: string,
-        callback: (
-          error: Error | null,
-          metadata: {
-            streams: Array<{
-              codec_type: string;
-              codec_name: string;
-              channels: number;
-              sample_rate: string;
-              start_time: string;
-              tags: { DURATION: string };
-            }>;
-          }
-        ) => void
-      ) =>
-        callback(null, {
-          streams: [
-            {
-              codec_type: "audio",
-              codec_name: "aac",
-              channels: 2,
-              sample_rate: "48000",
-              start_time: "0",
-              tags: { DURATION: "00:02:00.000" },
-            },
-          ],
-        })
-    ),
-  },
+mock.module("@/utils/media-process", () => ({
+  runMediaProcess: mock(async () => ({
+    stdout: JSON.stringify({
+      streams: [
+        {
+          codec_type: "audio",
+          codec_name: "aac",
+          channels: 2,
+          sample_rate: "48000",
+          start_time: "0",
+          tags: { DURATION: "00:02:00.000" },
+        },
+      ],
+    }),
+    stderr: "",
+  })),
 }));
 
 describe("edit HTTP contract", () => {

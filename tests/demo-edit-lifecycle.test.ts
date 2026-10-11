@@ -31,7 +31,9 @@ mock.module("@/modules/edits/edits.processor", () => ({
   editsProcessor: forbiddenService,
   EditsProcessor: productionAccess,
 }));
-mock.module("fluent-ffmpeg", () => ({ default: productionAccess }));
+mock.module("@/utils/media-process", () => ({
+  runMediaProcess: productionAccess,
+}));
 
 const databasePath = `/tmp/conversor-video-demo-edits-${process.pid}.sqlite`;
 let closeDemoDatabase: () => void;

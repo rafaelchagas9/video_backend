@@ -93,6 +93,7 @@ export async function buildServer() {
   const fastify = Fastify({
     loggerInstance: logger,
     requestIdHeader: "x-request-id",
+    logController: new Fastify.LogController({ disableRequestLogging: true }),
   });
 
   // Set up Zod type provider for schema validation and OpenAPI generation
@@ -109,6 +110,8 @@ export async function buildServer() {
     recorderRelay.stop();
     const { recorderAutopilot } = await import("./modules/recordings/recordings.autopilot");
     recorderAutopilot.stop();
+    const { recordingsProcessing } = await import("./modules/recordings/recordings.processing");
+    recordingsProcessing.stop();
     await castTranscodingService.stop();
 
     if (!env.DEMO_MODE) {
@@ -314,9 +317,11 @@ export async function buildServer() {
   // Register the demo privacy gate after global request plugins so a blocked
   // generated HEAD route cannot send its 403 before Helmet/CORS set headers.
   // It remains an onRequest hook and therefore still runs before parsing,
-  // validation, authentication, and every route handler.
-  fastify.addHook("onRequest", async (request, reply) => {
+  // validation, authentication, and every route handler. Blocked paths never
+  // invoke done, so no async hook continuation can enter a production handler.
+  fastify.addHook("onRequest", (request, reply, done) => {
     if (!env.DEMO_MODE || isDemoRequestAllowed(request.method, request.url)) {
+      done();
       return;
     }
 
@@ -347,7 +352,8 @@ export async function buildServer() {
       return;
     }
 
-    return reply.status(403).send(payload);
+    reply.status(403).send(payload);
+    // Do not return the thenable reply from this callback-style hook.
   });
 
   // Global error handler (must be registered BEFORE routes)
@@ -645,6 +651,8 @@ export async function buildServer() {
     // Renders queued before a restart still need their clips collected and the review finished.
     const { resumeRecordingRenders } = await import("./modules/recordings/recordings.service");
     void resumeRecordingRenders();
+    const { recordingsProcessing } = await import("./modules/recordings/recordings.processing");
+    void recordingsProcessing.kick();
   }
 
   // Start scheduler for automatic directory scanning

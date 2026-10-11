@@ -85,6 +85,8 @@ const wireErrorSchema = z.object({
 
 export interface HttpVisualInferenceAdapterOptions {
   baseUrl: string;
+  /** Internal bounded inference endpoint, defaulting to the generic contract. */
+  analyzePath?: "/v1/analyze" | "/v1/face-visibility";
   timeoutMs?: number;
   internalSecret?: string;
   fetch?: typeof fetch;
@@ -109,10 +111,12 @@ export class VisionInferenceHttpError extends Error {
 export class HttpVisualInferenceAdapter implements VisualInferencePort {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly analyzePath: string;
   private readonly internalSecret: string;
   private readonly fetchImplementation: typeof fetch;
 
   constructor(options: HttpVisualInferenceAdapterOptions) {
+    this.analyzePath = options.analyzePath ?? "/v1/analyze";
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.internalSecret = options.internalSecret ?? "";
@@ -168,7 +172,7 @@ export class HttpVisualInferenceAdapter implements VisualInferencePort {
       form.append(`image_${index}`, item.image, `frame-${index}.${extension}`);
     });
 
-    const response = await this.request("/v1/analyze", {
+    const response = await this.request(this.analyzePath, {
       method: "POST",
       headers: this.internalSecret
         ? { Authorization: `Bearer ${this.internalSecret}` }

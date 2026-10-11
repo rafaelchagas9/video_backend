@@ -3,6 +3,7 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from ..http_client import http_client
 from ..config import get_settings
 from ..providers import configured_providers, save_provider, ProviderPatch
 from ..sources.stash import StashSource
@@ -33,7 +34,7 @@ async def sync_to_stash(provider) -> bool:
     bridge = next((p for p in configured_providers(get_settings()) if p.kind == "stash" and p.endpoint), None)
     if bridge is None:
         return False
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout_seconds) as client:
+    async with http_client(timeout=get_settings().request_timeout_seconds) as client:
         try:
             await StashClient(bridge, client).upsert_stash_box(provider.endpoint, provider.name, provider.api_key)
             return True
@@ -49,7 +50,7 @@ def bridge():
 
 @router.get("/stash/scrapers")
 async def scrapers():
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout_seconds) as client:
+    async with http_client(timeout=get_settings().request_timeout_seconds) as client:
         try:
             return await bridge().scrapers(client)
         except (httpx.HTTPError, RuntimeError):
@@ -71,7 +72,7 @@ def target(source: str):
 @router.post("/stash/contributions/prepare")
 async def prepare(request: ContributionRequest):
     target(request.source)
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout_seconds) as client:
+    async with http_client(timeout=get_settings().request_timeout_seconds) as client:
         try:
             return await bridge().prepare(client, request.entity_type, request.stash_id, request.source)
         except ValueError as exc:
@@ -84,7 +85,7 @@ async def submit(request: ContributionRequest):
     if not request.confirm:
         raise HTTPException(400, "Explicit confirmation is required to submit a draft")
     provider = target(request.source)
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout_seconds) as client:
+    async with http_client(timeout=get_settings().request_timeout_seconds) as client:
         try:
             preview = await bridge().prepare(client, request.entity_type, request.stash_id, request.source)
             if not preview["ready"]:

@@ -1,4 +1,4 @@
-"""Bound the versioned multipart request before Starlette parses or spools it."""
+"""Bound inference requests before Starlette parses JSON or spools multipart uploads."""
 
 from __future__ import annotations
 
@@ -11,7 +11,12 @@ VISION_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 
 
 class VisionAnalyzeBodyLimitMiddleware:
-    """Apply one stable hard body limit to POST /v1/analyze."""
+    """Apply one stable hard body limit to every inference POST endpoint."""
+
+    inference_paths = frozenset({
+        "/v1/analyze", "/v1/face-visibility", "/detect", "/extract-embedding",
+        "/v1/embeddings/pages", "/v1/embeddings/text",
+    })
 
     def __init__(
         self,
@@ -27,7 +32,7 @@ class VisionAnalyzeBodyLimitMiddleware:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or scope.get("path") != "/v1/analyze"
+            or scope.get("path", "").rstrip("/") not in self.inference_paths
         ):
             await self.app(scope, receive, send)
             return
@@ -81,7 +86,7 @@ class VisionAnalyzeBodyLimitMiddleware:
             content={
                 "detail": {
                     "code": "VISION_REQUEST_BODY_TOO_LARGE",
-                    "message": ("Vision multipart request exceeds the configured body limit"),
+                    "message": ("Vision inference request exceeds the configured body limit"),
                 }
             },
         )

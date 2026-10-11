@@ -11,7 +11,9 @@ from .body_limit import VisionAnalyzeBodyLimitMiddleware
 from .clip_runtime import ClipRuntime
 from .compiled_cache import configure_compiled_cache
 from .config import get_settings
+from .idle import IdleModelManager
 from .routes import detect_router, embeddings_router, health_router, v1_router
+from .routes.face_visibility import router as face_visibility_router
 from .runtime import VisionRuntime
 
 
@@ -48,11 +50,13 @@ async def lifespan(app: FastAPI):
     # report ready once they are actually fast.
     runtime.warm_lazy_capabilities()
     app.state.clip_runtime.start_background()
+    app.state.idle_model_manager.start()
 
     try:
         yield
     finally:
         logger.info("Shutting down Vision Inference Service")
+        await app.state.idle_model_manager.stop()
         await app.state.clip_runtime.stop()
         await runtime.stop()
 
@@ -75,11 +79,14 @@ def create_app(
     app.state.vision_runtime = runtime or VisionRuntime(settings)
     if clip_runtime is None:
         # An injected detector runtime means a test harness; never load SigLIP2 there.
-        clip_settings = settings if runtime is None else settings.model_copy(
-            update={"clip_enabled": False}
+        clip_settings = (
+            settings if runtime is None else settings.model_copy(update={"clip_enabled": False})
         )
         clip_runtime = ClipRuntime(clip_settings)
     app.state.clip_runtime = clip_runtime
+    app.state.idle_model_manager = IdleModelManager(
+        app.state.vision_runtime, clip_runtime, settings.model_idle_timeout_seconds
+    )
     app.add_middleware(
         VisionAnalyzeBodyLimitMiddleware,
         max_batch_bytes=settings.max_batch_bytes,
@@ -89,6 +96,7 @@ def create_app(
     app.include_router(health_router)
     app.include_router(detect_router)
     app.include_router(v1_router)
+    app.include_router(face_visibility_router)
     app.include_router(embeddings_router)
 
     return app

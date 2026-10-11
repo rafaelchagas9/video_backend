@@ -56,10 +56,12 @@ export interface SnapshotFrames {
   vectors: Float32Array[];
 }
 
+export interface SnapshotAudio { modelRevision: string; proposals: { id: string; start_seconds: number; end_seconds: number; embedding: number[] }[] }
 export interface TrainingSnapshotManifest extends SnapshotReview {
   format: "kura-recording-training";
   version: 1;
   updatedAt: string;
+  audio_features?: { file: string; sha256: string; bytes: number; modelRevision: string; featureIdentity: string } | null;
   features: { file: string; identity: string; sha256: string; bytes: number; dimension: number; index: SnapshotIndex };
 }
 
@@ -132,15 +134,15 @@ export class RecordingTrainingSnapshots {
   constructor(readonly root: string) {}
 
   /** Serializes writes for a recording. A failed Save never prevents a later retry. */
-  async save(review: SnapshotReview, index: SnapshotIndex, loadFrames: () => Promise<SnapshotFrames>): Promise<TrainingSnapshotManifest> {
+  async save(review: SnapshotReview, index: SnapshotIndex, loadFrames: () => Promise<SnapshotFrames>, loadAudio: (() => Promise<SnapshotAudio | null>) = async () => null): Promise<TrainingSnapshotManifest> {
     const previous = this.pending.get(review.source.videoId) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(() => this.write(review, index, loadFrames));
+    const operation = previous.catch(() => undefined).then(() => this.write(review, index, loadFrames, loadAudio));
     this.pending.set(review.source.videoId, operation);
     try { return await operation; }
     finally { if (this.pending.get(review.source.videoId) === operation) this.pending.delete(review.source.videoId); }
   }
 
-  private async write(review: SnapshotReview, index: SnapshotIndex, loadFrames: () => Promise<SnapshotFrames>): Promise<TrainingSnapshotManifest> {
+  private async write(review: SnapshotReview, index: SnapshotIndex, loadFrames: () => Promise<SnapshotFrames>, loadAudio: (() => Promise<SnapshotAudio | null>) = async () => null): Promise<TrainingSnapshotManifest> {
     validateIndex(index);
     if (!Number.isSafeInteger(review.source.videoId) || review.source.videoId <= 0 || !Number.isFinite(Date.parse(review.analyzedAt)))
       throw new Error("The review's identity is invalid for a training snapshot");
@@ -148,6 +150,7 @@ export class RecordingTrainingSnapshots {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const identity = snapshotFeatureIdentity(review.source, index);
     const manifestPath = join(directory, `review-${Date.parse(review.analyzedAt)}.json`);
+    let savedAudio: TrainingSnapshotManifest["audio_features"] = null;
     let savedChecksum: string | null = null;
     let savedContext: SnapshotReview["save"] = null;
     const saved = await open(manifestPath, "r").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
@@ -156,6 +159,7 @@ export class RecordingTrainingSnapshots {
         const earlier = JSON.parse(await saved.readFile("utf8")) as TrainingSnapshotManifest;
         if (earlier.features.identity !== identity)
           throw new Error("The source or visual index changed since this review was saved; its original snapshot has been preserved");
+        savedAudio = earlier.audio_features ?? null;
         savedChecksum = earlier.features.sha256;
         savedContext = earlier.save ?? null;
       } finally { await saved.close(); }
@@ -191,8 +195,40 @@ export class RecordingTrainingSnapshots {
     // Removal is rare: verify the bounded payload before allowing an original to be deleted.
     if (review.event === "before-delete" && hash(await readFile(path)) !== receipt.sha256)
       throw new Error("The saved training features failed their checksum; the original must be retained");
+    // Optional pinned unit audio vectors are small, immutable and usable after the source is gone.
+    const incomingAudio = await loadAudio();
+    let audioFeatures = savedAudio;
+    let earlierAudio: SnapshotAudio | null = null;
+    if (savedAudio && (incomingAudio || review.event === "before-delete")) {
+      if (!/^audio-[a-f0-9]{64}\.json$/.test(savedAudio.file) || savedAudio.featureIdentity !== identity || (!Number.isSafeInteger(savedAudio.bytes) || savedAudio.bytes <= 0 || savedAudio.bytes > 1024 * 1024) || !/^[a-f0-9]{64}$/.test(savedAudio.sha256))
+        throw new Error("The saved audio training receipt is incompatible; the original must be retained");
+      const audioPath = join(directory, savedAudio.file), info = await stat(audioPath);
+      if (!info.isFile() || info.size !== savedAudio.bytes || info.size > 1024 * 1024) throw new Error("The saved audio training features are incomplete; the original must be retained");
+      const bytes = await readFile(audioPath);
+      if (bytes.length !== savedAudio.bytes || hash(bytes) !== savedAudio.sha256)
+        throw new Error("The saved audio training features failed their checksum; the original must be retained");
+      earlierAudio = JSON.parse(bytes.toString()) as SnapshotAudio;
+    }
+    if (incomingAudio) {
+      const originals = new Map((review.proposals ?? review.clips.map((clip) => ({ ...clip, ...(clip.detected ?? {}) }))).filter((row) => !row.id.startsWith("added-")).map((row) => [row.id, row]));
+      if (incomingAudio.modelRevision !== "google/embeddinggemma-2@914f7f89142e33e77833254d9c9b90c3cef7303b" || incomingAudio.proposals.length > 60 || new Set(incomingAudio.proposals.map((row) => row.id)).size !== incomingAudio.proposals.length)
+        throw new Error("Audio training features have an unsupported model or shape");
+      for (const row of incomingAudio.proposals) {
+        const original = originals.get(row.id), norm = Math.sqrt(row.embedding.reduce((sum, value) => sum + value * value, 0));
+        if (!original || row.start_seconds !== original.start_seconds || row.end_seconds !== original.end_seconds || row.embedding.length !== 768 || row.embedding.some((value) => !Number.isFinite(value)) || Math.abs(norm - 1) > .01)
+          throw new Error("Audio training features do not match the original proposals");
+      }
+      const merged = new Map((earlierAudio?.modelRevision === incomingAudio.modelRevision ? earlierAudio.proposals : []).map((row) => [row.id, row]));
+      for (const row of incomingAudio.proposals) merged.set(row.id, row);
+      if (merged.size > 60) throw new Error("Too many original audio training proposals");
+      const bytes = Buffer.from(JSON.stringify({ modelRevision: incomingAudio.modelRevision, proposals: [...merged.values()] }));
+      if (bytes.length > 1024 * 1024) throw new Error("Audio training features exceed the 1 MiB snapshot limit");
+      const sha256 = hash(bytes), file = `audio-${sha256}.json`;
+      await atomicWrite(join(directory, file), bytes);
+      audioFeatures = { file, sha256, bytes: bytes.length, modelRevision: incomingAudio.modelRevision, featureIdentity: identity };
+    }
     // Render and delete events do not know the Save's context; the last Save's stays.
-    const manifest: TrainingSnapshotManifest = { ...review, save: review.save ?? savedContext, format: "kura-recording-training", version: 1,
+    const manifest: TrainingSnapshotManifest = { ...review, save: review.save ?? savedContext, format: "kura-recording-training", version: 1, audio_features: audioFeatures,
       updatedAt: new Date().toISOString(), features: { file, ...receipt, dimension: SNAPSHOT_DIMENSION, index } };
     await atomicWrite(manifestPath, Buffer.from(JSON.stringify(manifest)));
     return manifest;

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll } from "bun:test";
+import { registerTestStorageRoot } from "@/config/test-isolation";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { createDemoFixtureFiles } from "./demo-fixtures";
 export function useSeededDemoDatabase({ artwork = false } = {}): void {
   const originalNodeEnv = process.env.NODE_ENV;
   let root: string;
+  let unregisterRoot: (() => void) | undefined;
   let demo: typeof import("@/database/demo");
   let env: typeof import("@/config/env").env;
   let originalAssetsDir: string;
@@ -17,6 +19,7 @@ export function useSeededDemoDatabase({ artwork = false } = {}): void {
     ({ env } = await import("@/config/env"));
     originalAssetsDir = env.DEMO_ASSETS_DIR;
     root = mkdtempSync(join(tmpdir(), "conversor-demo-test-"));
+    unregisterRoot = registerTestStorageRoot(root);
     env.DEMO_ASSETS_DIR = root;
     const fixtures = createDemoFixtureFiles(root);
     demo = await import("@/database/demo");
@@ -33,6 +36,7 @@ export function useSeededDemoDatabase({ artwork = false } = {}): void {
 
   afterAll(() => {
     demo?.setDemoDatabasePathForTests(null);
+    unregisterRoot?.();
     if (root) rmSync(root, { recursive: true, force: true });
     if (env) env.DEMO_ASSETS_DIR = originalAssetsDir;
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;

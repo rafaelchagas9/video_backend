@@ -18,6 +18,9 @@ const SAFE_API_REQUESTS: Array<{
     methods: new Set(["GET"]),
     path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|feedback|autopilot|\\d+|channels/[^/]+/thumbnail))?/?$`),
   },
+  // Label fixtures and answer changes are confined to the demo catalogue and memory.
+  { methods: new Set(["GET"]), path: new RegExp(`^${API_PREFIX}/recordings/label-tasks/?$`) },
+  { methods: new Set(["PUT"]), path: new RegExp(`^${API_PREFIX}/recordings/label-tasks/\\d+$`) },
   // The recorder is GoondVR itself — a separate service, not the personal library —
   // so the demo drives it for real. Creator links land in the demo database.
   {
