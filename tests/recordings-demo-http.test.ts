@@ -108,4 +108,27 @@ describe("demo recording labels and highlight reviews", () => {
     task.context.private_mutation = true;
     expect(demoLabelTasks()[0]!.context.private_mutation).toBeUndefined();
   });
+
+  it("keeps label and review screens populated with the incoming short cloud-demo media", async () => {
+    const demo = await import("@/database/demo");
+    const { validateVersionPreference } = await import("@/modules/recordings/recordings.version-versus");
+    for (const duration of [5, 6]) {
+      demo.getDemoSqlite().run("UPDATE demo_videos SET duration_seconds = ?", [duration]);
+      const tasks = await list();
+      expect(tasks).toHaveLength(16);
+      for (const task of tasks) {
+        expect(task.end_seconds).toBeGreaterThan(task.start_seconds);
+        expect(task.end_seconds).toBeLessThanOrEqual(duration);
+        if (task.kind === "version-versus") validateVersionPreference(task.context, null);
+      }
+    }
+    const overview = await app.inject({ method: "GET", url: "/api/recordings/" });
+    expect(overview.statusCode, overview.body).toBe(200);
+    expect(overview.json().data.recordings.length).toBeGreaterThan(0);
+    const id = overview.json().data.recordings[0].video.id;
+    const find = await app.inject({ method: "POST", url: `/api/recordings/${id}/analyze` });
+    expect(find.statusCode, find.body).toBe(200);
+    expect(find.json().data.clips).toHaveLength(3);
+    expect((await import("@/config/drizzle")).isProductionDatabaseClientInitialized()).toBe(false);
+  });
 });

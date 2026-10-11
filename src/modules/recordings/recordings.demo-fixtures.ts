@@ -8,7 +8,10 @@ const answers = new Map<string, Pick<LabelTask, "answer" | "reasons" | "detail" 
 const key = (id: number) => `${getDemoDatabasePath()}:${id}`;
 type DemoVideo = { id: number; file_name: string; duration_seconds: number; creators?: { name: string }[] };
 type Range = [number, number];
-const range = (duration: number, from: number, to: number): Range => [Math.floor(duration * from), Math.floor(duration * to)];
+const range = (duration: number, from: number, to: number): Range => {
+  const start = Math.floor(duration * from);
+  return [start, Math.min(duration, Math.max(start + 1, Math.floor(duration * to)))];
+};
 
 function side(video: DemoVideo, clip: Range, best: Range) {
   const length = best[1] - best[0];
@@ -25,7 +28,7 @@ function side(video: DemoVideo, clip: Range, best: Range) {
 }
 
 export function demoLabelTasks(): LabelTask[] {
-  const videos = demoRepository.getVideos({ limit: 4, minDuration: 60, sort: "file_name", order: "asc" }).data as DemoVideo[];
+  const videos = demoRepository.getVideos({ limit: 4, minDuration: 5, sort: "file_name", order: "asc" }).data as DemoVideo[];
   const kinds: LabelTaskKind[] = ["recall-audit", "version-versus", "whole-verdict", "versus"];
   return kinds.flatMap((kind, kindIndex) => videos.map((video, index): LabelTask => {
     const duration = video.duration_seconds;

@@ -244,6 +244,13 @@ export class RecordingsService {
         ...(env.DEMO_MODE ? { minDuration: DEMO_RECORDING_MIN_SECONDS } : {}),
       });
       videos = page.data;
+      // Offline cloud demos use short synthetic media; still offer a review to design against.
+      if (env.DEMO_MODE && !videos.length) {
+        videos = (await videosSearchService.list(userId, {
+          directory_id: settings.directoryId, limit: 8, sort: "created_at", order: "desc",
+          include: ["creators", "artwork"], minDuration: 5,
+        })).data;
+      }
     }
     const [reviews, paired, autopilot, knownSites] = await Promise.all([
       this.rows(videos.map((video) => video.id)),
