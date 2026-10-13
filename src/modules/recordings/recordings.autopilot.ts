@@ -1,9 +1,12 @@
 /**
- * The recorder autopilot: every minute it reads each online channel's live frame with the
- * trained highlight probe, starts recording when there is action, stops after a stretch without
- * it, and retires channels whose history says they add nothing more. The classifier's data
- * targets are reported, not acted on: reaching them does not stop recording. Decisions live in
- * recordings.autopilot.policy.ts.
+ * The recorder autopilot. Each channel has a capture mode (recordings.sessions.policy.ts):
+ * manual channels are left alone; whole and highlights channels are kept recording whenever they
+ * are live; training channels get the data-gathering rules: every minute their live frame is read
+ * with the trained highlight probe, recording starts when there is action, stops after a stretch
+ * without it, and channels whose history says they add nothing more are retired. The
+ * classifier's data targets are reported, not acted on. Decisions live in
+ * recordings.autopilot.policy.ts. Every minute, whatever the mode, each live is also followed
+ * (viewers, titles) and highlights lives are cut once they end (recordings.sessions.ts).
  *
  * GoondVR is driven only through its API (pause/resume/update), so nothing here depends on its
  * internals. In "suggest" mode every decision is logged but none is applied.
@@ -32,9 +35,11 @@ import {
   type Progress,
 } from "./recordings.autopilot.policy";
 import { GOONDVR_DEFAULT_PATTERN, goondvr, usernameFromFileName, type GoondvrChannel } from "./recordings.goondvr";
-import { classifyFrames, loadHighlightProbe } from "./recordings.probe";
+import { classifyFrames, loadHighlightProbe, probeThreshold } from "./recordings.probe";
 import { recordingScope } from "./recordings.scope";
 import { confirmedDecisions } from "./recordings.feedback";
+import { liveSessions, type ChannelCapture } from "./recordings.sessions";
+import { isCaptureMode, type CaptureMode } from "./recordings.sessions.policy";
 
 const SETTINGS_KEY = "recordings_autopilot";
 const CYCLE_MS = 60_000;
@@ -57,10 +62,18 @@ function parseSettings(raw: unknown): AutopilotSettings {
   }
   const merged = { ...DEFAULT_AUTOPILOT_SETTINGS, ...stored, targets: { ...DEFAULT_AUTOPILOT_SETTINGS.targets, ...stored.targets } };
   if (!(AUTOPILOT_MODES as readonly string[]).includes(merged.mode)) merged.mode = DEFAULT_AUTOPILOT_SETTINGS.mode;
+  if (!isCaptureMode(merged.defaultCapture)) merged.defaultCapture = DEFAULT_AUTOPILOT_SETTINGS.defaultCapture;
   return merged;
 }
 
 const usernameKey = (username: string) => username.replace(/^@/, "").toLowerCase();
+
+/** GoondVR pauses a channel itself for its limits; this one only means it was added paused. */
+const NOT_A_LIMIT = "Added without auto-start";
+
+/** The capture a channel has, or the default for one Kura has not stored yet. */
+const captureOf = (row: ChannelRow | undefined, settings: AutopilotSettings): CaptureMode =>
+  row && isCaptureMode(row.capture) ? row.capture : settings.defaultCapture;
 
 class RecorderAutopilot {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -92,15 +105,40 @@ class RecorderAutopilot {
     return next;
   }
 
+  /** `managed: false` is manual, `managed: true` the default capture (the older client's toggle). */
   async setManaged(channelId: string, managed: boolean) {
-    // The demo has no autopilot to hand channels to.
-    if (env.DEMO_MODE) return { channel_id: channelId, managed };
+    const settings = await this.settings();
+    const result = await this.setChannel(channelId, { capture: managed ? (settings.defaultCapture === "manual" ? "training" : settings.defaultCapture) : "manual" });
+    return { channel_id: channelId, managed: result.capture !== "manual" };
+  }
+
+  /** A channel's capture mode and highlights threshold (null: the default). */
+  async setChannel(channelId: string, update: { capture?: CaptureMode; threshold?: number | null }) {
+    if (env.DEMO_MODE) return { channel_id: channelId, capture: update.capture ?? "manual", threshold: update.threshold ?? null };
+    const settings = await this.settings();
+    const [current] = await db.select().from(recorderAutopilotChannelsTable).where(eq(recorderAutopilotChannelsTable.channelId, channelId));
+    const capture = update.capture ?? captureOf(current, settings);
+    const threshold = update.threshold === undefined ? current?.highlightThreshold ?? null : update.threshold === null ? null : Math.min(0.99, Math.max(0.05, update.threshold));
+    const set = { capture, managed: capture !== "manual", highlightThreshold: threshold, updatedAt: new Date() };
     await db
       .insert(recorderAutopilotChannelsTable)
-      .values({ channelId, managed })
-      .onConflictDoUpdate({ target: recorderAutopilotChannelsTable.channelId, set: { managed, updatedAt: new Date() } });
-    await this.log(channelId, "managed", managed ? "handed back to the autopilot" : "taken over by hand", true);
-    return { channel_id: channelId, managed };
+      .values({ channelId, ...set })
+      .onConflictDoUpdate({ target: recorderAutopilotChannelsTable.channelId, set });
+    if (update.capture && update.capture !== captureOf(current, settings)) {
+      await this.log(channelId, "managed", `${CAPTURE_TEXT[capture]}${capture === "highlights" && threshold !== null ? ` at ${Math.round(threshold * 100)}%` : ""}`, true);
+      // Whole and highlights channels start recording now rather than on the next tick.
+      if ((capture === "whole" || capture === "highlights") && settings.mode === "auto") {
+        const channel = (await goondvr.channels())?.find((entry) => entry.id === channelId);
+        if (channel?.is_paused && (!channel.pause_reason || channel.pause_reason === NOT_A_LIMIT)) {
+          await goondvr.resumeChannel(channelId);
+          await db
+            .update(recorderAutopilotChannelsTable)
+            .set({ state: "recording", reason: "kept recording", stateSince: new Date() })
+            .where(eq(recorderAutopilotChannelsTable.channelId, channelId));
+        }
+      }
+    }
+    return { channel_id: channelId, capture, threshold };
   }
 
   /** One pass; overlapping ticks are skipped rather than queued. */
@@ -109,10 +147,17 @@ class RecorderAutopilot {
     this.running = true;
     try {
       const settings = await this.settings();
-      if (settings.mode === "off") return;
       const channels = await goondvr.channels();
       if (!channels) {
         this.lastError = "GoondVR is not reachable";
+        return;
+      }
+      const now = new Date();
+      const initial = await this.rows();
+      await this.followLives(channels, initial, settings, now);
+      if (settings.mode === "off") {
+        this.lastCycleAt = now;
+        this.lastError = null;
         return;
       }
       await this.syncOutcomes();
@@ -120,9 +165,8 @@ class RecorderAutopilot {
       const blocked = queue >= settings.queueLimit ? `${queue} recordings waiting for review` : null;
       const readings = await this.read(channels.filter((channel) => {
         const row = rows.get(channel.id);
-        return channel.is_online && READABLE_SITES.has(channel.site) && row?.managed !== false && (!row || row.state === "watching" || row.state === "recording");
+        return channel.is_online && READABLE_SITES.has(channel.site) && captureOf(row, settings) === "training" && (!row || row.state === "watching" || row.state === "recording");
       }));
-      const now = new Date();
       for (const channel of channels) {
         await this.decide(channel, rows.get(channel.id), outcomes.get(usernameKey(channel.username)) ?? [], readings.get(channel.id), {
           settings,
@@ -140,6 +184,20 @@ class RecorderAutopilot {
     }
   }
 
+  /** Lives are followed and highlights cut whatever the autopilot's mode; one failure never stops the cycle. */
+  private async followLives(channels: GoondvrChannel[], rows: Map<string, ChannelRow>, settings: AutopilotSettings, now: Date) {
+    const capture = (channelId: string): ChannelCapture => {
+      const row = rows.get(channelId);
+      return { capture: captureOf(row, settings), threshold: row?.highlightThreshold ?? null };
+    };
+    try {
+      await liveSessions.track(channels, capture, now);
+      await liveSessions.advance(now);
+    } catch (error) {
+      logger.warn({ err: error }, "Following lives failed");
+    }
+  }
+
   private async decide(
     channel: GoondvrChannel,
     row: ChannelRow | undefined,
@@ -154,12 +212,21 @@ class RecorderAutopilot {
       (
         await db
           .insert(recorderAutopilotChannelsTable)
-          .values({ channelId: channel.id, state: "watching", reason: "new to the autopilot" })
+          .values({
+            channelId: channel.id,
+            state: "watching",
+            reason: "new to the autopilot",
+            capture: settings.defaultCapture,
+            managed: settings.defaultCapture !== "manual",
+          })
           .onConflictDoNothing()
           .returning()
       )[0] ??
       (await db.select().from(recorderAutopilotChannelsTable).where(eq(recorderAutopilotChannelsTable.channelId, channel.id)))[0]!;
-    if (!current.managed || !READABLE_SITES.has(channel.site)) return;
+    const capture = captureOf(current, settings);
+    if (capture === "manual") return;
+    if (capture === "whole" || capture === "highlights") return this.keepRecording(channel, current, settings, now);
+    if (!READABLE_SITES.has(channel.site)) return;
 
     const patch: Partial<ChannelRow> = {};
     if (reading) {
@@ -204,7 +271,7 @@ class RecorderAutopilot {
           // Paused by hand while the autopilot was recording: the user takes the channel over.
           await db
             .update(recorderAutopilotChannelsTable)
-            .set({ managed: false, state: "watching", reason: "paused by hand", stateSince: now, updatedAt: now })
+            .set({ managed: false, capture: "manual", state: "watching", reason: "paused by hand", stateSince: now, updatedAt: now })
             .where(eq(recorderAutopilotChannelsTable.channelId, channel.id));
           await this.log(channel.id, "managed", `${channel.username}: paused by hand, now managed by hand`, true);
           return;
@@ -214,7 +281,7 @@ class RecorderAutopilot {
         reason = `GoondVR paused it: ${channel.pause_reason}`;
       }
       // A channel held by one of its own limits cannot record until the limit clears.
-      const limited = channel.is_paused && channel.pause_reason && channel.pause_reason !== "Added without auto-start" ? `GoondVR limit: ${channel.pause_reason}` : null;
+      const limited = channel.is_paused && channel.pause_reason && channel.pause_reason !== NOT_A_LIMIT ? `GoondVR limit: ${channel.pause_reason}` : null;
       const next = liveTransition(
         {
           state,
@@ -261,6 +328,50 @@ class RecorderAutopilot {
     if (Object.keys(patch).length) {
       await db.update(recorderAutopilotChannelsTable).set({ ...patch, updatedAt: now }).where(eq(recorderAutopilotChannelsTable.channelId, channel.id));
     }
+  }
+
+  /**
+   * Whole and highlights channels: recording whenever GoondVR can. A pause by hand while Kura had
+   * it recording hands the channel over (manual); GoondVR's own limits are waited out.
+   */
+  private async keepRecording(channel: GoondvrChannel, current: ChannelRow, settings: AutopilotSettings, now: Date) {
+    const apply = settings.mode === "auto";
+    let state: AutopilotState = current.state as AutopilotState;
+    let reason = current.reason ?? "";
+    if (!channel.is_paused) {
+      state = "recording";
+      reason = channel.is_online ? "recording the whole live" : "waiting for a live";
+    } else if (channel.pause_reason && channel.pause_reason !== NOT_A_LIMIT) {
+      state = "watching";
+      reason = `GoondVR limit: ${channel.pause_reason}`;
+    } else if (current.state === "recording" && !channel.pause_reason) {
+      await db
+        .update(recorderAutopilotChannelsTable)
+        .set({ managed: false, capture: "manual", state: "watching", reason: "paused by hand", stateSince: now, updatedAt: now })
+        .where(eq(recorderAutopilotChannelsTable.channelId, channel.id));
+      await this.log(channel.id, "managed", `${channel.username}: paused by hand, now managed by hand`, true);
+      return;
+    } else if (!apply) {
+      state = "watching";
+      reason = "would resume it (suggest mode)";
+      if (reason !== current.reason) await this.log(channel.id, "start", `${channel.username}: ${reason}`, false);
+    } else {
+      try {
+        await goondvr.resumeChannel(channel.id);
+        state = "recording";
+        reason = "kept recording";
+        await this.log(channel.id, "start", `${channel.username}: ${CAPTURE_TEXT[captureOf(current, settings)].toLowerCase()}, resumed`, true);
+      } catch (error) {
+        state = "watching";
+        reason = `GoondVR refused: ${error instanceof Error ? error.message : String(error)}`;
+        if (reason !== current.reason) await this.log(channel.id, "start", `${channel.username}: ${reason}`, false);
+      }
+    }
+    if (state === current.state && reason === current.reason) return;
+    await db
+      .update(recorderAutopilotChannelsTable)
+      .set({ state, reason, ...(state !== current.state ? { stateSince: now } : {}), updatedAt: now })
+      .where(eq(recorderAutopilotChannelsTable.channelId, channel.id));
   }
 
   /** Gives an unlimited channel the default stored-size limit; only while paused, since saving restarts it. */
@@ -401,26 +512,31 @@ class RecorderAutopilot {
   /** Everything the Kura panel shows. */
   async status() {
     if (env.DEMO_MODE) {
-      return { available: false, settings: DEFAULT_AUTOPILOT_SETTINGS, progress: null, queue: 0, reached: false, channels: [], events: [], last_cycle_at: null, last_error: null };
+      return { available: false, settings: DEFAULT_AUTOPILOT_SETTINGS, default_threshold: probeThreshold(1.4), progress: null, queue: 0, reached: false, channels: [], events: [], last_cycle_at: null, last_error: null };
     }
-    const [settings, progress, queue, rows, outcomes, events] = await Promise.all([
+    const { recordingsService } = await import("./recordings.service");
+    const [settings, progress, queue, rows, outcomes, events, recording] = await Promise.all([
       this.settings(),
       this.progress(),
       this.queue(),
       db.select().from(recorderAutopilotChannelsTable),
       this.outcomes(),
       db.select().from(recorderAutopilotEventsTable).orderBy(desc(recorderAutopilotEventsTable.id)).limit(80),
+      recordingsService.settings(),
     ]);
     const historyOf = (channelId: string): ChannelHistory => channelHistory(outcomes.get(usernameKey(channelId.split("__").slice(1).join("__"))) ?? []);
     return {
       available: true,
       settings,
+      default_threshold: probeThreshold(recording.sensitivity),
       progress,
       queue,
       reached: targetReached(progress, settings.targets),
       channels: rows.map((row) => ({
         channel_id: row.channelId,
-        managed: row.managed,
+        managed: captureOf(row, settings) !== "manual",
+        capture: captureOf(row, settings),
+        threshold: row.highlightThreshold,
         state: row.state,
         reason: row.reason,
         state_since: row.stateSince,
@@ -436,5 +552,12 @@ class RecorderAutopilot {
     };
   }
 }
+
+const CAPTURE_TEXT: Record<CaptureMode, string> = {
+  manual: "Managed by hand",
+  whole: "Recording whole lives",
+  highlights: "Keeping highlights only",
+  training: "Gathering training data",
+};
 
 export const recorderAutopilot = new RecorderAutopilot();

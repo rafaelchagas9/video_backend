@@ -95,7 +95,11 @@ export class EditsService {
       },
       timeline: input.timeline,
     };
-    validateEditRequest(canonicalInput, sourceVideo.duration_seconds);
+    validateEditRequest(
+      canonicalInput,
+      sourceVideo.duration_seconds,
+      await otherSourceDurations(sourceVideo, canonicalInput.timeline)
+    );
     const target = await resolveSafeOutputTarget(canonicalInput.output);
 
     const [catalogConflict] = await db
@@ -425,3 +429,19 @@ export class EditsService {
 }
 
 export const editsService = new EditsService();
+
+/** Durations of the other videos a multi-source timeline cuts from. */
+export async function otherSourceDurations(
+  source: { id: number; duration_seconds: number | null },
+  timeline: CreateEditJobInput["timeline"]
+): Promise<Map<number, number | null>> {
+  const durations = new Map<number, number | null>([
+    [source.id, source.duration_seconds],
+  ]);
+  for (const segment of timeline.segments) {
+    const id = segment.source_video_id;
+    if (id === undefined || durations.has(id)) continue;
+    durations.set(id, (await videosService.findById(id)).duration_seconds);
+  }
+  return durations;
+}

@@ -310,6 +310,7 @@ allowed PUT /api/recordings/label-tasks/{taskId}
 allowed GET /api/recordings/feedback
 allowed GET /api/recordings/settings
 allowed GET /api/recordings/autopilot
+allowed GET /api/recordings/sessions
 allowed PUT /api/recordings/autopilot/settings
 allowed PUT /api/recordings/autopilot/channels/{channelId}
 allowed PUT /api/recordings/settings

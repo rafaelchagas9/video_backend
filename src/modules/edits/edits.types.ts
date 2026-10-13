@@ -10,6 +10,11 @@ export interface TimelineSegment {
   start: number; // seconds
   end: number; // seconds
   speed?: number; // default 1.0
+  /**
+   * Another library video to cut this segment from; absent means the job's own video.
+   * Internal only (the HTTP schema rejects it): recordings join one live's files with it.
+   */
+  source_video_id?: number;
   /** Effects applied to this segment before timeline concatenation. */
   transform?: EditTransformConfig;
   /** Audio effects applied to this segment before timeline concatenation. */

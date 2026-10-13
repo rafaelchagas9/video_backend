@@ -61,7 +61,9 @@ export class VideoPacketCoverage {
 export function mapEditGapsToSourceIntervals(
   gaps: TimeInterval[],
   timeline: EditTimelineConfig,
-  leads: readonly number[] = []
+  leads: readonly number[] = [],
+  /** Only map holes inside these segments (a multi-source timeline checks one source at a time). */
+  include: (index: number) => boolean = () => true
 ): TimeInterval[] {
   const intervals: TimeInterval[] = [];
   let offset = 0;
@@ -69,6 +71,10 @@ export function mapEditGapsToSourceIntervals(
     const speed = segment.speed ?? 1;
     const start = segment.start + (leads[index] ?? 0);
     const end = offset + (segment.end - segment.start) / speed;
+    if (!include(index)) {
+      offset = end;
+      return;
+    }
     for (const gap of gaps) {
       // Ignore frame rounding and seek alignment at both edges of a hole.
       const from = Math.max(offset, gap.start + EDGE_TOLERANCE_SECONDS);
@@ -229,10 +235,13 @@ function firstDecodedTimestamp(
   });
 }
 
-/** Check packet timing without decoding images; consult the source only for holes. */
+/**
+ * Check packet timing without decoding images; consult the source only for holes.
+ * `sourcePath` is one file, or one per segment for a multi-source timeline.
+ */
 export async function hasUnexpectedEditVideoGap(
   outputPath: string,
-  sourcePath: string,
+  sourcePath: string | readonly string[],
   timeline: EditTimelineConfig,
   signal?: AbortSignal,
   options: { seeked?: boolean } = {}
@@ -252,7 +261,40 @@ export async function hasUnexpectedEditVideoGap(
   );
   const outputGaps = coverage.gaps(duration, outputOrigin);
   if (!outputGaps.length) return false;
-  let relativeIntervals = mapEditGapsToSourceIntervals(outputGaps, timeline);
+  const pathOf = (index: number) =>
+    typeof sourcePath === "string" ? sourcePath : sourcePath[index]!;
+  const paths = [...new Set(timeline.segments.map((_, index) => pathOf(index)))];
+  for (const path of paths) {
+    const include = (index: number) => pathOf(index) === path;
+    if (
+      await sourceHasFramesInGaps(
+        path,
+        outputGaps,
+        timeline,
+        include,
+        signal,
+        options
+      )
+    )
+      return true;
+  }
+  return false;
+}
+
+async function sourceHasFramesInGaps(
+  sourcePath: string,
+  outputGaps: TimeInterval[],
+  timeline: EditTimelineConfig,
+  include: (index: number) => boolean,
+  signal: AbortSignal | undefined,
+  options: { seeked?: boolean }
+): Promise<boolean> {
+  let relativeIntervals = mapEditGapsToSourceIntervals(
+    outputGaps,
+    timeline,
+    [],
+    include
+  );
   if (!relativeIntervals.length) return false;
   // Edit seeks are playback-relative, but ffprobe exposes native timestamps.
   // Match FFmpeg's default -ss origin before seeking or comparing source packets.
@@ -262,12 +304,21 @@ export async function hasUnexpectedEditVideoGap(
     // more late in live recordings; mapping from the nominal start would shift the
     // source's own dropouts onto frames that exist and report them as lost.
     const leads: number[] = [];
-    for (const segment of timeline.segments) {
+    for (const [index, segment] of timeline.segments.entries()) {
+      if (!include(index)) {
+        leads.push(0);
+        continue;
+      }
       const first = await firstDecodedTimestamp(sourcePath, segment.start, signal);
       const lead = first === null ? 0 : first - sourceOrigin - segment.start;
       leads.push(Math.min(SEEK_PROBE_SECONDS, Math.max(0, lead)));
     }
-    relativeIntervals = mapEditGapsToSourceIntervals(outputGaps, timeline, leads);
+    relativeIntervals = mapEditGapsToSourceIntervals(
+      outputGaps,
+      timeline,
+      leads,
+      include
+    );
     if (!relativeIntervals.length) return false;
   }
   const intervals = relativeIntervals.map(({ start, end }) => ({

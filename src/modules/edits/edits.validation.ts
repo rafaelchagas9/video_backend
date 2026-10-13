@@ -86,7 +86,9 @@ export function calculateExpectedDuration(
 
 export function validateEditRequest(
   input: CreateEditJobInput,
-  sourceDuration: number | null
+  sourceDuration: number | null,
+  /** Durations of the other videos segments name with `source_video_id`. */
+  otherDurations: ReadonlyMap<number, number | null> = new Map()
 ): void {
   if (input.output.format !== "mkv") {
     throw new ValidationError("Only MKV edit output is supported");
@@ -125,7 +127,16 @@ export function validateEditRequest(
         `Timeline segment ${index} speed must be between 0.1 and 10`
       );
     }
-    if (sourceDuration !== null && segment.end > sourceDuration + 0.001) {
+    const duration =
+      segment.source_video_id === undefined
+        ? sourceDuration
+        : otherDurations.get(segment.source_video_id);
+    if (duration === undefined) {
+      throw new ValidationError(
+        `Timeline segment ${index} names an unknown source video`
+      );
+    }
+    if (duration !== null && segment.end > duration + 0.001) {
       throw new ValidationError(
         `Timeline segment ${index} exceeds the source duration`
       );

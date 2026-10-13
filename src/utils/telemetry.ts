@@ -1,7 +1,14 @@
-import { SeverityNumber, type AnyValue, type LogAttributes } from "@opentelemetry/api-logs";
+import {
+  SeverityNumber,
+  type AnyValue,
+  type LogAttributes,
+} from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
+import {
+  BatchLogRecordProcessor,
+  LoggerProvider,
+} from "@opentelemetry/sdk-logs";
 import type { FastifyRequest } from "fastify";
 import { PostHog } from "posthog-node";
 import { env } from "@/config/env";
@@ -56,8 +63,9 @@ const SECRET_QUERY_PATTERN =
   /([?&](?:token|key|api_key|password|secret|signature)=)[^&#\s]+/gi;
 const ABSOLUTE_DATA_PATH_PATTERN =
   /(?:\/(?:home|mnt|media|tmp|var|data)\/[^\s'"<>]+|[A-Za-z]:\\[^\s'"<>]+)/g;
-const MEDIA_FILENAME_PATTERN =
-  /\b[^\s/'"<>]+\.(?:mp4|mkv|webm|mov|avi|m4v|mp3|flac|wav|m4a|aac|jpg|jpeg|png|webp|gif)\b/gi;
+const MESSAGE_TOKEN_PATTERN = /[^\s/'"<>]+/g;
+const MEDIA_EXTENSION_PATTERN =
+  /\.(?:mp4|mkv|webm|mov|avi|m4v|mp3|flac|wav|m4a|aac|jpg|jpeg|png|webp|gif)\b/i;
 const MEDIA_PATH_IN_STACK_PATTERN =
   /(?:[A-Za-z]:\\|\/)(?:[^\s"'<>|]+[\\/])*[^\s"'<>|]+\.(?:mp4|mkv|webm|mov|avi|m4v|mp3|flac|wav|m4a|aac|jpg|jpeg|png|webp|gif)/gi;
 
@@ -66,10 +74,15 @@ const telemetryEnabled =
 
 function reportTelemetryTransportError(surface: string, error: unknown): void {
   const name = error instanceof Error ? error.name : "UnknownError";
-  process.stderr.write(`[posthog:${surface}] telemetry delivery failed (${name})\n`);
+  process.stderr.write(
+    `[posthog:${surface}] telemetry delivery failed (${name})\n`
+  );
 }
 
-function createPostHogClient(flushAt: number, flushInterval: number): PostHog | null {
+function createPostHogClient(
+  flushAt: number,
+  flushInterval: number
+): PostHog | null {
   if (!telemetryEnabled) return null;
 
   try {
@@ -86,7 +99,9 @@ function createPostHogClient(flushAt: number, flushInterval: number): PostHog | 
       environment: env.NODE_ENV,
       serviceVersion: env.POSTHOG_SERVICE_VERSION,
     });
-    client.on("error", (error) => reportTelemetryTransportError("events", error));
+    client.on("error", (error) =>
+      reportTelemetryTransportError("events", error)
+    );
     return client;
   } catch (error) {
     reportTelemetryTransportError("events-init", error);
@@ -104,7 +119,10 @@ function createLogsEndpoint(host: string): string {
   endpoint.pathname = endpoint.pathname.replace(/\/+$/, "");
 
   if (!endpoint.pathname.endsWith("/i/v1/logs")) {
-    endpoint.pathname = `${endpoint.pathname}/i/v1/logs`.replace(/\/{2,}/g, "/");
+    endpoint.pathname = `${endpoint.pathname}/i/v1/logs`.replace(
+      /\/{2,}/g,
+      "/"
+    );
   }
 
   return endpoint.toString();
@@ -160,6 +178,15 @@ function truncate(value: string, maximum: number): string {
   return `${value.slice(0, Math.max(0, maximum - TRUNCATED.length - 1))} ${TRUNCATED}`;
 }
 
+function boundRedactionInput(value: string, maximum: number): string {
+  if (value.length <= maximum) return value;
+  let end = maximum - TRUNCATED.length - 1;
+  // Drop the incomplete final token: truncating before redaction must never
+  // expose part of a filename, path, or credential whose suffix was removed.
+  while (end > 0 && !/\s/.test(value[end - 1]!)) end--;
+  return `${value.slice(0, end)} ${TRUNCATED}`;
+}
+
 function redactSecrets(value: string): string {
   return value
     .replace(BEARER_PATTERN, `Bearer ${REDACTED}`)
@@ -168,23 +195,27 @@ function redactSecrets(value: string): string {
 
 function sanitizeMessage(value: string): string {
   return truncate(
-    redactSecrets(value)
+    redactSecrets(boundRedactionInput(value, MAX_STRING_LENGTH))
       .replace(ABSOLUTE_DATA_PATH_PATTERN, REDACTED_MEDIA_PATH)
-      .replace(MEDIA_FILENAME_PATTERN, REDACTED_MEDIA_FILE),
-    MAX_STRING_LENGTH,
+      .replace(MESSAGE_TOKEN_PATTERN, (token) =>
+        MEDIA_EXTENSION_PATTERN.test(token) ? REDACTED_MEDIA_FILE : token
+      ),
+    MAX_STRING_LENGTH
   );
 }
 
 function sanitizeStack(error: Error, message: string): string | undefined {
   if (!error.stack) return undefined;
 
-  const [, ...frames] = error.stack.split("\n");
+  const stack = boundRedactionInput(error.stack, MAX_STACK_LENGTH);
+  const firstNewline = stack.indexOf("\n");
+  const frames =
+    firstNewline === -1 ? TRUNCATED : stack.slice(firstNewline + 1);
   return truncate(
-    redactSecrets([`${error.name}: ${message}`, ...frames].join("\n")).replace(
-      MEDIA_PATH_IN_STACK_PATTERN,
-      REDACTED_MEDIA_PATH,
-    ),
-    MAX_STACK_LENGTH,
+    redactSecrets(
+      `${truncate(error.name, 128)}: ${message}\n${frames}`
+    ).replace(MEDIA_PATH_IN_STACK_PATTERN, REDACTED_MEDIA_PATH),
+    MAX_STACK_LENGTH
   );
 }
 
@@ -217,7 +248,7 @@ function sanitizeValue(
   value: unknown,
   key: string,
   depth: number,
-  seen: WeakSet<object>,
+  seen: WeakSet<object>
 ): unknown {
   if (shouldRedactKey(key)) return REDACTED;
   if (value === null || value === undefined) return value;
@@ -257,7 +288,7 @@ function sanitizeValue(
         .map(([entryKey, entry]) => [
           entryKey,
           sanitizeValue(entry, entryKey, depth + 1, seen),
-        ]),
+        ])
     );
     seen.delete(value);
     return sanitized;
@@ -267,18 +298,18 @@ function sanitizeValue(
 }
 
 export function sanitizeTelemetryProperties(
-  properties: TelemetryProperties,
+  properties: TelemetryProperties
 ): Record<string, unknown> {
   const seen = new WeakSet<object>();
   return Object.fromEntries(
     Object.entries(properties)
       .slice(0, MAX_OBJECT_KEYS)
-      .map(([key, value]) => [key, sanitizeValue(value, key, 0, seen)]),
+      .map(([key, value]) => [key, sanitizeValue(value, key, 0, seen)])
   );
 }
 
 function buildProperties(
-  properties: TelemetryProperties = {},
+  properties: TelemetryProperties = {}
 ): Record<string, unknown> {
   return {
     service: SERVICE_NAME,
@@ -290,7 +321,7 @@ function buildProperties(
 }
 
 export function getTelemetryDistinctId(
-  userId?: string | number | null,
+  userId?: string | number | null
 ): string {
   if (userId === null || userId === undefined || userId === "") {
     return SERVER_DISTINCT_ID;
@@ -300,7 +331,9 @@ export function getTelemetryDistinctId(
 }
 
 export function sanitizeTelemetryUrl(url: string): string {
-  const withoutSecrets = redactSecrets(url.split("#", 1)[0]);
+  const withoutSecrets = redactSecrets(
+    boundRedactionInput(url, MAX_STRING_LENGTH).split("#", 1)[0]!
+  );
   return withoutSecrets
     .replace(/^(\/api\/cast\/)[a-f0-9]{64}(\/[^?]*)/, "$1:token$2")
     .replace(/\?.*$/, "");
@@ -309,7 +342,7 @@ export function sanitizeTelemetryUrl(url: string): string {
 export function captureTelemetryEvent(
   event: string,
   properties: TelemetryProperties = {},
-  distinctId = SERVER_DISTINCT_ID,
+  distinctId = SERVER_DISTINCT_ID
 ): void {
   if (!analyticsClient) return;
 
@@ -327,7 +360,7 @@ export function captureTelemetryEvent(
 export function captureTelemetryException(
   error: unknown,
   properties: TelemetryProperties = {},
-  distinctId = SERVER_DISTINCT_ID,
+  distinctId = SERVER_DISTINCT_ID
 ): void {
   if (!exceptionClient) return;
 
@@ -335,7 +368,7 @@ export function captureTelemetryException(
     exceptionClient.captureException(
       sanitizeError(error),
       distinctId,
-      buildProperties(properties),
+      buildProperties(properties)
     );
   } catch (captureError) {
     reportTelemetryTransportError("exception-capture", captureError);
@@ -345,7 +378,7 @@ export function captureTelemetryException(
 export async function captureTelemetryExceptionImmediate(
   error: unknown,
   properties: TelemetryProperties = {},
-  distinctId = SERVER_DISTINCT_ID,
+  distinctId = SERVER_DISTINCT_ID
 ): Promise<void> {
   if (!exceptionClient) return;
 
@@ -353,7 +386,7 @@ export async function captureTelemetryExceptionImmediate(
     await exceptionClient.captureExceptionImmediate(
       sanitizeError(error),
       distinctId,
-      buildProperties(properties),
+      buildProperties(properties)
     );
   } catch (captureError) {
     reportTelemetryTransportError("exception-immediate", captureError);
@@ -393,13 +426,19 @@ export function normalizeTelemetryLog(args: unknown[]): {
         : loggedError instanceof Error
           ? loggedError.message
           : "Log emitted";
-  const attributes = sanitizeTelemetryProperties(rawProperties) as LogAttributes;
+  const attributes = sanitizeTelemetryProperties(
+    rawProperties
+  ) as LogAttributes;
 
   if (loggedError !== undefined) {
     const error = sanitizeError(loggedError);
     attributes["exception.type"] = error.name;
     attributes["exception.message"] = error.message;
     if (error.stack) attributes["exception.stacktrace"] = error.stack;
+    if (error.cause instanceof Error) {
+      attributes["exception.cause.type"] = error.cause.name;
+      attributes["exception.cause.message"] = error.cause.message;
+    }
   }
 
   return { message: sanitizeMessage(message), attributes };
@@ -438,7 +477,7 @@ export function captureTelemetryLog(level: LogLevel, args: unknown[]): void {
 export function shouldTrackRequestMetrics(
   request: FastifyRequest,
   statusCode = 200,
-  captureSuccessfulRequests = env.POSTHOG_CAPTURE_REQUEST_METRICS,
+  captureSuccessfulRequests = env.POSTHOG_CAPTURE_REQUEST_METRICS
 ): boolean {
   // Failures remain visible even when successful request analytics are disabled.
   if (statusCode >= 400) return true;
@@ -449,21 +488,21 @@ export function shouldTrackRequestMetrics(
 
   if (
     /^\/api\/multiplayer-remote\/sessions\/\d+\/join-requests\/pending(?:\?|$)/.test(
-      path,
+      path
     )
   ) {
     return false;
   }
 
   return !["/health", "/docs", "/docs/", "/ws", "/api/events/stream"].some(
-    (excluded) => path === excluded || path.startsWith(`${excluded}/`),
+    (excluded) => path === excluded || path.startsWith(`${excluded}/`)
   );
 }
 
 export function getRequestTelemetryLogLevel(
   request: FastifyRequest,
   statusCode: number,
-  durationMs: number,
+  durationMs: number
 ): "warn" | "error" | null {
   if (statusCode >= 500) return "error";
   if (statusCode >= 400) return "warn";
@@ -497,7 +536,7 @@ export function shutdownTelemetry(): Promise<void> {
       if (result.status === "rejected") {
         reportTelemetryTransportError(
           ["events-shutdown", "exceptions-shutdown", "logs-shutdown"][index]!,
-          result.reason,
+          result.reason
         );
       }
     });

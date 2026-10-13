@@ -191,7 +191,7 @@ export function probeRenderedEditOutput(
   expectedDuration: number,
   expectsAudio: boolean,
   signal?: AbortSignal,
-  source?: { path: string; timeline: EditTimelineConfig }
+  source?: { path: string | readonly string[]; timeline: EditTimelineConfig }
 ): Promise<RenderedEditDurations> {
   const args = [
     "-v",

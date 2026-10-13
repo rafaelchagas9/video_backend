@@ -5,6 +5,64 @@ import {
 } from "@/utils/telemetry";
 
 describe("telemetry sanitization", () => {
+  test("bounds large database errors before redaction without blocking the process", async () => {
+    // A failed embedding INSERT can include megabytes of vector parameters.
+    // Run separately so a synchronous redaction stall can be killed by the parent.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "--eval",
+        `
+        import { normalizeTelemetryLog, sanitizeTelemetryProperties } from ${JSON.stringify(
+          `${import.meta.dir}/../src/utils/telemetry.ts`
+        )};
+        const vector = "[-0.012345,0.043210,".repeat(100_000);
+        const error = new Error("Failed query: INSERT INTO video_frame_embeddings params: " + vector);
+        error.stack += "\\n    at " + vector;
+        const log = normalizeTelemetryLog([{ error, videoId: 6337 }, "Visual indexing of a new storyboard failed"]);
+        const properties = sanitizeTelemetryProperties({ detail: vector, url: vector });
+        console.log(JSON.stringify({
+          message: log.attributes["exception.message"],
+          stack: log.attributes["exception.stacktrace"],
+          detail: properties.detail,
+          url: properties.url,
+          videoId: log.attributes.videoId,
+        }));
+      `,
+      ],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+    const deadline = setTimeout(() => child.kill(), 3_000);
+    let result: number;
+    try {
+      result = await child.exited;
+    } finally {
+      clearTimeout(deadline);
+    }
+    expect(result).toBe(0);
+    const output = JSON.parse(await new Response(child.stdout).text());
+    expect(output.videoId).toBe(6337);
+    expect(output.message).toContain("Failed query");
+    expect(output.message.length).toBeLessThanOrEqual(4_096);
+    expect(output.stack.length).toBeLessThanOrEqual(16_384);
+    expect(output.detail.length).toBeLessThanOrEqual(4_096);
+    expect(output.url.length).toBeLessThanOrEqual(4_096);
+  });
+
+  test("does not expose a partial filename or secret at the truncation boundary", () => {
+    const normalized = normalizeTelemetryLog([
+      { error: new Error("Failed: " + "private".repeat(1_000) + ".webm") },
+      "Failure",
+    ]);
+    const properties = sanitizeTelemetryProperties({
+      detail: "Failed: " + "private".repeat(1_000) + ".webm",
+      note: "Failure " + " ".repeat(4_070) + "Bearer private-token-value",
+    });
+    expect(normalized.attributes["exception.message"]).not.toContain("private");
+    expect(properties.detail).not.toContain("private");
+    expect(properties.note).not.toContain("private-token");
+  });
+
   test("redacts secrets, bodies, commands, stderr, and media paths", () => {
     const sanitized = sanitizeTelemetryProperties({
       authorization: "Bearer phc_secret",
@@ -39,10 +97,10 @@ describe("telemetry sanitization", () => {
     expect(normalized.message).toContain("[REDACTED_MEDIA_PATH]");
     expect(normalized.attributes.jobId).toBe(42);
     expect(normalized.attributes["exception.stacktrace"]).toContain(
-      "[REDACTED_MEDIA_PATH]",
+      "[REDACTED_MEDIA_PATH]"
     );
     expect(normalized.attributes["exception.stacktrace"]).toContain(
-      "/app/src/worker.ts:2:3",
+      "/app/src/worker.ts:2:3"
     );
   });
 

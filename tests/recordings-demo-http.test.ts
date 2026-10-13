@@ -97,12 +97,45 @@ describe("demo recording labels and highlight reviews", () => {
     expect((await import("@/config/drizzle")).isProductionDatabaseClientInitialized()).toBe(false);
   });
 
+  it("offers suggested and normal cuts, and can save either without losing the originals", async () => {
+    const id = (await list())[0]!.video_id;
+    const found = await app.inject({ method: "POST", url: `/api/recordings/${id}/analyze` });
+    expect(found.statusCode, found.body).toBe(200);
+    const original = found.json().data;
+    expect(original.model.version).toBe("demo-fixture-v1");
+    expect(original.model.classifications).toHaveLength(3);
+    expect(original.model.cuts).toHaveLength(2);
+    expect(original.model.cuts.some((cut: { id: string }) => cut.id === original.clips[2].id)).toBe(false);
+    const cut = original.model.cuts[0];
+    const selected = original.clips.map((clip: { id: string }) => clip.id === cut.id ? { ...clip, ...cut } : clip);
+    const save = (clips: unknown[]) => app.inject({ method: "PUT", url: `/api/recordings/${id}/clips`, payload: { clips, analyzed_at: original.analyzed_at } });
+    const suggested = await save(selected);
+    expect(suggested.statusCode, suggested.body).toBe(200);
+    expect(suggested.json().data.clips[0]).toMatchObject(cut);
+    expect(suggested.json().data.clips[0].detected).toEqual(original.clips[0].detected);
+    expect(suggested.json().data.model.cuts).toEqual(original.model.cuts);
+    const restored = await save(original.clips);
+    expect(restored.statusCode, restored.body).toBe(200);
+    expect(restored.json().data.clips).toEqual(original.clips);
+    expect(restored.json().data.model.cuts).toEqual(original.model.cuts);
+    expect((await import("@/config/drizzle")).isProductionDatabaseClientInitialized()).toBe(false);
+  });
+
   it("bounds fixtures for short media and does not expose mutable stored objects", async () => {
-    const { demoHighlightAnalysis, demoLabelTasks } = await import("@/modules/recordings/recordings.demo-fixtures");
-    for (const duration of [10, 60, 95]) {
+    const { demoHighlightAnalysis, demoLabelTasks, demoReviewAssessment } = await import("@/modules/recordings/recordings.demo-fixtures");
+    for (const duration of [5, 6, 10, 18, 60, 95]) {
       const analysis = demoHighlightAnalysis(duration);
       expect(analysis.clips).toHaveLength(3);
       for (const clip of analysis.clips) expect(clip.end_seconds).toBeLessThanOrEqual(duration);
+      const model = demoReviewAssessment(analysis.clips);
+      if (duration >= 6) expect(model.cuts.length).toBeGreaterThan(0);
+      for (const cut of model.cuts) {
+        const clip = analysis.clips.find(clip => clip.id === cut.id)!;
+        expect(cut.start_seconds).toBeGreaterThanOrEqual(clip.start_seconds);
+        expect(cut.end_seconds).toBeLessThanOrEqual(clip.end_seconds);
+        expect(cut.end_seconds - cut.start_seconds).toBeGreaterThanOrEqual(5);
+        expect(Math.max(cut.start_seconds - clip.start_seconds, clip.end_seconds - cut.end_seconds)).toBeGreaterThanOrEqual(1);
+      }
     }
     const task = demoLabelTasks()[0]!;
     task.context.private_mutation = true;

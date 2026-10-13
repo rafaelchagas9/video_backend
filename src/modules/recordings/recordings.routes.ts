@@ -13,6 +13,8 @@ import { RECORDING_REFINEMENTS } from "@/database/schema";
 import { answerLabelTask, listLabelTasks } from "./recordings.label-tasks";
 import { recordingsService } from "./recordings.service";
 import { recordingsProcessing } from "./recordings.processing";
+import { liveSessions } from "./recordings.sessions";
+import { CAPTURE_MODES } from "./recordings.sessions.policy";
 
 const videoParams = z.object({ videoId: z.coerce.number().int().positive() });
 const clipSchema = z.object({
@@ -316,6 +318,7 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         summary: "Change the recorder autopilot's settings",
         body: z.object({
           mode: z.enum(AUTOPILOT_MODES).optional(),
+          defaultCapture: z.enum(CAPTURE_MODES).optional(),
           startThreshold: z.number().min(0.05).max(0.99).optional(),
           startReadings: z.number().int().min(1).max(10).optional(),
           idleStopMinutes: z.number().int().min(1).max(240).optional(),
@@ -353,13 +356,38 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
     {
       schema: {
         tags: ["recordings"],
-        summary: "Hand a channel to the autopilot or take it back",
+        summary: "Set what Kura does with a channel's lives",
+        description:
+          "capture: manual | whole | highlights | training; threshold: the probability a moment needs to be kept in highlights mode (null for the default). The older `managed` toggle maps to manual or the default capture.",
         params: channelParams,
-        body: z.object({ managed: z.boolean() }),
+        body: z.union([
+          z.object({ managed: z.boolean() }),
+          z.object({ capture: z.enum(CAPTURE_MODES).optional(), threshold: z.number().min(0.05).max(0.99).nullable().optional() }),
+        ]),
         response: { 200: anyData },
       },
     },
-    async (request) => ({ success: true as const, data: await recorderAutopilot.setManaged(request.params.channelId, request.body.managed) })
+    async (request) => ({
+      success: true as const,
+      data:
+        "managed" in request.body
+          ? await recorderAutopilot.setManaged(request.params.channelId, request.body.managed)
+          : await recorderAutopilot.setChannel(request.params.channelId, request.body),
+    })
+  );
+
+  app.get(
+    "/sessions",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Lives Kura followed",
+        description: "Newest first: viewers over time, title changes, the site's info, and for highlights lives the cut and its video.",
+        querystring: z.object({ channel_id: z.string().min(1).max(200).optional(), limit: z.coerce.number().int().min(1).max(200).optional() }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => ({ success: true as const, data: await liveSessions.list({ channelId: request.query.channel_id, limit: request.query.limit }) })
   );
 
   app.get(

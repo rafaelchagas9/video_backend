@@ -414,6 +414,13 @@
       "when": 1791639304503,
       "tag": "0058_connected_versus_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1791807505226,
+      "tag": "0059_live_sessions",
+      "breakpoints": true
     }
   ]
 }

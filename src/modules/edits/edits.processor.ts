@@ -339,6 +339,8 @@ export function buildEditFilterComplex(
 
 export interface BuildEditFfmpegArgsOptions {
   inputPath: string;
+  /** One input per segment for a multi-source timeline; `inputPath` otherwise. */
+  inputPaths?: readonly string[];
   outputPath: string;
   timeline: EditTimelineConfig;
   output: EditOutputConfig;
@@ -374,6 +376,7 @@ export function buildEditFfmpegArgs(
     args.push("-threads", "0");
   }
   options.timeline.segments.forEach((segment, index) => {
+    const inputPath = options.inputPaths?.[index] ?? options.inputPath;
     if (encodingMode === "hw") {
       args.push(
         "-hwaccel",
@@ -394,7 +397,7 @@ export function buildEditFfmpegArgs(
       formatNumber(segment.end - segment.start),
       "-an",
       "-i",
-      options.inputPath
+      inputPath
     );
     if (graph.audioOutputLabel) {
       // Separate demuxers keep fast audio reads from filling the video decoder's
@@ -406,7 +409,7 @@ export function buildEditFfmpegArgs(
         formatNumber(segment.end - segment.start),
         "-vn",
         "-i",
-        options.inputPath
+        inputPath
       );
     }
   });
@@ -462,14 +465,45 @@ export function buildEditFfmpegArgs(
   return args;
 }
 
+interface EditInputs {
+  /** The file each segment is cut from. */
+  paths: string[];
+  /** Durations of every video the timeline names, by id. */
+  durations: Map<number, number | null>;
+  /** Every file the timeline cuts from has audio. */
+  hasAudio: boolean;
+}
+
+async function resolveEditInputs(
+  sourceVideo: Video,
+  timeline: EditTimelineConfig
+): Promise<EditInputs> {
+  const videos = new Map<number, Video>([[sourceVideo.id, sourceVideo]]);
+  for (const segment of timeline.segments) {
+    const id = segment.source_video_id;
+    if (id !== undefined && !videos.has(id))
+      videos.set(id, await videosService.findById(id));
+  }
+  const used = timeline.segments.map(
+    (segment) => videos.get(segment.source_video_id ?? sourceVideo.id)!
+  );
+  return {
+    paths: used.map((video) => video.file_path),
+    durations: new Map(
+      [...videos].map(([id, video]) => [id, video.duration_seconds])
+    ),
+    hasAudio: used.every((video) => video.audio_codec !== null),
+  };
+}
+
 async function probeSegmentDimensions(
-  inputPath: string,
+  inputPaths: readonly string[],
   timeline: EditTimelineConfig,
   signal: AbortSignal
 ): Promise<Array<{ width: number; height: number } | null>> {
   return Promise.all(
     timeline.segments.map(
-      (segment) =>
+      (segment, index) =>
         new Promise<{ width: number; height: number } | null>((resolve) => {
           const child = spawn(
             env.FFPROBE_PATH,
@@ -486,7 +520,7 @@ async function probeSegmentDimensions(
               "frame=width,height",
               "-of",
               "csv=p=0",
-              inputPath,
+              inputPaths[index]!,
             ],
             { stdio: ["ignore", "pipe", "ignore"], signal }
           );
@@ -576,12 +610,14 @@ export class EditsProcessor {
     try {
       if (signal.aborted) throw new EditCancelledError();
       const sourceVideo = await videosService.findById(videoId);
+      const inputs = await resolveEditInputs(sourceVideo, timelineConfig);
       validateEditRequest(
         { output: outputConfig, timeline: timelineConfig },
-        sourceVideo.duration_seconds
+        sourceVideo.duration_seconds,
+        inputs.durations
       );
-      if (!existsSync(sourceVideo.file_path)) {
-        throw new Error(`Source file not found: ${sourceVideo.file_path}`);
+      for (const path of new Set(inputs.paths)) {
+        if (!existsSync(path)) throw new Error(`Source file not found: ${path}`);
       }
 
       const prepareStart = Date.now();
@@ -618,14 +654,14 @@ export class EditsProcessor {
         probeRenderedEditOutput(
           tempOutputPath!,
           calculateExpectedDuration(timelineConfig),
-          sourceVideo.audio_codec !== null &&
-            timelineConfig.audio?.muted !== true,
+          inputs.hasAudio && timelineConfig.audio?.muted !== true,
           signal,
-          { path: sourceVideo.file_path, timeline: timelineConfig }
+          { path: inputs.paths, timeline: timelineConfig }
         );
       await this.runFfmpeg(
         jobId,
         sourceVideo,
+        inputs,
         tempOutputPath,
         outputConfig,
         timelineConfig,
@@ -661,6 +697,7 @@ export class EditsProcessor {
         await this.runFfmpeg(
           jobId,
           sourceVideo,
+          inputs,
           tempOutputPath,
           outputConfig,
           timelineConfig,
@@ -818,6 +855,7 @@ export class EditsProcessor {
   private async runFfmpeg(
     jobId: number,
     sourceVideo: Video,
+    inputs: EditInputs,
     outputPath: string,
     outputConfig: EditOutputConfig,
     timeline: EditTimelineConfig,
@@ -857,7 +895,7 @@ export class EditsProcessor {
     };
 
     const segmentDimensions = await probeSegmentDimensions(
-      sourceVideo.file_path,
+      inputs.paths,
       timeline,
       signal
     );
@@ -868,10 +906,11 @@ export class EditsProcessor {
     const buildArgs = (encodingMode: EditEncodingMode): string[] =>
       buildEditFfmpegArgs({
         inputPath: sourceVideo.file_path,
+        inputPaths: inputs.paths,
         outputPath,
         timeline,
         output: outputConfig,
-        hasSourceAudio: sourceVideo.audio_codec !== null,
+        hasSourceAudio: inputs.hasAudio,
         sourceWidth: sourceVideo.width,
         sourceHeight: sourceVideo.height,
         sourceFps: sourceVideo.fps,
@@ -887,7 +926,8 @@ export class EditsProcessor {
       {
         jobId,
         segmentCount: timeline.segments.length,
-        hasAudio: sourceVideo.audio_codec !== null,
+        hasAudio: inputs.hasAudio,
+        sources: new Set(inputs.paths).size,
         audioCodec: outputConfig.audio_codec,
         encodingMode: mode,
         seekMode: "per_segment_input",

@@ -143,8 +143,16 @@ export const recordingClipFeedbackTable = pgTable(
 export const recorderAutopilotChannelsTable = pgTable("recorder_autopilot_channels", {
   /** GoondVR's `<site>__<username>` id. */
   channelId: text("channel_id").primaryKey(),
-  /** False hands the channel back to the user: the autopilot never pauses or resumes it. */
+  /** False hands the channel back to the user: the autopilot never pauses or resumes it. Mirrors capture <> 'manual'. */
   managed: boolean("managed").notNull().default(true),
+  /**
+   * What Kura does with the channel's lives: manual (left alone), whole (always recorded, kept
+   * as is), highlights (always recorded, then cut to the moments above `highlightThreshold`
+   * into one video per live and the raw files deleted) or training (the data-gathering autopilot).
+   */
+  capture: text("capture").notNull().default("training"),
+  /** Probe probability a moment needs to be kept in highlights mode; null uses the default. */
+  highlightThreshold: doublePrecision("highlight_threshold"),
   /** watching | recording | enough | dropped */
   state: text("state").notNull().default("watching"),
   reason: text("reason"),
@@ -230,3 +238,51 @@ export const recordingLabelTasksTable = pgTable("recording_label_tasks", {
     .on(table.kind, table.batch, table.videoId, table.startSeconds)
     .where(sql`${table.kind} <> 'versus'`),
 ]);
+
+export interface LiveSessionTitle {
+  at: string;
+  title: string;
+}
+
+/** One cut of a highlights video: a stretch of one of the live's recordings. */
+export interface LiveSessionClip {
+  video_id: number;
+  start_seconds: number;
+  end_seconds: number;
+  score: number;
+}
+
+/**
+ * One live of a GoondVR channel, from the first minute Kura saw it online to the last, with what
+ * the site said about it along the way. Recordings belong to it by channel and file time.
+ * Kept after the recordings are deleted; no foreign keys on purpose.
+ */
+export const recorderLiveSessionsTable = pgTable(
+  "recorder_live_sessions",
+  {
+    id: serial("id").primaryKey(),
+    channelId: text("channel_id").notNull(),
+    username: text("username").notNull(),
+    site: text("site").notNull(),
+    startedAt: timestamp("started_at").notNull(),
+    /** The last minute it was seen online. */
+    lastSeenAt: timestamp("last_seen_at").notNull(),
+    endedAt: timestamp("ended_at"),
+    /** The channel's capture mode when the live ended (while live: when it started). */
+    capture: text("capture").notNull(),
+    threshold: doublePrecision("threshold"),
+    /** live | kept | waiting | rendering | done | empty | failed */
+    status: text("status").notNull().default("live"),
+    gender: text("gender"),
+    titles: jsonb("titles").$type<LiveSessionTitle[]>().notNull().default([]),
+    /** [seconds since start, viewers] once a minute. */
+    viewers: jsonb("viewers").$type<[number, number][]>().notNull().default([]),
+    peakViewers: integer("peak_viewers").notNull().default(0),
+    clips: jsonb("clips").$type<LiveSessionClip[]>(),
+    jobId: integer("job_id"),
+    outputVideoId: integer("output_video_id"),
+    error: text("error"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("recorder_live_sessions_open").on(table.channelId).where(sql`${table.endedAt} IS NULL`)]
+);

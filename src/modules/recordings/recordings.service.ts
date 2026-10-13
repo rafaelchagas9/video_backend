@@ -17,7 +17,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { goondvr, usernameFromFileName } from "./recordings.goondvr";
 import { recorderService } from "./recordings.live";
-import { demoHighlightAnalysis } from "./recordings.demo-fixtures";
+import { demoHighlightAnalysis, demoReviewAssessment } from "./recordings.demo-fixtures";
 import { detectHighlights, detectWithProbe, isLikelySkip, joinStretches } from "./recordings.highlights";
 import { loadHighlightProbe, PROBE_STATES, probeThreshold, type HighlightProbe, type ProbeState } from "./recordings.probe";
 import { capRecordingClips, probeRecordingDuration } from "./recordings.duration";
@@ -32,6 +32,7 @@ import { recorderAutopilot } from "./recordings.autopilot";
 import { isAuditRecording, trainingValues } from "./recordings.training-value";
 import { preserveRecordingTrainingSnapshot } from "./recordings.snapshots.store";
 import { keptRecordingSeconds } from "./recordings.kept-duration";
+import { liveSessions } from "./recordings.sessions";
 
 export interface RecordingSettings {
   directoryId: number | null;
@@ -252,6 +253,15 @@ export class RecordingsService {
         })).data;
       }
     }
+    // Library videos (downloads, not GoondVR's) join the list once their highlights were asked for.
+    const recordingIds = new Set(videos.map((video) => video.id));
+    const libraryIds = await this.libraryReviewIds(settings.directoryId, recordingIds);
+    if (libraryIds.length) {
+      const page = await videosSearchService.list(userId, {
+        ids: libraryIds, limit: libraryIds.length, sort: "created_at", order: "desc", include: ["creators", "artwork"],
+      });
+      videos = [...videos, ...page.data];
+    }
     const [reviews, paired, autopilot, knownSites] = await Promise.all([
       this.rows(videos.map((video) => video.id)),
       this.pairedByChannel(),
@@ -288,9 +298,19 @@ export class RecordingsService {
           channel_paired: channel ? (paired.get(channel) ?? 0) : 0,
           training_value: values.get(video.id) ?? 0,
           audit: isAuditRecording(video.id),
+          library: !recordingIds.has(video.id),
         };
       }),
     };
+  }
+
+  /** Reviewed videos outside the recordings folder, newest review first. */
+  private async libraryReviewIds(directoryId: number | null, listed: Set<number>): Promise<number[]> {
+    if (env.DEMO_MODE) return [...demoReviews.keys()].filter((id) => !listed.has(id)).slice(0, 200);
+    const rows = await db.execute<{ video_id: number }>(sql`
+      SELECT r.video_id FROM recording_reviews r JOIN videos v ON v.id = r.video_id
+      WHERE v.directory_id IS DISTINCT FROM ${directoryId ?? -1}::int ORDER BY r.updated_at DESC LIMIT 200`);
+    return rows.map((row) => Number(row.video_id)).filter((id) => !listed.has(id));
   }
 
   /** Sites of every channel the autopilot has seen, by lower-cased username, from its `<site>__<username>` ids. */
@@ -459,7 +479,7 @@ export class RecordingsService {
       return {
         video, detector: "prompts" as const, status: row.status, clips: row.clips, curve: row.curve,
         delete_original: row.deleteOriginal, error: row.error, analyzed_at: row.analyzedAt.toISOString(),
-        order: null, model: null, temporal_versions: null, channel: null,
+        order: null, model: demoReviewAssessment(row.proposals ?? row.clips), temporal_versions: null, channel: null, live: null,
       };
     }
     const ranked = row.proposals ?? row.clips.map((clip) => ({ ...clip, ...(clip.detected ?? {}) }));
@@ -485,6 +505,8 @@ export class RecordingsService {
       temporal_versions: temporal,
       // What the channel already holds, so a keep can be refined relative to it.
       channel: channel ? await this.channelContext(channel, videoId) : null,
+      // The live it was recorded in: viewers, titles and the site's info.
+      live: video ? await liveSessions.forVideo(video).catch(() => null) : null,
     };
   }
 
@@ -714,6 +736,12 @@ export class RecordingsService {
     demoReviews.delete(videoId);
     await markRecordingDiscarded(videoId).catch((error) => logger.warn({ error, videoId }, "Could not mark review decisions discarded"));
     return { video_id: videoId };
+  }
+
+  /** Deletes a recording the way discarding one does (training snapshot first, through GoondVR). */
+  async deleteRecording(source: Video) {
+    await this.remove(source);
+    demoReviews.delete(source.id);
   }
 
   /** Through GoondVR when it owns the file, so its per-channel quota counters stay truthful. */

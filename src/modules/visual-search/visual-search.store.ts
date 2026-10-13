@@ -44,11 +44,19 @@ export interface TagVisualQuery {
 }
 
 export interface VisualSearchStore {
-  searchFrames(vector: Float32Array, options: FrameSearchOptions): Promise<FrameHit[]>;
+  searchFrames(
+    vector: Float32Array,
+    options: FrameSearchOptions
+  ): Promise<FrameHit[]>;
   /** The stored embedding of the frame nearest a timestamp, for "more like this moment". */
-  frameVector(videoId: number, timestampSeconds: number): Promise<Float32Array | null>;
+  frameVector(
+    videoId: number,
+    timestampSeconds: number
+  ): Promise<Float32Array | null>;
   /** Every frame of one video in time order (for per-video analysis). */
-  videoFrames(videoId: number): Promise<{ timestamps: number[]; vectors: Float32Array[] }>;
+  videoFrames(
+    videoId: number
+  ): Promise<{ timestamps: number[]; vectors: Float32Array[] }>;
   indexed(videoIds: number[]): Promise<Map<number, IndexedVideo>>;
   indexedCount(): Promise<{ videos: number; frames: number }>;
   replaceVideo(meta: IndexedVideo, frames: FrameRow[]): Promise<void>;
@@ -83,7 +91,10 @@ function parseVector(text: string): Float32Array {
 }
 
 export class PostgresVisualSearchStore implements VisualSearchStore {
-  async searchFrames(vector: Float32Array, options: FrameSearchOptions): Promise<FrameHit[]> {
+  async searchFrames(
+    vector: Float32Array,
+    options: FrameSearchOptions
+  ): Promise<FrameHit[]> {
     const q = literal(vector);
     const exclude = options.excludeVideoIds?.length
       ? sql`AND video_id <> ALL(${`{${options.excludeVideoIds.join(",")}}`}::int[])`
@@ -140,7 +151,10 @@ export class PostgresVisualSearchStore implements VisualSearchStore {
   }
 
   async videoFrames(videoId: number) {
-    const rows = await db.execute<{ timestamp_seconds: number; embedding: string }>(sql`
+    const rows = await db.execute<{
+      timestamp_seconds: number;
+      embedding: string;
+    }>(sql`
       SELECT timestamp_seconds, embedding::text AS embedding FROM video_frame_embeddings
       WHERE video_id = ${videoId} ORDER BY frame_index`);
     return {
@@ -167,6 +181,11 @@ export class PostgresVisualSearchStore implements VisualSearchStore {
 
   async replaceVideo(meta: IndexedVideo, frames: FrameRow[]) {
     await db.transaction(async (tx) => {
+      // Storyboard completion and library sync can index the same video at
+      // once. Lock before DELETE, including when no embedding rows exist yet.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`visual-search:publication:${meta.videoId}`}, 0))`
+      );
       await tx
         .delete(videoFrameEmbeddingsTable)
         .where(eq(videoFrameEmbeddingsTable.videoId, meta.videoId));
@@ -221,7 +240,12 @@ export class PostgresVisualSearchStore implements VisualSearchStore {
   async removeTagQuery(tagId: number, id: number) {
     const rows = await db
       .delete(tagVisualQueriesTable)
-      .where(and(eq(tagVisualQueriesTable.tagId, tagId), eq(tagVisualQueriesTable.id, id)))
+      .where(
+        and(
+          eq(tagVisualQueriesTable.tagId, tagId),
+          eq(tagVisualQueriesTable.id, id)
+        )
+      )
       .returning({ id: tagVisualQueriesTable.id });
     return rows.length > 0;
   }

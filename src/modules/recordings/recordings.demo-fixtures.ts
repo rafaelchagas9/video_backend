@@ -1,6 +1,7 @@
 /** Designer fixtures use the isolated demo catalogue and never run an inference model. */
 import type { RecordingClip } from "@/database/schema";
 import { demoRepository, getDemoDatabasePath } from "@/database/demo";
+import type { RecordingAssessment } from "./recordings.model";
 import type { LabelTask, LabelTaskKind } from "./recordings.label-tasks";
 
 const generatedAt = "2026-10-10T12:00:00.000Z";
@@ -77,7 +78,8 @@ export function saveDemoLabelAnswer(task: LabelTask, answer: string | null, reas
 
 export function demoHighlightAnalysis(duration: number): { clips: RecordingClip[]; curve: number[] } {
   const clips = [[0.08, 0.25], [0.34, 0.61], [0.7, 0.94]].map(([from, to], index): RecordingClip => {
-    const [start, end] = range(duration, from!, to!);
+    // A six-second cloud sample still needs a five-second playable suggested cut.
+    const [start, end] = index === 0 && duration >= 6 && duration < 30 ? [0, duration] : range(duration, from!, to!);
     return { id: `c${index + 1}`, start_seconds: start, end_seconds: end, peak_seconds: (start + end) / 2,
       score: [0.91, 0.78, 0.86][index]!, label: ["Opening performance", "Main performance", "Closing performance"][index]!,
       keep: index !== 1, reasons: [], detected: { start_seconds: start, end_seconds: end } };
@@ -87,4 +89,23 @@ export function demoHighlightAnalysis(duration: number): { clips: RecordingClip[
     return clip ? clip.score - 0.08 * Math.abs(Math.sin(i * 0.6)) : 0.12;
   });
   return { clips, curve };
+}
+
+/** Original proposals stay separate from advisory cuts, including after a demo save. */
+export function demoReviewAssessment(proposals: readonly Pick<RecordingClip, "id" | "start_seconds" | "end_seconds" | "score">[]): RecordingAssessment {
+  return {
+    version: "demo-fixture-v1", target: "coarse-triage", applied: false,
+    scores: proposals.map((clip) => ({ id: clip.id, score: clip.score })),
+    classifications: proposals.map((clip) => ({ id: clip.id, target: "triage-potential", probability: clip.score, source: "numeric" })),
+    cuts: proposals.slice(0, 2).flatMap((clip) => {
+      const length = clip.end_seconds - clip.start_seconds;
+      const budget = length - 5;
+      if (budget < 1) return [];
+      const startTrim = Math.min(Math.floor(length * 0.1), Math.floor(budget / 2));
+      const endTrim = Math.min(Math.max(1, Math.floor(length * 0.15)), budget - startTrim);
+      return [{ id: clip.id, start_seconds: clip.start_seconds + startTrim, end_seconds: clip.end_seconds - endTrim }];
+    }),
+    // The third highlight deliberately has no suggestion, to show the normal controls too.
+    recording: null,
+  };
 }

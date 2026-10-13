@@ -25,6 +25,8 @@ export interface GoondvrChannel {
   max_stored_size_mb: number;
   pause_reason?: string;
   room_title?: string;
+  /** The broadcaster's gender as the site reports it (Chaturbate: female, male, couple, trans). */
+  gender?: string;
   viewer_count: number;
   has_thumbnail: boolean;
   has_live_thumbnail: boolean;

@@ -2,7 +2,39 @@ import pino from "pino";
 import { env } from "@/config/env";
 import { captureTelemetryLog } from "@/utils/telemetry";
 
-export const serializeLoggerError = pino.stdSerializers.err;
+function boundedLogText(value: string, maximum: number): string {
+  return value.length <= maximum
+    ? value
+    : `${value.slice(0, maximum - 12)} [truncated]`;
+}
+
+export function serializeLoggerError(error: Error) {
+  const serialized = pino.stdSerializers.err(error);
+  if (!serialized || typeof serialized !== "object") return serialized;
+  if (typeof serialized.message === "string") {
+    serialized.message = boundedLogText(serialized.message, 4_096);
+  }
+  if (typeof serialized.stack === "string") {
+    serialized.stack = boundedLogText(serialized.stack, 16_384);
+  }
+  if (typeof serialized.query === "string") {
+    serialized.query = boundedLogText(serialized.query, 4_096);
+  }
+  if (Array.isArray(serialized.params)) {
+    serialized.params = `[omitted ${serialized.params.length} query parameters]`;
+  }
+  // Drizzle appends its database cause after the full parameter dump. Keep it
+  // separately so truncating the wrapper never hides the actionable error.
+  if (error?.cause instanceof Error) {
+    const cause = error.cause as Error & { code?: string };
+    serialized.causeDetails = {
+      type: cause.name,
+      message: boundedLogText(cause.message, 4_096),
+      code: cause.code,
+    };
+  }
+  return serialized;
+}
 
 const loggerConfig = {
   level: env.NODE_ENV === "development" ? "debug" : "info",

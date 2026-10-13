@@ -11,6 +11,8 @@
  *   adding much once it has a few such recordings; variety across channels matters more.
  */
 
+import type { CaptureMode } from "./recordings.sessions.policy";
+
 export const AUTOPILOT_MODES = ["off", "suggest", "auto"] as const;
 export type AutopilotMode = (typeof AUTOPILOT_MODES)[number];
 
@@ -19,7 +21,10 @@ export const AUTOPILOT_STATES = ["watching", "recording", "enough", "dropped", "
 export type AutopilotState = (typeof AUTOPILOT_STATES)[number];
 
 export interface AutopilotSettings {
+  /** Whether Kura starts and stops recordings at all (every capture mode but manual). */
   mode: AutopilotMode;
+  /** What a channel Kura has not seen before gets. */
+  defaultCapture: CaptureMode;
   /** Probability of tease-or-more a live frame needs to count as action. */
   startThreshold: number;
   /** Readings in a row (one a minute) at or above the threshold before recording starts. */
@@ -47,6 +52,7 @@ export interface AutopilotSettings {
 
 export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   mode: "auto",
+  defaultCapture: "manual",
   startThreshold: 0.85,
   startReadings: 2,
   idleStopMinutes: 20,
