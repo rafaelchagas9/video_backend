@@ -40,3 +40,4 @@ Thumbs.db
 /demo_mode
 *.sqlite-wal
 *.sqlite-shm
+vision-lab/model_completion/artifacts/stage1/frames.npz
