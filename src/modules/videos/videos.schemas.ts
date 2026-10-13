@@ -804,3 +804,24 @@ export const bulkConditionalApplyResponseSchema = z.object({
     }),
   }),
 });
+
+const metadataSuggestionSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  profile_picture_url: z.string().nullable(),
+  color: z.string().nullable(),
+  confidence: z.number(),
+  reasons: z.array(z.enum(["face", "copy", "title", "themes", "folder", "similar"])),
+  detail: z.string(),
+});
+
+export const videoMetadataSuggestionsResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    creators: z.array(metadataSuggestionSchema),
+    tags: z.array(metadataSuggestionSchema),
+    studios: z.array(metadataSuggestionSchema),
+    source_review: z.object({ pending: z.number().int() }),
+    visual_index: z.boolean(),
+  }),
+});

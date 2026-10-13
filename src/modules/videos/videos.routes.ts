@@ -7,6 +7,7 @@ import { videosSuggestionsService } from "./videos.suggestions.service";
 import { videosMetadataService } from "./videos.metadata.service";
 import { videosBulkService } from "./videos.bulk.service";
 import { videosRelatedService } from "./videos.related.service";
+import { videoMetadataSuggestionsService } from "./videos.metadata-suggestions.service";
 import { streamingService } from "./streaming.service";
 import { creatorsRelationshipsService } from "@/modules/creators/creators.relationships.service";
 import { studiosRelationshipsService } from "@/modules/studios/studios.relationships.service";
@@ -34,6 +35,7 @@ import {
   compressionSuggestionsResponseSchema,
   relatedVideosQuerySchema,
   relatedVideosResponseSchema,
+  videoMetadataSuggestionsResponseSchema,
   creatorIdParamSchema,
   tagIdParamSchema,
   studioIdParamSchema,
@@ -530,6 +532,30 @@ export async function videosRoutes(fastify: FastifyInstance): Promise<void> {
         meta: result.meta,
       });
     }
+  );
+
+  // Who / what the video probably is, from faces, its title, its folder and videos that look like it
+  app.get(
+    "/:id/metadata-suggestions",
+    {
+      schema: {
+        tags: ["videos"],
+        summary: "Suggest creators, tags and studios for a video",
+        description:
+          "Ranks unlinked creators, tags and studios by evidence: recognised faces, names in the title or folder, the video's themes, copies of the file, look-alike videos and folder siblings. Nothing is applied.",
+        params: idParamSchema,
+        response: {
+          200: videoMetadataSuggestionsResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) =>
+      reply.send({
+        success: true,
+        data: await videoMetadataSuggestionsService.getSuggestions(request.user!.id, request.params.id),
+      })
   );
 
   // Get video by ID

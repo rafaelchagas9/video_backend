@@ -49,6 +49,12 @@ const FRAME_POOL = 1500;
 /** Hits closer than this merge into one moment. Storyboard tiles are ~5 s apart. */
 const MOMENT_GAP_SECONDS = 20;
 const MAX_MOMENTS_PER_VIDEO = 6;
+/** Frames of a video that query the index for whole-video neighbours, and the hits kept per frame. */
+const SIMILAR_VIDEO_PROBES = 8;
+const SIMILAR_VIDEO_POOL = 300;
+
+export type { VideoNeighbour } from "@/modules/videos/related-signals";
+import type { VideoNeighbour } from "@/modules/videos/related-signals";
 
 let store: VisualSearchStore | null = null;
 export function visualSearchStore(): VisualSearchStore {
@@ -272,6 +278,35 @@ export class VisualSearchService {
       input.limit,
       input.includeSameVideo ? [] : [input.videoId]
     );
+  }
+
+  /**
+   * Whole videos that look like this one: a handful of its frames each query the index,
+   * and a neighbour scores by its best match per probe, averaged over the probes. Empty
+   * when the video is not indexed yet.
+   */
+  async similarVideos(videoId: number, limit: number): Promise<VideoNeighbour[]> {
+    const probes = await this.store.sampleVectors(videoId, SIMILAR_VIDEO_PROBES);
+    if (!probes.length) return [];
+    const pools = await Promise.all(
+      probes.map((vector) =>
+        this.store.searchFrames(normalize(vector), {
+          limit: SIMILAR_VIDEO_POOL,
+          excludeVideoIds: [videoId],
+        })
+      )
+    );
+    const total = new Map<number, number>();
+    for (const pool of pools) {
+      const best = new Map<number, number>();
+      for (const hit of pool)
+        if (hit.similarity > (best.get(hit.videoId) ?? -Infinity)) best.set(hit.videoId, hit.similarity);
+      for (const [id, similarity] of best) total.set(id, (total.get(id) ?? 0) + similarity);
+    }
+    return [...total]
+      .map(([id, sum]) => ({ videoId: id, score: sum / pools.length }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
   async tagQueries(tagId: number) {

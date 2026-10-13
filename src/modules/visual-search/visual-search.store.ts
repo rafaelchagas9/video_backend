@@ -57,6 +57,8 @@ export interface VisualSearchStore {
   videoFrames(
     videoId: number
   ): Promise<{ timestamps: number[]; vectors: Float32Array[] }>;
+  /** Up to `count` frame embeddings spread evenly over one video, for whole-video similarity. */
+  sampleVectors(videoId: number, count: number): Promise<Float32Array[]>;
   indexed(videoIds: number[]): Promise<Map<number, IndexedVideo>>;
   indexedCount(): Promise<{ videos: number; frames: number }>;
   replaceVideo(meta: IndexedVideo, frames: FrameRow[]): Promise<void>;
@@ -161,6 +163,18 @@ export class PostgresVisualSearchStore implements VisualSearchStore {
       timestamps: rows.map((row) => Number(row.timestamp_seconds)),
       vectors: rows.map((row) => parseVector(row.embedding)),
     };
+  }
+
+  async sampleVectors(videoId: number, count: number) {
+    const rows = await db.execute<{ embedding: string }>(sql`
+      WITH frames AS (
+        SELECT embedding, row_number() OVER (ORDER BY frame_index) - 1 AS position, count(*) OVER () AS total
+        FROM video_frame_embeddings WHERE video_id = ${videoId}
+      )
+      SELECT embedding::text AS embedding FROM frames
+      WHERE position % GREATEST(1, total / ${count}) = 0
+      ORDER BY position LIMIT ${count}`);
+    return rows.map((row) => parseVector(row.embedding));
   }
 
   async indexed(videoIds: number[]) {

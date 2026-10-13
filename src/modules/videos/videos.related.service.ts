@@ -15,7 +15,16 @@ import type {
   Video,
 } from "./videos.types";
 import { RelatedEmptyCache } from "./related-empty-cache";
+import {
+  SAME_FOLDER_POINTS,
+  folderOf,
+  folderSizesOf,
+  isSmallFolder,
+  visualPoints,
+} from "./related-signals";
 import { videosService } from "./videos.service";
+import { visualSearchService } from "@/modules/visual-search/visual-search.service";
+import type { VideoNeighbour } from "./related-signals";
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 12;
@@ -88,6 +97,27 @@ interface RelatedVideoRow {
 
 type TagFamilyMap = Map<number, Set<number>>;
 
+interface ScoringContext {
+  tagFamilyMap: TagFamilyMap;
+  /** Candidate id → points for looking like the source (see `visualPoints`). */
+  visual: Map<number, number>;
+  /** Folder path → number of available videos in it. */
+  folderSizes: Map<string, number>;
+}
+
+/** Only this many best matches are cached per source; a big folder would otherwise store thousands. */
+const MAX_STORED_SCORES = 200;
+const VISUAL_NEIGHBOURS = 40;
+
+async function safeNeighbours(videoId: number): Promise<VideoNeighbour[]> {
+  try {
+    return await visualSearchService.similarVideos(videoId, VISUAL_NEIGHBOURS);
+  } catch {
+    // The index is optional: a missing model or table only removes this signal.
+    return [];
+  }
+}
+
 export class VideosRelatedService {
   private readonly emptyCache = new RelatedEmptyCache();
   async invalidateForVideos(videoIds: number[], executor: typeof db | DrizzleTransaction = db): Promise<void> {
@@ -115,6 +145,12 @@ export class VideosRelatedService {
       
       const candidates = (videosObj.data as Video[]).filter((v) => v.id !== sourceVideoId);
       
+      const [visual, folderSizes] = [
+        visualPoints(await safeNeighbours(sourceVideoId)),
+        folderSizesOf([sourceVideo, ...candidates]),
+      ];
+      const sourceFolder = folderOf(sourceVideo.file_path);
+
       const scored = candidates.map((v) => {
         let score = 0;
         const reasons: string[] = [];
@@ -141,6 +177,17 @@ export class VideosRelatedService {
         if (sharedStudios > 0) {
           score += sharedStudios * 14;
           reasons.push(`shared-studios:${sharedStudios}`);
+        }
+
+        const looks = visual.get(v.id);
+        if (looks) {
+          score += looks;
+          reasons.push("visually-similar");
+        }
+
+        if (isSmallFolder(sourceFolder, folderOf(v.file_path), folderSizes)) {
+          score += SAME_FOLDER_POINTS;
+          reasons.push("same-folder");
         }
         
         return {
@@ -260,12 +307,21 @@ export class VideosRelatedService {
       return;
     }
 
-    const candidates = await this.getCandidateFeatureRows(userId, sourceVideoId);
-    const tagFamilyMap = await this.buildTagFamilyMap();
+    const [candidates, tagFamilyMap, neighbours] = await Promise.all([
+      this.getCandidateFeatureRows(userId, sourceVideoId),
+      this.buildTagFamilyMap(),
+      safeNeighbours(sourceVideoId),
+    ]);
+    const context: ScoringContext = {
+      tagFamilyMap,
+      visual: visualPoints(neighbours),
+      folderSizes: folderSizesOf([source, ...candidates]),
+    };
     const scored = candidates
-      .map((candidate) => this.scoreCandidate(source, candidate, tagFamilyMap))
+      .map((candidate) => this.scoreCandidate(source, candidate, context))
       .filter((candidate) => candidate.score > 0)
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_STORED_SCORES);
 
     const computedAt = new Date();
     await db.transaction(async (tx) => {
@@ -406,7 +462,7 @@ export class VideosRelatedService {
   private scoreCandidate(
     source: RelatedFeatureRow,
     candidate: RelatedFeatureRow,
-    tagFamilyMap: TagFamilyMap,
+    { tagFamilyMap, visual, folderSizes }: ScoringContext,
   ): ScoredCandidate {
     const sourceTags = this.parseNumberArray(source.tag_ids);
     const candidateTags = this.parseNumberArray(candidate.tag_ids);
@@ -474,6 +530,20 @@ export class VideosRelatedService {
       score += points;
       strongRelevanceScore += points;
       reasons.push(`same-playlists:${sharedPlaylists}`);
+    }
+
+    // Neither of these needs metadata, so a video nobody has tagged still gets neighbours.
+    const looks = visual.get(candidate.id);
+    if (looks) {
+      score += looks;
+      strongRelevanceScore += looks;
+      reasons.push("visually-similar");
+    }
+
+    if (isSmallFolder(folderOf(source.file_path), folderOf(candidate.file_path), folderSizes)) {
+      score += SAME_FOLDER_POINTS;
+      strongRelevanceScore += SAME_FOLDER_POINTS;
+      reasons.push("same-folder");
     }
 
     if (strongRelevanceScore < 14) {

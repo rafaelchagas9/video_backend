@@ -172,7 +172,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:related|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|preview(?:/status)?|conversions|conversion-estimate|artwork)$`
+      `^${API_PREFIX}/videos/\\d+/(?:related|metadata-suggestions|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|preview(?:/status)?|conversions|conversion-estimate|artwork)$`
     ),
   },
   {

@@ -140,6 +140,12 @@ export class DemoVisualSearchStore implements VisualSearchStore {
     return { timestamps: video?.timestamps ?? [], vectors: video?.vectors ?? [] };
   }
 
+  async sampleVectors(videoId: number, count: number) {
+    const { vectors } = await this.videoFrames(videoId);
+    const step = Math.max(1, Math.floor(vectors.length / count));
+    return vectors.filter((_, index) => index % step === 0).slice(0, count);
+  }
+
   async indexed(videoIds: number[]) {
     await this.load();
     const out = new Map<number, IndexedVideo>();
