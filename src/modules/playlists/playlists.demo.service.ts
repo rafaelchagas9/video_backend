@@ -132,6 +132,16 @@ export class PlaylistsDemoService {
     };
   }
 
+  playlistIdsContaining(userId: number, videoId: number): Set<number> {
+    const rows = getDemoDatabase()
+      .select({ id: demoPlaylistVideosTable.playlistId })
+      .from(demoPlaylistVideosTable)
+      .innerJoin(demoPlaylistsTable, eq(demoPlaylistsTable.id, demoPlaylistVideosTable.playlistId))
+      .where(and(eq(demoPlaylistsTable.userId, userId), eq(demoPlaylistVideosTable.videoId, videoId)))
+      .all();
+    return new Set(rows.map((row) => row.id));
+  }
+
   list(userId: number): Playlist[] {
     return getDemoDatabase()
       .select({ id: demoPlaylistsTable.id })

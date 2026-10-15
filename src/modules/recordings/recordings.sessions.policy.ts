@@ -4,6 +4,8 @@
  * files belong to it, and how its kept moments become one timeline.
  */
 import type { LiveSessionClip, LiveSessionTitle } from "@/database/schema";
+import type { HighlightOptions } from "./recordings.highlights";
+import type { ProbeState } from "./recordings.probe";
 
 /**
  * manual: Kura leaves the channel alone. whole: always recorded, files kept as they are.
@@ -21,7 +23,7 @@ export const LIVE_END_GRACE_MINUTES = 10;
 /** Files that started this long before Kura first saw the channel online still belong to the live. */
 const FILE_LEAD_MINUTES = 5;
 
-export const SESSION_STATUSES = ["live", "kept", "waiting", "rendering", "done", "empty", "failed"] as const;
+export const SESSION_STATUSES = ["live", "kept", "waiting", "review", "rendering", "done", "empty", "failed"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 export interface SessionSampleInput {
@@ -74,6 +76,59 @@ export function fileInSession(
   if (!at) return false;
   const end = session.endedAt ?? session.lastSeenAt;
   return at.getTime() >= session.startedAt.getTime() - FILE_LEAD_MINUTES * 60_000 && at.getTime() <= end.getTime() + 60_000;
+}
+
+/**
+ * Nothing reviews a live's cut, so only action counts: naked but idle (chatting, on the phone) is
+ * `nude` in the labels and stays out. On held-out channels at 0.55 this keeps 82% of action and 9% of
+ * naked-idle time, against 93% and 80% when nude counted too (vision-lab, 2026-10-13).
+ */
+export const LIVE_HIGHLIGHT_STATES: ProbeState[] = ["explicit"];
+/**
+ * A moment under way continues down to a lower score, so a dip mid-action doesn't end its clip, and
+ * the lull it may hold grows with it (5% of its length, 20 s to 2 min).
+ */
+export const liveClipOptions = (threshold: number): Partial<HighlightOptions> => ({
+  holdThreshold: Math.max(0.3, threshold - 0.15),
+  mergeGapSeconds: 20,
+  gapFraction: 0.05,
+  maxGapSeconds: 120,
+});
+/**
+ * Above this share of a live as action, the cut would keep most of it: the detector knows action
+ * from idle but not which action is the highlight, so such a live goes to review instead.
+ */
+const CONTINUOUS_ACTION_SHARE = 0.4;
+
+/** Whether a live is mostly continuous action, too much to cut without someone choosing. */
+export const isContinuousAction = (actionSeconds: number, liveSeconds: number) => liveSeconds > 0 && actionSeconds / liveSeconds > CONTINUOUS_ACTION_SHARE;
+
+/** GoondVR leaves seconds-long stubs when a stream reconnects; ffmpeg can't take frames from them. */
+const STUB_SECONDS = 10;
+
+/** A file with nothing to analyse: no known length, or a reconnect stub. */
+export const isStubRecording = (durationSeconds: number | null) => durationSeconds === null || durationSeconds < STUB_SECONDS;
+
+/** Files of a channel are the same live when one starts within this long of the previous one's end. */
+const ORPHAN_GAP_MINUTES = 30;
+
+/**
+ * Files no followed live claims (GoondVR kept recording while Kura was down), grouped into the
+ * lives they most likely were: each group runs from its first file's start to its last file's start.
+ */
+export function orphanLives(files: { recordedAt: Date; durationSeconds: number | null }[]): { startedAt: Date; lastStartAt: Date }[] {
+  const ordered = [...files].sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
+  const lives: { startedAt: Date; lastStartAt: Date; endsAt: number }[] = [];
+  for (const file of ordered) {
+    const start = file.recordedAt.getTime();
+    const end = start + (file.durationSeconds ?? 0) * 1000;
+    const last = lives.at(-1);
+    if (last && start - last.endsAt <= ORPHAN_GAP_MINUTES * 60_000) {
+      last.lastStartAt = file.recordedAt;
+      last.endsAt = Math.max(last.endsAt, end);
+    } else lives.push({ startedAt: file.recordedAt, lastStartAt: file.recordedAt, endsAt: end });
+  }
+  return lives.map(({ startedAt, lastStartAt }) => ({ startedAt, lastStartAt }));
 }
 
 /**

@@ -36,6 +36,12 @@ def _native_runtime_identity() -> dict[str, object]:
 
 
 def cache_identity(settings: Settings) -> dict[str, object]:
+    # !!! Any change to this identity (fields, version, library list) moves every
+    # model to an empty cache directory. The next start then recompiles SigLIP2,
+    # NudeNet and the face detector with exhaustive tuning: minutes of 100% CPU and
+    # heavy GPU work. On 2026-10-14 a key change made the service recompile while
+    # Kura's ffmpeg jobs used the GPU, and the PC hard-froze twice. Do not change it
+    # casually. If you must, stop all Kura services and warm the models alone first.
     return {
         "version": 1,
         "nudity_model": get_nudenet_model_spec(settings.nudity_model).model_revision,

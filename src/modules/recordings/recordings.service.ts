@@ -27,7 +27,7 @@ import { readRecordingTemporalVersions } from "./recordings.temporal-cache";
 import { recordingTemporalReview, recordingTemporalOriginalProposals, type RecordingTemporalMetadata } from "./recordings.temporal-runtime";
 import { eventsService } from "@/modules/events/events.service";
 import { enqueueRecordingAudio, RECORDING_AUDIO_PIN } from "./recordings.audio-cache";
-import { channelKeeps, confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type SaveContext } from "./recordings.feedback";
+import { channelKeeps, confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type ReviewPass, type SaveContext } from "./recordings.feedback";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { isAuditRecording, trainingValues } from "./recordings.training-value";
 import { preserveRecordingTrainingSnapshot } from "./recordings.snapshots.store";
@@ -81,6 +81,8 @@ export interface ReviewOrigin {
   queueSort?: string | undefined;
   /** The order the reviewer stepped through highlights in: best | timeline. */
   reviewOrder?: string | undefined;
+  /** What the decisions mark: has potential (triage), or the highlights themselves. */
+  pass?: ReviewPass | undefined;
 }
 
 /* Demo reviews live in memory: the demo database resets on every start anyway. */
@@ -547,12 +549,12 @@ export class RecordingsService {
     for (const clip of clips)
       if (!(clip.end_seconds > clip.start_seconds) || clip.start_seconds < 0 || clip.end_seconds > duration + 1)
         throw new BadRequestError("Every clip must end after it starts, inside the recording");
-    // Clips added by hand were never detected; a merge sends back the pair's combined proposal.
-    // A skipped clip carries no refinement.
+    // Clips added by hand were never detected; a merge sends back the pair's combined proposal,
+    // and a split part keeps the proposal it was cut from. A skipped clip carries no refinement.
     const next = clips.map((clip) => {
       const { refinement, ...base } = clip;
       const refined = clip.keep && refinement ? { ...base, refinement } : base;
-      if (!clip.id.startsWith("added-")) return refined;
+      if (!clip.id.startsWith("added-") || clip.id.startsWith("added-split-")) return refined;
       const { detected: _detected, ...rest } = refined;
       return rest;
     });
@@ -563,6 +565,7 @@ export class RecordingsService {
       queueSort: origin.queueSort ?? null,
       audit: isAuditRecording(videoId),
       reviewOrder: origin.reviewOrder ?? null,
+      pass: origin.pass ?? "triage",
     };
     // Archive every current choice before acknowledging the Save.
     await preserveRecordingTrainingSnapshot(reviewed, video, "save", context);

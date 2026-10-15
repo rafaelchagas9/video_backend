@@ -6,6 +6,7 @@ import { env } from "@/config/env";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { AUTOPILOT_MODES } from "./recordings.autopilot.policy";
+import { REVIEW_PASSES } from "./recordings.feedback";
 import { goondvr } from "./recordings.goondvr";
 import { RECORDER_SITES, demoChannelPicture, recorderService } from "./recordings.live";
 import { PROBE_STATES } from "./recordings.probe";
@@ -528,13 +529,14 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         summary: "Save clip decisions",
         params: videoParams,
         description:
-          "Confirms every current choice. analyzed_at names the analysis being answered (a newer one is a conflict); queue_position and queue_sort say where the recording sat in the review queue; review_order which order its highlights were stepped through in.",
+          "Confirms every current choice. analyzed_at names the analysis being answered (a newer one is a conflict); queue_position and queue_sort say where the recording sat in the review queue; review_order which order its highlights were stepped through in; pass whether the kept clips are the highlights themselves (highlights) or only have potential (triage).",
         body: z.object({
           clips: z.array(clipSchema).max(60),
           analyzed_at: z.string().datetime().optional(),
           queue_position: z.number().int().min(0).max(10_000).optional(),
           queue_sort: z.string().trim().min(1).max(32).optional(),
           review_order: z.enum(["best", "timeline"]).optional(),
+          pass: z.enum(REVIEW_PASSES).optional(),
         }),
         response: { 200: anyData },
       },
@@ -546,6 +548,7 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         queuePosition: request.body.queue_position,
         queueSort: request.body.queue_sort,
         reviewOrder: request.body.review_order,
+        pass: request.body.pass,
       }),
     })
   );

@@ -6,7 +6,9 @@ export const RECORDING_FACE_VISIBILITY_MODEL_SHA256 = "5838f7fe053675b1c7a08b633
 const policySchema = z.object({
   model_sha256: z.literal(RECORDING_FACE_VISIBILITY_MODEL_SHA256),
   input_size: z.tuple([z.literal(640), z.literal(640)]), confidence: z.literal(.5), nms: z.literal(.4),
-  providers: z.array(z.string().min(1)).min(1).refine(p => p.some(name => ["MIGraphXExecutionProvider", "CUDAExecutionProvider", "ROCMExecutionProvider", "TensorrtExecutionProvider", "DmlExecutionProvider"].includes(name))),
+  // Recorded, not restricted: visibility runs on the 640 CPU detector because a second
+  // face GPU session hard-froze the host (vision-service FaceEngine docstring).
+  providers: z.array(z.string().min(1)).min(1),
   identity_embeddings: z.literal(false), service: z.literal("shared-vision"),
 });
 const observationSchema = policySchema.extend({
@@ -47,13 +49,13 @@ export class HttpRecordingFaceVisibilityAdapter {
           frames.push({ ...base, detected: null, max_confidence: null, error: outcome.error.code });
           continue;
         }
-        if (response.width === undefined || response.height === undefined || outcome.findings.length !== 1) throw new Error("GPU visibility requires one explicit observation and dimensions per valid image");
+        if (response.width === undefined || response.height === undefined || outcome.findings.length !== 1) throw new Error("Visibility requires one explicit observation and dimensions per valid image");
         const finding = outcome.findings[0]!;
         if (finding.label !== "visibility" || finding.embedding !== undefined) throw new Error("Identity data is forbidden in visibility observations");
         const observation = observationSchema.parse(finding.metadata);
         if (finding.score !== observation.max_confidence) throw new Error("Visibility confidence receipt differs");
         const framePolicy = policySchema.parse(observation);
-        if (policy && JSON.stringify(policy) !== JSON.stringify(framePolicy)) throw new Error("GPU face visibility policy changed within a generation");
+        if (policy && JSON.stringify(policy) !== JSON.stringify(framePolicy)) throw new Error("Face visibility policy changed within a generation");
         policy = framePolicy;
         frames.push({ ...base, detected: observation.detected, max_confidence: observation.max_confidence, policy: framePolicy });
       }

@@ -26,6 +26,18 @@ export interface HighlightOptions {
   /** Context kept before and after the matched stretch. */
   padSeconds: number;
   maxClips: number;
+  /**
+   * Score that keeps a clip already under way going (defaults to the threshold). Lower than the
+   * threshold, a moment's dips don't end its clip early; real breaks (brb, phone) still score near zero.
+   */
+  holdThreshold?: number;
+  /**
+   * Lull a clip may contain, as a share of its length so far (`mergeGapSeconds` is then the floor):
+   * half a minute is part of a 20-minute scene but ends a 2-minute one. Unset, the gap is fixed.
+   */
+  gapFraction?: number;
+  /** Longest lull `gapFraction` allows. */
+  maxGapSeconds?: number;
 }
 
 export const DEFAULT_HIGHLIGHT_OPTIONS: HighlightOptions = {
@@ -133,13 +145,22 @@ function shapeClips(
   options: HighlightOptions
 ): ProposedClip[] {
   const interval = timestamps.length > 1 ? (timestamps.at(-1)! - timestamps[0]!) / (timestamps.length - 1) : 5;
+  const hold = Math.min(threshold, options.holdThreshold ?? threshold);
+  const allowedGap = (run: { from: number; to: number }) => {
+    if (!options.gapFraction) return options.mergeGapSeconds;
+    const length = timestamps[run.to]! - timestamps[run.from]! + interval;
+    return Math.min(options.maxGapSeconds ?? Infinity, Math.max(options.mergeGapSeconds, options.gapFraction * length));
+  };
   const runs: { from: number; to: number }[] = [];
   for (let index = 0; index < scores.length; index++) {
-    if ((scores[index] ?? 0) < threshold) continue;
+    const score = scores[index] ?? 0;
     const at = timestamps[index]!;
     const last = runs.at(-1);
-    if (last && at - timestamps[last.to]! <= options.mergeGapSeconds) last.to = index;
-    else runs.push({ from: index, to: index });
+    const open = last !== undefined && at - timestamps[last.to]! <= allowedGap(last);
+    if (score >= threshold || (open && score >= hold)) {
+      if (open) last.to = index;
+      else runs.push({ from: index, to: index });
+    }
   }
 
   const clips: ProposedClip[] = [];

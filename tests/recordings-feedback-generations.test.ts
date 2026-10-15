@@ -51,7 +51,14 @@ describe("feedback rows", () => {
     const [row] = feedbackRows(source(null), [clip("c1", 0, 30, true)], { rendered: true });
     expect(row).not.toHaveProperty("saveBatch");
     expect(row).not.toHaveProperty("channelKeptSeconds");
+    expect(row).not.toHaveProperty("labelType");
     expect(row!.rendered).toBe(true);
+  });
+
+  it("labels a highlights pass apart from triage", () => {
+    const context = { batch: "b2", queuePosition: null, queueSort: null, audit: false, pass: "highlights" as const };
+    const rows = feedbackRows(source([proposal("c1", 0, 30)]), [clip("c1", 0, 30, false), clip("added-span-1", 100, 160, true)], { context });
+    expect(rows.map((row) => row.labelType)).toEqual(["highlight", "highlight"]);
   });
 
   it("logs each proposal's baseline rank, the review order and refinements of keeps only", () => {

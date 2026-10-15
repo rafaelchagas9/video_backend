@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Synthetic vision unit tests: offline, no deployment settings or model sessions."""
+
 from __future__ import annotations
 
 import os
@@ -18,17 +19,27 @@ def enter_isolation():
     unshare = shutil.which("unshare")
     if unshare is None:
         raise SystemExit("unshare is required; refusing inherited host networking.")
-    env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1",
-           "PYTHONPATH": str(ROOT / "src"), MARKER: "1"}
-    os.execve(unshare, [unshare, "--user", "--map-root-user", "--net",
-                       str(python), str(Path(__file__).resolve())], env)
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(ROOT / "src"),
+        MARKER: "1",
+    }
+    os.execve(
+        unshare,
+        [unshare, "--user", "--map-root-user", "--net", str(python), str(Path(__file__).resolve())],
+        env,
+    )
 
 
 def verify_isolation():
     # The marker alone must never bypass isolation on a connected host.
     try:
-        interfaces = {line.split(":", 1)[0].strip()
-                      for line in Path("/proc/net/dev").read_text().splitlines() if ":" in line}
+        interfaces = {
+            line.split(":", 1)[0].strip()
+            for line in Path("/proc/net/dev").read_text().splitlines()
+            if ":" in line
+        }
     except OSError as error:
         raise SystemExit("Cannot verify network isolation; refusing tests.") from error
     if interfaces - {"lo"}:
@@ -52,11 +63,11 @@ def deny_deployment_files(event, args):
 def run_tests():
     sys.addaudithook(deny_deployment_files)
     import socket
-    import types
     import unittest
     from unittest.mock import patch
 
     original_connect = socket.socket.connect
+
     def offline_connect(sock, address):
         if sock.family in (socket.AF_INET, socket.AF_INET6):
             raise AssertionError("Network connections are forbidden in offline tests")
@@ -65,24 +76,30 @@ def run_tests():
     def forbidden_session(*args, **kwargs):
         raise AssertionError("Real model engines and ONNX sessions are forbidden in unit tests")
 
-    face_module = types.ModuleType("vision_service.face_engine")
-    face_module.FaceEngine = forbidden_session
-    sys.modules["vision_service.face_engine"] = face_module
     from vision_service.config import Settings
+    from vision_service.face_engine import FaceEngine
+
     Settings.model_config["env_file"] = None
-    from vision_service.clip_engine import ClipEngine
     from vision_service import compiled_cache
+    from vision_service.clip_engine import ClipEngine
 
     # Importing main defines a global app; prevent its deployment cache writes.
-    with patch.object(socket.socket, "connect", offline_connect), patch.object(
-        compiled_cache, "configure_compiled_cache", return_value=ROOT / "unused-test-cache"
+    with (
+        patch.object(socket.socket, "connect", offline_connect),
+        patch.object(
+            compiled_cache, "configure_compiled_cache", return_value=ROOT / "unused-test-cache"
+        ),
     ):
         import vision_service.main  # noqa: F401
 
     import onnxruntime
-    with (patch.object(socket.socket, "connect", offline_connect),
-          patch.object(ClipEngine, "__init__", side_effect=forbidden_session),
-          patch.object(onnxruntime, "InferenceSession", side_effect=forbidden_session)):
+
+    with (
+        patch.object(socket.socket, "connect", offline_connect),
+        patch.object(FaceEngine, "__init__", side_effect=forbidden_session),
+        patch.object(ClipEngine, "__init__", side_effect=forbidden_session),
+        patch.object(onnxruntime, "InferenceSession", side_effect=forbidden_session),
+    ):
         suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
         result = unittest.TextTestRunner(verbosity=1).run(suite)
         return 0 if result.wasSuccessful() else 1

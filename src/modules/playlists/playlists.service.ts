@@ -88,15 +88,27 @@ export class PlaylistsService {
   async list(
     userId: number,
     include: PlaylistInclude[] = [],
+    containsVideo?: number,
   ): Promise<Playlist[]> {
-    if (env.DEMO_MODE) {
-      return this.attachArtwork(playlistsDemoService.list(userId), include);
+    const playlists = env.DEMO_MODE
+      ? playlistsDemoService.list(userId)
+      : await this.mapSummaries(await this.querySummaries(userId), userId);
+    if (containsVideo !== undefined) {
+      const holding = await this.playlistIdsContaining(userId, containsVideo);
+      for (const playlist of playlists) playlist.contains_video = holding.has(playlist.id);
     }
+    return this.attachArtwork(playlists, include);
+  }
 
-    return this.attachArtwork(
-      await this.mapSummaries(await this.querySummaries(userId), userId),
-      include,
-    );
+  /** Which of the user's playlists hold a video. */
+  async playlistIdsContaining(userId: number, videoId: number): Promise<Set<number>> {
+    if (env.DEMO_MODE) return playlistsDemoService.playlistIdsContaining(userId, videoId);
+    const rows = await db
+      .select({ id: playlistVideosTable.playlistId })
+      .from(playlistVideosTable)
+      .innerJoin(playlistsTable, eq(playlistsTable.id, playlistVideosTable.playlistId))
+      .where(and(eq(playlistsTable.userId, userId), eq(playlistVideosTable.videoId, videoId)));
+    return new Set(rows.map((row) => row.id));
   }
 
   private async querySummaries(

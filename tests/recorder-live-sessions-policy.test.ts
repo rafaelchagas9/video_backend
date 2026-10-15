@@ -5,7 +5,9 @@ import { validateEditRequest } from "@/modules/edits/edits.validation";
 import {
   endedStatus,
   fileInSession,
+  isStubRecording,
   liveEnded,
+  orphanLives,
   recordedAtFromFileName,
   sampleSession,
   sessionTimeline,
@@ -15,6 +17,24 @@ import {
 const at = (minutes: number) => new Date(Date.UTC(2026, 9, 12, 20, minutes));
 
 describe("live sessions", () => {
+  test("files made while Kura was away group into the lives they were", () => {
+    const lives = orphanLives([
+      { recordedAt: at(60), durationSeconds: 3600 },
+      { recordedAt: at(0), durationSeconds: 3590 },
+      { recordedAt: at(200), durationSeconds: 600 },
+    ]);
+    expect(lives).toEqual([
+      { startedAt: at(0), lastStartAt: at(60) },
+      { startedAt: at(200), lastStartAt: at(200) },
+    ]);
+  });
+
+  test("reconnect stubs and files without a length are not waited on", () => {
+    expect(isStubRecording(1.63)).toBe(true);
+    expect(isStubRecording(null)).toBe(true);
+    expect(isStubRecording(600)).toBe(false);
+  });
+
   test("a minute online adds a viewer reading, and the title only when it changes", () => {
     const start = { startedAt: at(0), titles: [], viewers: [] as [number, number][], peakViewers: 0 };
     const first = sampleSession(start, { viewers: 120, title: "Goal: 500", now: at(0) });

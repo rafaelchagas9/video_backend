@@ -16,6 +16,8 @@ export interface Playlist {
   resume: PlaylistResume | null;
   artwork_source_video_id: number | null;
   artwork?: VideoArtworkSummary | null;
+  /** Set when the list was asked about one video (`?contains_video=`). */
+  contains_video?: boolean;
 }
 
 export interface PlaylistResume {

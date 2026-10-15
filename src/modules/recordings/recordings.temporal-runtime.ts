@@ -92,7 +92,7 @@ export interface RecordingTemporalRuntimeResult {
 }
 function checkedCache(raw: unknown, g: Generation, policySha: string): Cache {
   const c = cacheSchema.parse(raw);
-  if (c.identity !== g.identity || c.identity_json !== g.identityJson || c.policy_sha256 !== policySha || digest(c.identity_json) !== c.identity || !c.providers.some(p => p !== "CPUExecutionProvider") ||
+  if (c.identity !== g.identity || c.identity_json !== g.identityJson || c.policy_sha256 !== policySha || digest(c.identity_json) !== c.identity ||
       new Set(c.cuts.map(p => p.id)).size !== c.cuts.length || new Set(c.candidates.map(p => p.id)).size !== c.candidates.length) throw new Error("Stale or incompatible temporal cache");
   for (const cut of c.cuts) { const p = g.metadata.proposals.find(p => p.id === cut.id); if (!p || cut.start_seconds < p.start_seconds || cut.end_seconds > p.end_seconds || cut.end_seconds - cut.start_seconds < 180) throw new Error("Invalid proposed cut"); }
   for (const candidate of c.candidates) {
@@ -183,7 +183,7 @@ async function buildRecordingTemporalCache(input: RecordingTemporalRuntimeInput,
       signal.throwIfAborted(); const items=await Promise.all(pageTiles.slice(offset,offset+4).map(async tile => { const png=await sharp(bytes,{limitInputPixels:8*1024*1024}).extract({left:tile.x,top:tile.y,width:m.storyboard.tile_width,height:m.storyboard.tile_height}).png().toBuffer(); return {index:tile.index,timestampSeconds:tile.timestamp,image:new Blob([new Uint8Array(png)],{type:"image/png"})}; }));
       const result=await adapter.observe({generationIdentity:g.identity,items},signal);
       if (!result.policy || result.frames.some(f=>f.detected===null || f.max_confidence===null)) throw new Error("Incomplete face observations remain unknown");
-      if (result.policy.model_sha256 !== TEMPORAL_FACE_SHA256 || result.policy.input_size.join() !== "640,640" || result.policy.confidence !== .5 || result.policy.nms !== .4 || !result.policy.providers.some(p=>p!=="CPUExecutionProvider")) throw new Error("Pinned shared GPU face detector unavailable");
+      if (result.policy.model_sha256 !== TEMPORAL_FACE_SHA256 || result.policy.input_size.join() !== "640,640" || result.policy.confidence !== .5 || result.policy.nms !== .4) throw new Error("Pinned shared face detector unavailable");
       providers=[...new Set([...providers,...result.policy.providers])];
       for (const f of result.frames) if (f.detected !== null && f.max_confidence !== null) observations.push({index:f.index,timestamp:f.timestamp,detected:f.detected,max_confidence:f.max_confidence});
     }

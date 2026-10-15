@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectHighlights, detectWithProbe, isLikelySkip, joinStretches } from "@/modules/recordings/recordings.highlights";
 import { classifyFrames, loadHighlightProbe, probeThreshold, type HighlightProbe } from "@/modules/recordings/recordings.probe";
+import { LIVE_HIGHLIGHT_STATES, liveClipOptions } from "@/modules/recordings/recordings.sessions.policy";
 
 /** Unit vectors in 3D: x = highlight look, y = idle look, z = neutral. */
 const v = (x: number, y: number, z: number) => {
@@ -116,6 +117,31 @@ describe("trained highlight detection", () => {
     const withContext = classifyFrames(probe(1), vectors)[2]!;
     expect(alone[3]!).toBeGreaterThan(0.9);
     expect(withContext[3]!).toBeLessThan(alone[3]!);
+  });
+
+  // Live cuts: x = action, y = brb / idle, z = naked on the phone (anything that isn't action).
+  const action = v(1, 0, 0);
+  const brb = v(0, 1, 0);
+  const phone = v(0, 0, 1);
+  const cut = (pattern: (minute: number) => Float32Array, minutes: number) =>
+    detectWithProbe({ ...recording((t) => pattern(t / 60), minutes * 60), probe: probe(), states: LIVE_HIGHLIGHT_STATES, threshold: 0.55, options: liveClipOptions(0.55) }).clips;
+  const minutesOf = (clip: { start_seconds: number; end_seconds: number }) => (clip.end_seconds - clip.start_seconds) / 60;
+
+  it("splits a long segment into its action, leaving out brb and phone time", () => {
+    const clips = cut((m) => (m < 25 ? action : m < 30 ? brb : m < 35 ? action : m < 40 ? phone : action), 45);
+    expect(clips.map((clip) => Math.round(minutesOf(clip)))).toEqual([25, 5, 5]);
+  });
+
+  it("lets a lull stay inside a long scene but ends a short one at it", () => {
+    // `before` minutes of action, half a minute away, two more minutes of action.
+    const lull = (before: number) => (m: number) => (m < before ? action : m < before + 0.5 ? brb : m < before + 2.5 ? action : brb);
+    expect(cut(lull(20), 30)).toHaveLength(1);
+    expect(cut(lull(2), 10)).toHaveLength(2);
+  });
+
+  it("keeps a moment going through a dip in confidence", () => {
+    const unsure = v(1, 1, 0);
+    expect(cut((m) => (m < 5 ? action : m < 6 ? unsure : m < 11 ? action : brb), 15)).toHaveLength(1);
   });
 
   it("maps the sensitivity presets onto probability thresholds", () => {

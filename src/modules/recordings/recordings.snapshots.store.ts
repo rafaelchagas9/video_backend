@@ -7,7 +7,7 @@ import { env } from "@/config/env";
 import { videoVisualIndexTable, type RecordingClip, type RecordingProposal } from "@/database/schema";
 import type { Video } from "@/modules/videos/videos.types";
 import { BadRequestError } from "@/utils/errors";
-import { LABEL_TYPE, type SaveContext } from "./recordings.feedback";
+import { labelTypeOf, type SaveContext } from "./recordings.feedback";
 import { readRecordingAudioCache, RECORDING_AUDIO_PIN } from "./recordings.audio-cache";
 import { usernameFromFileName } from "./recordings.goondvr";
 import { RecordingTrainingSnapshots, snapshotFeatureIdentity, type SnapshotIndex, type SnapshotReview } from "./recordings.snapshots";
@@ -64,7 +64,7 @@ export async function preserveRecordingTrainingSnapshot(review: Review, video: S
     if (!row) throw new Error("This recording has no stored embeddings; a training snapshot cannot be preserved yet");
     const index = indexOf(row);
     await snapshots().save({ source, analyzedAt: review.analyzedAt.toISOString(), detectorRevision: review.promptsRevision,
-      status: review.status, clips: review.clips, proposals: review.proposals ?? null, labelType: LABEL_TYPE, save,
+      status: review.status, clips: review.clips, proposals: review.proposals ?? null, ...(save ? { labelType: labelTypeOf(save) } : {}), save,
       curve: review.curve, event }, index, async () => {
       // The index identity and its frames must come from the same database snapshot, even if a reindex is running.
       return db.transaction(async (tx) => {

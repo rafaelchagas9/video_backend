@@ -18,8 +18,18 @@ import { usernameFromFileName } from "./recordings.goondvr";
 type FeedbackRow = typeof recordingClipFeedbackTable.$inferInsert;
 export type ReasonKind = "keep" | "skip" | "added";
 
-/** Every verdict today is a coarse "has potential" call; trims do not make it a refinement. */
+/** A review's verdicts are a coarse "has potential" call; trims do not make it a refinement. */
 export const LABEL_TYPE = "triage";
+
+/**
+ * What a Save is marking. `triage`: has potential. `highlights`: the kept clips are the highlights
+ * themselves and everything else in the recording is not, so they train picking the best moments.
+ */
+export const REVIEW_PASSES = ["triage", "highlights"] as const;
+export type ReviewPass = (typeof REVIEW_PASSES)[number];
+
+/** The label type a Save's rows carry. */
+export const labelTypeOf = (context: Pick<SaveContext, "pass"> | null | undefined) => (context?.pass === "highlights" ? "highlight" : LABEL_TYPE);
 
 export interface FeedbackSummary {
   clips: number;
@@ -49,6 +59,7 @@ export interface SaveContext {
   audit: boolean;
   /** The order the reviewer stepped through highlights in: best (baseline) | timeline. */
   reviewOrder?: string | null;
+  pass?: ReviewPass;
 }
 
 /**
@@ -66,7 +77,8 @@ export const confirmedDecisions = sql`(
 const demoFeedback = new Map<string, FeedbackRow>();
 const demoKey = (row: Pick<FeedbackRow, "videoId" | "analyzedAt" | "clipId">) => `${row.videoId}|${row.analyzedAt.getTime()}|${row.clipId}`;
 
-const isAdded = (clip: Pick<RecordingClip, "id">) => clip.id.startsWith("added-");
+// Split parts keep an added- id (so they can be removed) but are still detection's proposal, cut finer.
+const isAdded = (clip: Pick<RecordingClip, "id">) => clip.id.startsWith("added-") && !clip.id.startsWith("added-split-");
 const kindOf = (row: Pick<FeedbackRow, "verdict" | "added">): ReasonKind => (row.verdict === "skip" ? "skip" : row.added ? "added" : "keep");
 const channelKey = (channel: string) => channel.replace(/^@/, "").toLowerCase();
 
@@ -100,9 +112,9 @@ export function feedbackRows(
     channel: source.fileName ? usernameFromFileName(source.fileName) : null,
     detector: source.promptsRevision,
     recordingSeconds: source.durationSeconds,
-    labelType: LABEL_TYPE,
     ...(options.context
       ? {
+          labelType: labelTypeOf(options.context),
           saveBatch: options.context.batch,
           queuePosition: options.context.queuePosition,
           queueSort: options.context.queueSort,

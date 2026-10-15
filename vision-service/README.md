@@ -96,6 +96,12 @@ nudity and SigLIP2 has an independent timer using the same configured timeout.
 Set it to `0` to disable unloading. A face request keeps only faces resident;
 text and storyboard embeddings keep only SigLIP2 resident. A batch requesting
 faces and nudity reserves both and resets both timers when it finishes.
+Face visibility runs detection only on the existing 640 CPU detector. It shares
+face admission and idle unloading. **Never give it, or any other face work, its own
+GPU session, and never run 640 on the 1280 GPU detector.** A second face GPU session
+hard-froze the whole PC on 2026-10-14. Alternating shapes on one MIGraphX session
+leaves later recognition calls with 640-sized outputs. See the `FaceEngine` docstring.
+
 The countdown starts after the capability's last request or model initialization
 finishes. Active or queued work and initialization protect only that capability.
 Health checks and capability discovery reset none of the timers. The watchdog

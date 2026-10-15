@@ -2,8 +2,8 @@
 
 import hashlib
 import logging
-from pathlib import Path
 import time
+from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
@@ -21,8 +21,28 @@ class FaceEngine:
     - High-res detector (1280x1280) on GPU (MIGraphX) for large images
     - Low-res detector (640x640) on CPU for small images
 
-    This avoids MIGraphX multi-session GPU crashes while maintaining
-    high performance and accuracy.
+    !!! THE FACE ENGINE OWNS EXACTLY ONE MIGraphX GPU SESSION, AT ONE INPUT SHAPE !!!
+
+    Never create a second GPU session for face work (another detector, another
+    size, a "fixed-shape copy"), and never run the 1280 GPU session at any other
+    input size. Every other size or face task (640 detection, face visibility)
+    goes to the CPU session. Do not "optimise" this by moving work onto the GPU.
+    The layout that has run stably for months is one GPU session per model, each at
+    a fixed shape: this 1280 face detector plus NudeNet and SigLIP2 vision. Adding
+    a GPU session beyond that set means re-testing on the real machine first.
+
+    This is not a performance preference. On this machine (RX 7800 XT, ROCm /
+    MIGraphX) breaking it hard-freezes the whole PC, not just this service:
+    - ~April 2026 (from memory): multi-session face GPU crashes. The single-GPU
+      + CPU hybrid below fixed them.
+    - 2026-10-14: a second fixed-640 GPU face session was added for visibility.
+      The PC froze twice, about a minute after the service started each time, and
+      a diagnostic script using that session raised a GPU page fault
+      (gfxhub PROTECTION_FAULT). Reverted to this layout the same day.
+    - Running 640 on the 1280 GPU session instead returns outputs for the wrong
+      shape (INFERENCE_FAILED on later gallery analysis).
+    Ad-hoc scripts that open their own GPU session while this service is running
+    count as extra sessions too.
     """
 
     def __init__(self) -> None:
@@ -203,18 +223,21 @@ class FaceEngine:
         ]
 
     def observe_visibility(self, image: np.ndarray) -> dict:
-        """Detection only on the existing GPU session; never recognize identities.
+        """Detection only on the existing 640 low-res session; never recognize identities.
 
         Explicit 640 input matches the experimental SCRFD preprocessing recipe.
-        A CPU-only session is an unavailable observation, not an observed negative.
+        In the hybrid layout that session is the CPU one. See the class docstring:
+        visibility must never get its own GPU session or run 640 on the 1280 GPU
+        session, both of which froze the machine. The detector must already be
+        prepared at 640, so this call never changes any session's input shape.
         Shared runtime admission serializes this call with face recognition.
         """
-        detector = self.app_high.det_model
-        providers = detector.session.get_providers()
-        if not any(name in {"MIGraphXExecutionProvider", "CUDAExecutionProvider", "ROCMExecutionProvider", "TensorrtExecutionProvider", "DmlExecutionProvider"} for name in providers):
-            raise RuntimeError("Face visibility requires the existing GPU detector")
+        detector = self.app_low.det_model
+        if tuple(detector.input_size or ()) != (640, 640):
+            raise RuntimeError("Face visibility requires a detector prepared at 640x640")
         if detector.det_thresh != 0.5 or detector.nms_thresh != 0.4:
             raise RuntimeError("Face visibility detector thresholds differ")
+        providers = detector.session.get_providers()
         model_path = Path(detector.model_file)
         model_sha = getattr(self, "_visibility_model_sha", None)
         if model_sha is None:
@@ -227,10 +250,15 @@ class FaceEngine:
         if any(not np.isfinite(score) or not 0.5 <= score <= 1 for score in scores):
             raise ValueError("Face visibility confidence is invalid")
         return {
-            "detected": bool(scores), "max_confidence": max(scores, default=0.0),
-            "model_sha256": model_sha, "input_size": [640, 640],
-            "confidence": 0.5, "nms": 0.4, "providers": providers,
-            "identity_embeddings": False, "service": "shared-vision",
+            "detected": bool(scores),
+            "max_confidence": max(scores, default=0.0),
+            "model_sha256": model_sha,
+            "input_size": [640, 640],
+            "confidence": 0.5,
+            "nms": 0.4,
+            "providers": providers,
+            "identity_embeddings": False,
+            "service": "shared-vision",
         }
 
     def get_embedding_dimension(self) -> int:

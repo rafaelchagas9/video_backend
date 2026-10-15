@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from typing import Protocol
 import numpy as np
 
 from .config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +161,9 @@ class InsightFaceDetectorAdapter:
             try:
                 outcomes.append(DetectorItemResult(findings=tuple(self._analyze_image(image))))
             except Exception:
+                logger.exception(
+                    "Face detector inference failed image_size=%dx%d", image.width, image.height
+                )
                 outcomes.append(
                     DetectorItemError(
                         code="INFERENCE_FAILED",
@@ -172,16 +178,26 @@ class InsightFaceDetectorAdapter:
         for image in images:
             try:
                 observation = self._engine.observe_visibility(image.pixels)
-                outcomes.append(DetectorItemResult(findings=(Finding(
-                    capability="face_visibility", label="visibility",
-                    score=observation["max_confidence"],
-                    box=NormalizedBox(x1=0, y1=0, x2=0, y2=0),
-                    metadata=observation,
-                ),)))
+                outcomes.append(
+                    DetectorItemResult(
+                        findings=(
+                            Finding(
+                                capability="face_visibility",
+                                label="visibility",
+                                score=observation["max_confidence"],
+                                box=NormalizedBox(x1=0, y1=0, x2=0, y2=0),
+                                metadata=observation,
+                            ),
+                        )
+                    )
+                )
             except Exception:
-                outcomes.append(DetectorItemError(
-                    code="VISIBILITY_UNAVAILABLE", message="GPU face visibility observation unavailable",
-                ))
+                outcomes.append(
+                    DetectorItemError(
+                        code="VISIBILITY_UNAVAILABLE",
+                        message="Face visibility observation unavailable",
+                    )
+                )
         return outcomes
 
     def _analyze_image(self, image: DecodedImage) -> list[Finding]:

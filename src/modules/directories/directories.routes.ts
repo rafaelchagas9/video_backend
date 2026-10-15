@@ -85,6 +85,7 @@ export async function directoriesRoutes(
     },
     async (request, reply) => {
       const directory = await directoriesService.create(request.body);
+      schedulerService.syncDirectory(directory);
 
       fastify.log.info(
         { directoryId: directory.id, path: directory.path },
@@ -236,6 +237,7 @@ export async function directoriesRoutes(
         request.params.id,
         request.body
       );
+      schedulerService.syncDirectory(directory);
 
       return reply.send({
         success: true,
@@ -264,6 +266,7 @@ export async function directoriesRoutes(
     },
     async (request, reply) => {
       await directoriesService.delete(request.params.id);
+      schedulerService.unscheduleDirectory(request.params.id);
 
       return reply.send({
         success: true,

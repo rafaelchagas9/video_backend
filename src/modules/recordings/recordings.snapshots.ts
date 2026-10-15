@@ -43,10 +43,10 @@ export interface SnapshotReview {
   clips: RecordingClip[];
   /** The proposals as shown before any review; null on reviews older than stored proposals. */
   proposals?: RecordingProposal[] | null;
-  /** What the verdicts mean: "triage" is a coarse has-potential call, trims included. */
+  /** What the verdicts mean: "triage" is a coarse has-potential call, trims included; "highlight" marks the highlights themselves. */
   labelType?: string;
   /** The Save that confirmed these clips, where the recording sat in the queue, and whether it was an audit pick. */
-  save?: { batch: string; queuePosition: number | null; queueSort: string | null; audit: boolean } | null;
+  save?: { batch: string; queuePosition: number | null; queueSort: string | null; audit: boolean; pass?: string } | null;
   curve: number[];
   event: "save" | "render-requested" | "rendering" | "render-finished" | "before-delete";
 }
@@ -153,6 +153,7 @@ export class RecordingTrainingSnapshots {
     let savedAudio: TrainingSnapshotManifest["audio_features"] = null;
     let savedChecksum: string | null = null;
     let savedContext: SnapshotReview["save"] = null;
+    let savedLabelType: string | undefined;
     const saved = await open(manifestPath, "r").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
     if (saved) {
       try {
@@ -162,6 +163,7 @@ export class RecordingTrainingSnapshots {
         savedAudio = earlier.audio_features ?? null;
         savedChecksum = earlier.features.sha256;
         savedContext = earlier.save ?? null;
+        savedLabelType = earlier.labelType;
       } finally { await saved.close(); }
     }
     const file = `features-${identity}.bin`;
@@ -228,7 +230,7 @@ export class RecordingTrainingSnapshots {
       audioFeatures = { file, sha256, bytes: bytes.length, modelRevision: incomingAudio.modelRevision, featureIdentity: identity };
     }
     // Render and delete events do not know the Save's context; the last Save's stays.
-    const manifest: TrainingSnapshotManifest = { ...review, save: review.save ?? savedContext, format: "kura-recording-training", version: 1, audio_features: audioFeatures,
+    const manifest: TrainingSnapshotManifest = { ...review, labelType: review.labelType ?? savedLabelType ?? "triage", save: review.save ?? savedContext, format: "kura-recording-training", version: 1, audio_features: audioFeatures,
       updatedAt: new Date().toISOString(), features: { file, ...receipt, dimension: SNAPSHOT_DIMENSION, index } };
     await atomicWrite(manifestPath, Buffer.from(JSON.stringify(manifest)));
     return manifest;

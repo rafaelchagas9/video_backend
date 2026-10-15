@@ -168,6 +168,22 @@ export class SchedulerService {
   }
 
   /**
+   * Follows a directory's saved settings, so an edit takes effect without a restart
+   */
+  syncDirectory(directory: {
+    id: number;
+    path: string;
+    is_active: boolean;
+    auto_scan: boolean;
+    scan_interval_minutes: number;
+  }): void {
+    if (!this.isRunning) return;
+    if (directory.is_active && directory.auto_scan)
+      this.scheduleDirectory(directory.id, directory.scan_interval_minutes, directory.path);
+    else this.unscheduleDirectory(directory.id);
+  }
+
+  /**
    * Get the current scheduler status
    */
   getStatus(): {

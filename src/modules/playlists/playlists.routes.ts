@@ -73,6 +73,7 @@ export async function playlistsRoutes(fastify: FastifyInstance): Promise<void> {
       const playlists = await playlistsService.list(
         request.user!.id,
         request.query.include ?? [],
+        request.query.contains_video,
       );
 
       return reply.send({

@@ -12,6 +12,7 @@ import { editsService } from "@/modules/edits/edits.service";
 import { videosBulkService } from "@/modules/videos/videos.bulk.service";
 import { videosService } from "@/modules/videos/videos.service";
 import { visualSearchStore } from "@/modules/visual-search/visual-search.service";
+import { ConflictError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import { goondvr, type GoondvrChannel } from "./recordings.goondvr";
 import { probeRecordingDuration } from "./recordings.duration";
@@ -21,8 +22,13 @@ import { recordingScope } from "./recordings.scope";
 import {
   endedStatus,
   fileInSession,
+  isContinuousAction,
+  isStubRecording,
   keptSeconds,
+  LIVE_HIGHLIGHT_STATES,
+  liveClipOptions,
   liveEnded,
+  orphanLives,
   recordedAtFromFileName,
   sampleSession,
   sessionTimeline,
@@ -36,6 +42,8 @@ type SessionRow = typeof recorderLiveSessionsTable.$inferSelect;
 const LIBRARY_WAIT_MS = 2 * 60 * 60_000;
 /** Recordings not analysed this long after the live ended fail the session. */
 const ANALYSIS_WAIT_MS = 12 * 60 * 60_000;
+/** The recordings folder is not auto-scanned, so a live waiting on files imports them at most this often. */
+const IMPORT_EVERY_MS = 5 * 60_000;
 
 export interface ChannelCapture {
   capture: CaptureMode;
@@ -50,6 +58,8 @@ interface SessionRecording {
 }
 
 class LiveSessions {
+  private lastImportAt = 0;
+
   /** Follows every channel's live; `captureOf` says what Kura does with each channel. */
   async track(channels: GoondvrChannel[], captureOf: (channelId: string) => ChannelCapture, now: Date): Promise<void> {
     const open = new Map((await db.select().from(recorderLiveSessionsTable).where(isNull(recorderLiveSessionsTable.endedAt))).map((row) => [row.channelId, row]));
@@ -92,6 +102,49 @@ class LiveSessions {
     for (const session of open.values()) {
       if (liveEnded(session.lastSeenAt, false, now)) await this.end(session, session.capture as CaptureMode, session.threshold, now);
     }
+    for (const channel of channels) {
+      const { capture, threshold } = captureOf(channel.id);
+      if (capture !== "highlights") continue;
+      await this.adoptOrphans(channel, threshold, now).catch((error) => logger.warn({ err: error, channel: channel.id }, "Could not adopt orphan recordings"));
+    }
+  }
+
+  /**
+   * GoondVR records on while Kura is down, and those files belong to no live, so they would sit in
+   * review forever. They become an ended live of their own (one per run of files) and get cut like
+   * any other. Only files since the channel's first followed live, and none someone has reviewed.
+   */
+  private async adoptOrphans(channel: GoondvrChannel, threshold: number | null, now: Date) {
+    const sessions = await db.select().from(recorderLiveSessionsTable).where(eq(recorderLiveSessionsTable.channelId, channel.id));
+    if (!sessions.length) return;
+    const since = Math.min(...sessions.map((session) => session.startedAt.getTime()));
+    const files = (await this.files(channel.username)).filter((file) => {
+      const at = recordedAtFromFileName(file.fileName);
+      return at && at.getTime() >= since && !sessions.some((session) => fileInSession(file.fileName, session));
+    });
+    if (!files.length) return;
+    const reviews = await db
+      .select({ videoId: recordingReviewsTable.videoId, status: recordingReviewsTable.status })
+      .from(recordingReviewsTable)
+      .where(inArray(recordingReviewsTable.videoId, files.map((file) => file.id)));
+    const decided = new Set(reviews.filter((review) => !["proposed", "dismissed", "automatic"].includes(review.status)).map((review) => review.videoId));
+    const orphans = files.filter((file) => !decided.has(file.id));
+    for (const live of orphanLives(orphans.map((file) => ({ recordedAt: recordedAtFromFileName(file.fileName)!, durationSeconds: file.durationSeconds })))) {
+      await db.insert(recorderLiveSessionsTable).values({
+        channelId: channel.id,
+        username: channel.username,
+        site: channel.site,
+        startedAt: live.startedAt,
+        lastSeenAt: live.lastStartAt,
+        endedAt: live.lastStartAt,
+        capture: "highlights",
+        threshold,
+        status: "waiting",
+        gender: channel.gender || null,
+        updatedAt: now,
+      });
+      logger.info({ channel: channel.username, from: live.startedAt.toISOString(), to: live.lastStartAt.toISOString() }, "Adopted recordings made while Kura was away");
+    }
   }
 
   private async end(session: SessionRow, capture: CaptureMode, threshold: number | null, now: Date) {
@@ -116,17 +169,35 @@ class LiveSessions {
     await this.hideFromReview().catch((error) => logger.warn({ err: error }, "Could not take highlights recordings out of review"));
   }
 
-  /** The library recordings a live made. */
-  private async recordings(session: SessionRow): Promise<SessionRecording[]> {
+  /** A channel's library recordings. */
+  private async files(username: string): Promise<SessionRecording[]> {
     const scope = await recordingScope();
     if (!scope.directoryId) return [];
-    const prefix = `${session.username.replace(/^@/, "").replace(/[\\%_]/g, "\\$&")}\\_%`;
+    const prefix = `${username.replace(/^@/, "").replace(/[\\%_]/g, "\\$&")}\\_%`;
     const rows = await db.execute<{ id: number; file_name: string; file_path: string; duration_seconds: number | null }>(sql`
       SELECT id, file_name, file_path, duration_seconds FROM videos
       WHERE directory_id = ${scope.directoryId} AND file_name ILIKE ${prefix}`);
-    return rows
-      .filter((row) => fileInSession(String(row.file_name), session))
-      .map((row) => ({ id: Number(row.id), fileName: String(row.file_name), filePath: String(row.file_path), durationSeconds: row.duration_seconds === null ? null : Number(row.duration_seconds) }));
+    return rows.map((row) => ({ id: Number(row.id), fileName: String(row.file_name), filePath: String(row.file_path), durationSeconds: row.duration_seconds === null ? null : Number(row.duration_seconds) }));
+  }
+
+  /** The library recordings a live made. */
+  private async recordings(session: SessionRow): Promise<SessionRecording[]> {
+    return (await this.files(session.username)).filter((recording) => fileInSession(recording.fileName, session));
+  }
+
+  /** Scans the recordings folder (nothing else does) so a finished live's files reach the library. */
+  private async importRecordings() {
+    if (Date.now() - this.lastImportAt < IMPORT_EVERY_MS) return;
+    this.lastImportAt = Date.now();
+    const scope = await recordingScope();
+    if (!scope.directoryId) return;
+    const { watcherService } = await import("@/modules/directories/watcher.service");
+    try {
+      const { completion } = await watcherService.startScan(scope.directoryId);
+      void completion.catch((error) => logger.warn({ err: error }, "Recordings folder scan failed"));
+    } catch (error) {
+      if (!(error instanceof ConflictError)) throw error;
+    }
   }
 
   /** Once every file of the live is analysed: find its moments and start the one render. */
@@ -136,17 +207,30 @@ class LiveSessions {
     if (owned.some((recording) => recording.active)) return;
     const recordings = await this.recordings(session);
     const inLibrary = new Set(recordings.map((recording) => recording.fileName));
-    if (owned.some((recording) => !inLibrary.has(recording.name.split("/").at(-1) ?? recording.name)) && since < LIBRARY_WAIT_MS) return;
+    if (owned.some((recording) => !inLibrary.has(recording.name.split("/").at(-1) ?? recording.name))) {
+      if (since < LIBRARY_WAIT_MS) return this.importRecordings();
+      if (!recordings.length) {
+        await this.patch(session.id, { status: "failed", error: "GoondVR's files never reached the library; they are kept" });
+        return;
+      }
+    }
     if (!recordings.length) {
       if (since >= LIBRARY_WAIT_MS) await this.patch(session.id, { status: "empty", clips: [], error: null });
+      return;
+    }
+    // Reconnect stubs never get analysed; they would hold the live back, and are deleted with the rest.
+    const analysable = recordings.filter((recording) => !isStubRecording(recording.durationSeconds));
+    if (!analysable.length) {
+      await this.patch(session.id, { status: "empty", clips: [], error: null });
+      await this.deleteRecordings(session, recordings);
       return;
     }
     const reviews = await db
       .select({ videoId: recordingReviewsTable.videoId })
       .from(recordingReviewsTable)
-      .where(inArray(recordingReviewsTable.videoId, recordings.map((recording) => recording.id)));
+      .where(inArray(recordingReviewsTable.videoId, analysable.map((recording) => recording.id)));
     const analysed = new Set(reviews.map((review) => review.videoId));
-    if (recordings.some((recording) => !analysed.has(recording.id))) {
+    if (analysable.some((recording) => !analysed.has(recording.id))) {
       if (since >= ANALYSIS_WAIT_MS) await this.patch(session.id, { status: "failed", error: "Some recordings were never analysed; they are kept" });
       return;
     }
@@ -160,16 +244,16 @@ class LiveSessions {
     const settings = await recordingsService.settings();
     const threshold = session.threshold ?? probeThreshold(settings.sensitivity);
     const store = visualSearchStore();
-    const indexed = await store.indexed(recordings.map((recording) => recording.id));
+    const indexed = await store.indexed(analysable.map((recording) => recording.id));
     const found: { videoId: number; recordedAt: Date | null; durationSeconds: number; clips: LiveSessionClip[] }[] = [];
-    for (const recording of recordings) {
+    for (const recording of analysable) {
       if (indexed.get(recording.id)?.modelRevision !== probe.modelRevision) {
         await this.patch(session.id, { status: "failed", error: `${recording.fileName} was indexed with another image model; it is kept` });
         return;
       }
       const frames = await store.videoFrames(recording.id);
       const duration = await probeRecordingDuration(recording.filePath, recording.durationSeconds ?? frames.timestamps.at(-1) ?? 0);
-      const result = detectWithProbe({ ...frames, durationSeconds: duration, probe, states: settings.highlightStates, threshold });
+      const result = detectWithProbe({ ...frames, durationSeconds: duration, probe, states: LIVE_HIGHLIGHT_STATES, threshold, options: liveClipOptions(threshold) });
       found.push({
         videoId: recording.id,
         recordedAt: recordedAtFromFileName(recording.fileName),
@@ -183,6 +267,17 @@ class LiveSessions {
       // Nothing reached the threshold: nothing of this live is stored.
       await this.patch(session.id, { status: "empty", clips: [], error: null });
       await this.deleteRecordings(session, recordings);
+      return;
+    }
+    const liveSeconds = found.reduce((sum, recording) => sum + recording.durationSeconds, 0);
+    if (isContinuousAction(keptSeconds(clips), liveSeconds)) {
+      // Nothing is deleted: the recordings go back to the review queue to have their highlights chosen.
+      await db
+        .update(recordingReviewsTable)
+        .set({ status: sql`CASE WHEN jsonb_array_length(${recordingReviewsTable.clips}) > 0 THEN 'proposed' ELSE 'dismissed' END` })
+        .where(and(inArray(recordingReviewsTable.videoId, analysable.map((recording) => recording.id)), eq(recordingReviewsTable.status, "automatic")));
+      await this.patch(session.id, { status: "review", clips, error: null });
+      logger.info({ session: session.id, action: Math.round(keptSeconds(clips)), live: Math.round(liveSeconds) }, "Live is mostly action; sent to review");
       return;
     }
     if (!settings.clipsDirectoryId) {

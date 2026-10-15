@@ -1,4 +1,4 @@
-"""Detection-only numeric observations using the shared face GPU session."""
+"""Detection-only numeric observations on the shared face runtime's 640 CPU detector."""
 from fastapi import APIRouter, Depends, Request
 from ..config import Settings, get_settings
 from ..runtime import VisionRuntime

@@ -33,6 +33,8 @@ export const playlistQuerySchema = z.object({
       z.array(z.enum(["artwork"])).default([]),
     )
     .optional(),
+  /** Flag each playlist with `contains_video` for this video, so pickers can show what it is already on. */
+  contains_video: z.coerce.number().int().positive().optional(),
 });
 
 const parseNullableNumber = (val: unknown) => {
@@ -70,6 +72,7 @@ export const playlistSchema = z.object({
     .nullable(),
   artwork_source_video_id: z.number().nullable(),
   artwork: artworkSummarySchema.nullable().optional(),
+  contains_video: z.boolean().optional(),
 });
 
 const playlistVideoSchema = z.object({
