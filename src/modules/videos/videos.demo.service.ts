@@ -14,7 +14,9 @@ import { storyboardAssetPaths } from "@/modules/storyboards/storyboards.pages";
 const {
   demoCreatorsTable,
   demoArtworkAssetsTable,
+  demoCollectionsTable,
   demoFavoritesTable,
+  demoPlaylistsTable,
   demoResourcesTable,
   demoStoryboardsTable,
   demoStudiosTable,
@@ -111,10 +113,17 @@ export class VideosDemoService {
 
   delete(videoId: number): void {
     this.ensureVideo(videoId);
-    getDemoDatabase()
-      .delete(demoVideosTable)
-      .where(eq(demoVideosTable.id, videoId))
-      .run();
+    withDemoTransaction(() => {
+      const db = getDemoDatabase();
+      // Migration 0003 added these covers without ON DELETE SET NULL, so a
+      // video that covers a playlist or collection would fail the delete.
+      for (const table of [demoPlaylistsTable, demoCollectionsTable])
+        db.update(table)
+          .set({ artworkSourceVideoId: null })
+          .where(eq(table.artworkSourceVideoId, videoId))
+          .run();
+      db.delete(demoVideosTable).where(eq(demoVideosTable.id, videoId)).run();
+    });
   }
 
   getMetadata(videoId: number): DemoMetadata[] {
