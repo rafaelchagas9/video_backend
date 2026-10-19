@@ -12,6 +12,7 @@ import type {
   VisionBatchResult,
   VisionCapabilities,
 } from "./visual-inference.types";
+import { gpuModes } from "@/utils/gpu-modes";
 
 const wireCapabilitySchema = z.object({
   name: z.string().trim().min(1),
@@ -123,11 +124,15 @@ export class HttpVisualInferenceAdapter implements VisualInferencePort {
     this.fetchImplementation = options.fetch ?? globalThis.fetch;
   }
 
-  async capabilities(signal?: AbortSignal): Promise<VisionCapabilities> {
-    const response = await this.request("/v1/capabilities", {
-      method: "GET",
-      signal,
-    });
+  async capabilities(
+    signal?: AbortSignal,
+    options: { passive?: boolean } = {}
+  ): Promise<VisionCapabilities> {
+    const response = await this.request(
+      "/v1/capabilities",
+      { method: "GET", signal },
+      options
+    );
     const wire = wireCapabilitiesSchema.parse(await response.json());
     return visionCapabilitiesSchema.parse({
       version: wire.version,
@@ -204,7 +209,20 @@ export class HttpVisualInferenceAdapter implements VisualInferencePort {
     return validateVisionBatchResultForRequest(batch, result);
   }
 
-  private async request(path: string, init: RequestInit): Promise<Response> {
+  /** Every vision call holds the GPU compute lane: the unit may be stopped for VAAPI work. */
+  private request(
+    path: string,
+    init: RequestInit,
+    options: { passive?: boolean } = {}
+  ): Promise<Response> {
+    return gpuModes.runCompute(() => this.send(path, init), {
+      label: `vision ${path}`,
+      ...(init.signal ? { signal: init.signal } : {}),
+      ...options,
+    });
+  }
+
+  private async send(path: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const externalSignal = init.signal;
     const abort = () => controller.abort(externalSignal?.reason);

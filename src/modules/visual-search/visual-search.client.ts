@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { env } from "@/config/env";
 import { AppError } from "@/utils/errors";
+import { GpuLaneUnavailableError, gpuModes } from "@/utils/gpu-modes";
 
 /** Vision-service SigLIP2 endpoints (`/v1/embeddings/*`). */
 
@@ -78,12 +79,18 @@ async function failure(response: Response): Promise<VisualSearchUnavailableError
 }
 
 export const visualSearchClient = {
-  async status(): Promise<ClipStatus> {
+  /** `wait` holds the compute lane (jobs); otherwise a paused unit is reported, not started. */
+  async status({ wait = false }: { wait?: boolean } = {}): Promise<ClipStatus> {
     try {
-      const response = await fetch(`${env.VISION_SERVICE_URL}/v1/capabilities`, {
-        headers: headers(),
-        signal: AbortSignal.timeout(5_000),
-      });
+      // A status poll must not start a vision unit stopped for VAAPI work.
+      const response = await gpuModes.runCompute(
+        () =>
+          fetch(`${env.VISION_SERVICE_URL}/v1/capabilities`, {
+            headers: headers(),
+            signal: AbortSignal.timeout(5_000),
+          }),
+        { label: "visual search status", passive: !wait }
+      );
       if (!response.ok) throw new Error(String(response.status));
       const clip = capabilitiesSchema
         .parse(await response.json())
@@ -95,7 +102,9 @@ export const visualSearchClient = {
         state: clip.state,
         modelRevision: clip.model_revision,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof GpuLaneUnavailableError)
+        return { available: true, ready: false, state: "paused", modelRevision: null };
       return { available: false, ready: false, state: "unreachable", modelRevision: null };
     }
   },
@@ -103,12 +112,17 @@ export const visualSearchClient = {
   async embedText(texts: string[]): Promise<{ modelRevision: string; vectors: Float32Array[] }> {
     let response: Response;
     try {
-      response = await fetch(`${env.VISION_SERVICE_URL}/v1/embeddings/text`, {
-        method: "POST",
-        headers: headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ texts }),
-        signal: AbortSignal.timeout(30_000),
-      });
+      // A user is waiting on this search: it preempts background VAAPI work.
+      response = await gpuModes.runCompute(
+        () =>
+          fetch(`${env.VISION_SERVICE_URL}/v1/embeddings/text`, {
+            method: "POST",
+            headers: headers({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ texts }),
+            signal: AbortSignal.timeout(30_000),
+          }),
+        { label: "visual search query", interactive: true }
+      );
     } catch {
       throw new VisualSearchUnavailableError("The vision service is unreachable");
     }
@@ -144,12 +158,16 @@ export const visualSearchClient = {
     );
     let response: Response;
     try {
-      response = await fetch(`${env.VISION_SERVICE_URL}/v1/embeddings/pages`, {
-        method: "POST",
-        headers: headers(),
-        body: form,
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000),
-      });
+      response = await gpuModes.runCompute(
+        () =>
+          fetch(`${env.VISION_SERVICE_URL}/v1/embeddings/pages`, {
+            method: "POST",
+            headers: headers(),
+            body: form,
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000),
+          }),
+        { label: "visual index pages", ...(signal ? { signal } : {}) }
+      );
     } catch (error) {
       if (signal?.aborted) throw error;
       throw new VisualSearchUnavailableError("The vision service is unreachable");

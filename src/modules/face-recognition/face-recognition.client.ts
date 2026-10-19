@@ -11,6 +11,7 @@ import {
   type VisualInferencePort,
   type VisionFinding,
 } from "@/modules/content-analysis";
+import { GpuLaneUnavailableError } from "@/utils/gpu-modes";
 import { logger } from "@/utils/logger";
 import { normalizedFaceBoxToPixels } from "./face-recognition.coordinates";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
@@ -87,11 +88,14 @@ export class FaceRecognitionClient {
       });
   }
 
-  async healthCheck(): Promise<HealthCheckResponse> {
+  /** `passive` reports without starting a vision unit stopped for VAAPI work. */
+  async healthCheck(
+    options: { passive?: boolean } = {}
+  ): Promise<HealthCheckResponse> {
     if (env.DEMO_MODE) return faceRecognitionDemoService.healthCheck();
 
     try {
-      const manifest = await this.inference.capabilities();
+      const manifest = await this.inference.capabilities(undefined, options);
       const faces = manifest.capabilities.find(
         (capability) => capability.name === FACE_CAPABILITY
       );
@@ -105,6 +109,7 @@ export class FaceRecognitionClient {
         embedding_dimension: FACE_EMBEDDING_DIMENSION,
       };
     } catch (error) {
+      if (error instanceof GpuLaneUnavailableError) return { status: "degraded" };
       logger.error({ error }, "Vision capability check failed");
       return { status: "unhealthy" };
     }

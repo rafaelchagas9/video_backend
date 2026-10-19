@@ -17,7 +17,9 @@ import { resolveDemoAssetPath } from "@/database/demo";
 import { videosService } from "@/modules/videos/videos.service";
 import { AppError, NotFoundError } from "@/utils/errors";
 import { fileExists } from "@/utils/file-utils";
+import { gpuModes } from "@/utils/gpu-modes";
 import { logger } from "@/utils/logger";
+import { usesVaapi as argsUseVaapi } from "@/utils/media-process";
 import type {
   CastEncodingMode,
   CastProfileConfig,
@@ -330,6 +332,48 @@ export class CastTranscodingService {
     const attemptGeneration = ++session.attemptGeneration;
 
     const args = this.buildFfmpegArgs(session, encodingMode);
+    if (!argsUseVaapi(args)) {
+      this.spawnAttempt(session, args, encodingMode, attemptGeneration);
+      return;
+    }
+    // VAAPI holds the GPU media lane from spawn until the process closes. A
+    // cast is interactive: it drains vision work instead of waiting for idle.
+    void gpuModes
+      .runMedia(
+        () =>
+          new Promise<void>((released) => {
+            if (
+              session.stopping ||
+              attemptGeneration !== session.attemptGeneration
+            )
+              return released();
+            const child = this.spawnAttempt(
+              session,
+              args,
+              encodingMode,
+              attemptGeneration
+            );
+            child.once("close", () => released());
+            child.once("error", () => released());
+          }),
+        { label: `Cast session ${session.id}`, interactive: true }
+      )
+      .catch((error: unknown) => {
+        session.state = "failed";
+        session.errorMessage = "Could not reserve the GPU for Cast";
+        logger.error(
+          { error, castSessionId: session.id, videoId: session.videoId },
+          "Cast could not reserve the GPU media lane"
+        );
+      });
+  }
+
+  private spawnAttempt(
+    session: CastSessionRecord,
+    args: string[],
+    encodingMode: CastEncodingMode,
+    attemptGeneration: number
+  ): ChildProcessWithoutNullStreams {
     const child = spawn(env.FFMPEG_PATH, args);
     session.process = child;
     logger.info(
@@ -430,6 +474,7 @@ export class CastTranscodingService {
     });
 
     void this.watchForPlayableManifest(session, attemptGeneration);
+    return child;
   }
 
   private buildFfmpegArgs(

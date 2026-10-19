@@ -6,6 +6,8 @@ import { spawn, type ChildProcess } from "child_process";
 import { unlink, mkdir, appendFile } from "fs/promises";
 import { join } from "path";
 import { env } from "@/config/env";
+import { gpuModes } from "@/utils/gpu-modes";
+import { usesVaapi } from "@/utils/media-process";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import { logger } from "@/utils/logger";
 import type { Video } from "@/modules/videos/videos.types";
@@ -22,6 +24,16 @@ import {
   parseBitrateToBps,
 } from "./conversion.planning";
 
+interface FfmpegRunOptions {
+  jobId: number;
+  args: string[];
+  durationSeconds: number;
+  onProgress: (progress: number) => void;
+  logPath: string;
+  encodingMode: ConversionEncodingMode;
+  bitratePlan: ReturnType<typeof buildConversionBitratePlan>;
+  signal: AbortSignal;
+}
 export class FfmpegProcessError extends Error {
   readonly name = "FfmpegProcessError";
 
@@ -429,16 +441,16 @@ export class FfmpegService {
     return join(logsDir, `job-${jobId}.log`);
   }
 
-  private executeFfmpeg(options: {
-    jobId: number;
-    args: string[];
-    durationSeconds: number;
-    onProgress: (progress: number) => void;
-    logPath: string;
-    encodingMode: ConversionEncodingMode;
-    bitratePlan: ReturnType<typeof buildConversionBitratePlan>;
-    signal: AbortSignal;
-  }): Promise<FfmpegRunResult> {
+  /** VAAPI runs hold the GPU media lane and rerun from scratch if preempted. */
+  private executeFfmpeg(options: FfmpegRunOptions): Promise<FfmpegRunResult> {
+    if (!usesVaapi(options.args)) return this.spawnFfmpeg(options);
+    return gpuModes.runMedia(
+      (signal) => this.spawnFfmpeg({ ...options, signal }),
+      { label: `Conversion job ${options.jobId}`, signal: options.signal }
+    );
+  }
+
+  private spawnFfmpeg(options: FfmpegRunOptions): Promise<FfmpegRunResult> {
     const {
       jobId,
       args,

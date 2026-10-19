@@ -24,7 +24,11 @@ export type VisionCapability = z.infer<typeof visionCapabilitySchema>;
 export type VisionCapabilities = z.infer<typeof visionCapabilitiesSchema>;
 
 export interface VisualInferencePort {
-  capabilities(signal?: AbortSignal): Promise<VisionCapabilities>;
+  /** `passive` probes answer only while vision is already up (GPU modes). */
+  capabilities(
+    signal?: AbortSignal,
+    options?: { passive?: boolean }
+  ): Promise<VisionCapabilities>;
   analyzeBatch(
     input: VisionBatch,
     signal: AbortSignal

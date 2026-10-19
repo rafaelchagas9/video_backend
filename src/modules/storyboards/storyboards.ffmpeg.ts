@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { copyFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
+import { gpuModes } from "@/utils/gpu-modes";
+import { usesVaapi } from "@/utils/media-process";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import {
   PAGE_COLUMNS,
@@ -335,7 +337,20 @@ export async function paginateSheet(
   }
 }
 
-async function renderAttempt(
+function renderAttempt(
+  ffmpegPath: string,
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<number[]> {
+  if (!usesVaapi(args)) return spawnRender(ffmpegPath, args, timeoutMs, signal);
+  return gpuModes.runMedia(
+    (leaseSignal) => spawnRender(ffmpegPath, args, timeoutMs, leaseSignal),
+    { label: "Storyboard render", ...(signal ? { signal } : {}) }
+  );
+}
+
+async function spawnRender(
   ffmpegPath: string,
   args: string[],
   timeoutMs: number,

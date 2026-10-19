@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { gpuModes } from "@/utils/gpu-modes";
 
 export interface MediaProcessOptions {
   label: string;
@@ -6,10 +7,35 @@ export interface MediaProcessOptions {
   signal?: AbortSignal;
   maxOutputBytes?: number;
   includeStderr?: boolean;
+  /** A user waits on this VAAPI job (GPU modes); defaults to the async scope. */
+  interactive?: boolean;
+}
+
+/** VAAPI work must hold the GPU media lane: see `gpu-modes.ts`. */
+export function usesVaapi(args: readonly string[]): boolean {
+  return args.some((arg) => arg.includes("vaapi"));
 }
 
 /** No shell, bounded output, and rejection only after the child has been reaped. */
-export async function runMediaProcess(
+export function runMediaProcess(
+  executable: string,
+  args: string[],
+  options: MediaProcessOptions
+): Promise<{ stdout: string; stderr: string }> {
+  if (!usesVaapi(args)) return runChild(executable, args, options);
+  return gpuModes.runMedia(
+    (signal) => runChild(executable, args, { ...options, signal }),
+    {
+      label: options.label,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.interactive !== undefined
+        ? { interactive: options.interactive }
+        : {}),
+    }
+  );
+}
+
+async function runChild(
   executable: string,
   args: string[],
   options: MediaProcessOptions

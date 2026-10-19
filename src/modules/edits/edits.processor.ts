@@ -14,7 +14,9 @@ import {
   classifyFfmpegFailure,
   ffmpegService,
 } from "@/modules/conversion/conversion.ffmpeg.service";
+import { gpuModes } from "@/utils/gpu-modes";
 import { logger } from "@/utils/logger";
+import { usesVaapi } from "@/utils/media-process";
 import { recordPerfStage } from "@/utils/performance-profiler";
 import { env } from "@/config/env";
 import { ConflictError } from "@/utils/errors";
@@ -974,7 +976,25 @@ export class EditsProcessor {
     }
   }
 
+  /** VAAPI renders hold the GPU media lane and rerun from scratch if preempted. */
   private executeFfmpeg(
+    jobId: number,
+    args: string[],
+    expectedDuration: number,
+    onProgress: (progress: number) => void,
+    signal: AbortSignal,
+    encodingMode: EditEncodingMode
+  ): Promise<void> {
+    if (!usesVaapi(args))
+      return this.spawnFfmpeg(jobId, args, expectedDuration, onProgress, signal, encodingMode);
+    return gpuModes.runMedia(
+      (leaseSignal) =>
+        this.spawnFfmpeg(jobId, args, expectedDuration, onProgress, leaseSignal, encodingMode),
+      { label: `Edit job ${jobId}`, signal }
+    );
+  }
+
+  private spawnFfmpeg(
     jobId: number,
     args: string[],
     expectedDuration: number,

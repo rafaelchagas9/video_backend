@@ -184,6 +184,34 @@ const envSchema = z.object({
 
   // GPU Acceleration (VAAPI for AMD)
   VAAPI_DEVICE: z.string().default("/dev/dri/renderD128"),
+  // ROCm vision work and VAAPI decode on the same GPU at once hard-reset this
+  // machine (data fabric sync flood). When enabled, Kura stops the vision unit
+  // before any VAAPI job and starts it only while no VAAPI job runs.
+  GPU_MODE_COORDINATION: z
+    .string()
+    .default("false")
+    .transform((value) => value.toLowerCase() === "true"),
+  GPU_VISION_UNIT: z.string().default("conversor-video-face.service"),
+  /** false: Kura never starts the vision unit itself (it still stops it for VAAPI). */
+  GPU_VISION_AUTOSTART: z
+    .string()
+    .default("true")
+    .transform((value) => value.toLowerCase() === "true"),
+  GPU_MEDIA_IDLE_GRACE_MS: z
+    .string()
+    .default("10000")
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  GPU_COMPUTE_IDLE_STOP_MS: z
+    .string()
+    .default("120000")
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  GPU_VISION_START_TIMEOUT_MS: z
+    .string()
+    .default("300000")
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
   CONVERTED_VIDEOS_DIR: z.string().default("./data/converted"),
 
   // Duplicate detection: audio fingerprints propose alignments, frames confirm them

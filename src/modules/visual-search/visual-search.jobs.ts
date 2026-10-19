@@ -18,6 +18,8 @@ export async function currentVisualIndexIds(videoIds: number[]): Promise<Set<num
   const store = visualSearchStore();
   const [indexed, status] = await Promise.all([
     store.indexed(videoIds),
+    // Passive: the library overview calls this. A paused unit has no revision,
+    // which skips the model-swap check exactly as an unreachable service did.
     visualSearchClient.status(),
   ]);
   if (env.DEMO_MODE) return new Set(indexed.keys());
@@ -68,7 +70,7 @@ export function queueVisualIndex(videoId: number): void {
       while (pending.size) {
         const next = pending.values().next().value!;
         pending.delete(next);
-        const status = await visualSearchClient.status();
+        const status = await visualSearchClient.status({ wait: true });
         if (!status.ready) {
           pending.clear();
           return;

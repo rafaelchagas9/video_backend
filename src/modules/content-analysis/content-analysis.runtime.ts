@@ -112,10 +112,15 @@ export class ContentAnalysisRuntime {
         ffmpegPath: env.FFMPEG_PATH,
         temporaryRoot: env.FRAME_EXTRACTION_TEMP_DIR,
         timeoutMs: env.CONTENT_ANALYSIS_EXTRACTION_TIMEOUT_MS,
-        hardwareAcceleration: {
-          type: "vaapi",
-          device: env.VAAPI_DEVICE,
-        },
+        // Decode and NudeNet inference alternate per chunk. With GPU mode
+        // coordination VAAPI and vision may not overlap, so the whole job stays
+        // in the compute lane and decodes in software (~7x vs ~34x realtime).
+        hardwareAcceleration: env.GPU_MODE_COORDINATION
+          ? undefined
+          : {
+              type: "vaapi",
+              device: env.VAAPI_DEVICE,
+            },
         outputFormat: "jpg",
         jpegQuality: 5,
       }),

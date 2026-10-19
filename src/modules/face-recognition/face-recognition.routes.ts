@@ -23,6 +23,7 @@ import { db } from "@/config/drizzle";
 import { env } from "@/config/env";
 import { faceRecognitionDemoService } from "./face-recognition.demo.service";
 import type { CreatorFaceEmbeddingRecord } from "./face-recognition.types";
+import { interactiveGpuWork } from "@/utils/gpu-modes";
 
 function serializeCreatorFaceEmbedding(
   value: CreatorFaceEmbeddingRecord,
@@ -72,7 +73,7 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       },
     },
     async (_request, reply) => {
-      const health = await faceClient.healthCheck();
+      const health = await faceClient.healthCheck({ passive: true });
       return reply.send({
         success: true,
         data: health,
@@ -127,11 +128,13 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       await Bun.write(tmpPath, buffer);
 
       try {
-        const embedding = await faceService.addCreatorEmbedding({
-          creatorId,
-          imagePath: tmpPath,
-          sourceType: "manual_upload",
-        });
+        const embedding = await interactiveGpuWork(() =>
+          faceService.addCreatorEmbedding({
+            creatorId,
+            imagePath: tmpPath,
+            sourceType: "manual_upload",
+          })
+        );
 
         // Clean up temp file
         await Bun.file(tmpPath).delete();
@@ -187,12 +190,14 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
       await Bun.write(tmpPath, buffer);
 
       try {
-        const embedding = await faceService.addCreatorEmbedding({
-          creatorId,
-          imagePath: tmpPath,
-          sourceType: "manual_upload",
-          isPrimary: is_primary,
-        });
+        const embedding = await interactiveGpuWork(() =>
+          faceService.addCreatorEmbedding({
+            creatorId,
+            imagePath: tmpPath,
+            sourceType: "manual_upload",
+            isPrimary: is_primary,
+          })
+        );
 
         // Clean up temp file
         await Bun.file(tmpPath).delete();
@@ -269,11 +274,13 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
 
       let embedding;
       try {
-        embedding = await faceService.addCreatorEmbedding({
-          creatorId,
-          imagePath: media.file_path,
-          sourceType: "gallery_media",
-        });
+        embedding = await interactiveGpuWork(() =>
+          faceService.addCreatorEmbedding({
+            creatorId,
+            imagePath: media.file_path,
+            sourceType: "gallery_media",
+          })
+        );
       } catch (error) {
         if (error instanceof Error && /no face detected/i.test(error.message)) {
           return reply.code(400).send({
@@ -822,7 +829,9 @@ export async function faceRecognitionRoutes(server: FastifyInstance) {
 
       try {
         // Detect face in uploaded image
-        const result = await faceClient.detectFacesFromFile(tmpPath);
+        const result = await interactiveGpuWork(() =>
+          faceClient.detectFacesFromFile(tmpPath)
+        );
 
         if (result.faces.length === 0) {
           await Bun.file(tmpPath).delete();

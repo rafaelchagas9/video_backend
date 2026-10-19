@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { copyFile, readFile, stat, unlink } from "node:fs/promises";
 import { setPriority } from "node:os";
 import { resolve } from "node:path";
+import { gpuModes } from "@/utils/gpu-modes";
+import { usesVaapi } from "@/utils/media-process";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 
 export interface PreviewPlanOptions {
@@ -161,16 +163,39 @@ interface ProcessResult {
   stderr: string;
 }
 
+interface ProcessOptions {
+  lowPriority?: boolean;
+  /** A user waits on this render (GPU modes). */
+  interactive?: boolean;
+  signal?: AbortSignal;
+  /** Kill the process once its resident memory passes this (Linux only). */
+  maxRssBytes?: number;
+}
+
 function runProcess(
   command: string,
   args: string[],
   timeoutMs: number,
-  options: {
-    lowPriority?: boolean;
-    signal?: AbortSignal;
-    /** Kill the process once its resident memory passes this (Linux only). */
-    maxRssBytes?: number;
-  } = {}
+  options: ProcessOptions = {}
+): Promise<ProcessResult> {
+  if (!usesVaapi(args)) return spawnProcess(command, args, timeoutMs, options);
+  return gpuModes.runMedia(
+    (signal) => spawnProcess(command, args, timeoutMs, { ...options, signal }),
+    {
+      label: "Preview render",
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.interactive !== undefined
+        ? { interactive: options.interactive }
+        : {}),
+    }
+  );
+}
+
+function spawnProcess(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  options: ProcessOptions = {}
 ): Promise<ProcessResult> {
   const { signal } = options;
   signal?.throwIfAborted();
@@ -292,6 +317,7 @@ export class PreviewRenderer {
                 this.options.timeoutMs ?? 10 * 60_000,
                 {
                   lowPriority: priority === "background",
+                  interactive: priority === "interactive",
                   signal,
                   maxRssBytes: this.options.maxRssBytes ?? 6 * 2 ** 30,
                 }

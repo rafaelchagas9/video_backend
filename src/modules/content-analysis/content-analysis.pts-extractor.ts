@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { gpuModes } from "@/utils/gpu-modes";
+import { usesVaapi } from "@/utils/media-process";
 import { mediaWorkScheduler } from "@/utils/media-work-scheduler";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -156,7 +158,20 @@ function parsePts(stderr: string): number[] {
   return values;
 }
 
-async function runFfmpeg(
+function runFfmpeg(
+  ffmpegPath: string,
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<string> {
+  if (!usesVaapi(args)) return spawnFfmpeg(ffmpegPath, args, timeoutMs, signal);
+  return gpuModes.runMedia(
+    (leaseSignal) => spawnFfmpeg(ffmpegPath, args, timeoutMs, leaseSignal),
+    { label: "Content analysis decode", ...(signal ? { signal } : {}) }
+  );
+}
+
+async function spawnFfmpeg(
   ffmpegPath: string,
   args: string[],
   timeoutMs: number,
