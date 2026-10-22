@@ -93,9 +93,14 @@ export class VideosBulkService {
             .returning({ id: videosTable.id });
           if (deleted.length !== videos.length)
             throw new ConflictError("The recording changed during archival; its original is retained");
+          await tx.delete(thumbnailsTable).where(inArray(thumbnailsTable.videoId, ids));
         });
       } else {
-        await db.delete(videosTable).where(inArray(videosTable.id, ids));
+        await db.transaction(async (tx) => {
+          await tx.delete(videosTable).where(inArray(videosTable.id, ids));
+          // Thumbnails have no foreign key, so nothing cascades to them.
+          await tx.delete(thumbnailsTable).where(inArray(thumbnailsTable.videoId, ids));
+        });
       }
 
       // Recorder-owned files must still exist when its quota counters are updated.

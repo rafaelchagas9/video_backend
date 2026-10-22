@@ -5,10 +5,13 @@
  * batching, and capability discovery are owned by VisualInferencePort.
  */
 
+import { setTimeout as sleep } from "node:timers/promises";
 import { env } from "@/config/env";
 import {
   HttpVisualInferenceAdapter,
   type VisualInferencePort,
+  type VisionBatchItemResult,
+  type VisionCapabilityOutcome,
   type VisionFinding,
 } from "@/modules/content-analysis";
 import { GpuLaneUnavailableError } from "@/utils/gpu-modes";
@@ -24,7 +27,14 @@ import type {
 } from "./face-recognition.types";
 
 const FACE_CAPABILITY = "faces";
-const SINGLE_IMAGE_ID = "face-0";
+
+/**
+ * The service admits one inference per capability with a 0.1 s queue wait, and other models
+ * warm in the background after it reports ready. Batched frames back off instead of being
+ * dropped (a run once lost 206 of 406 frames this way right after a vision start).
+ */
+const TRANSIENT_OUTCOME_CODES = new Set(["OVERLOADED", "CAPABILITY_NOT_READY"]);
+const TRANSIENT_RETRY_WINDOW_MS = 120_000;
 
 function demoDetection(): DetectFacesResponse {
   return {
@@ -130,23 +140,27 @@ export class FaceRecognitionClient {
     if (env.DEMO_MODE) return demoDetection();
 
     try {
-      const file = Bun.file(imagePath);
-      const buffer = await file.arrayBuffer();
-      const extension = imagePath.split(".").pop()?.toLowerCase();
-      const mimeType =
-        extension === "png"
-          ? "image/png"
-          : extension === "webp"
-            ? "image/webp"
-            : "image/jpeg";
-      return await this.detectImage(
-        new Blob([buffer], { type: mimeType }),
-        signal
-      );
+      return await this.detectImage(await readImage(imagePath), signal);
     } catch (error) {
       logger.error({ error }, "Failed to analyze image for faces");
       throw error;
     }
+  }
+
+  /**
+   * One vision request for several images (the service admits one inference at a time, so
+   * parallel single-image calls mostly bounce as OVERLOADED). Per-image failures come back
+   * as Error entries in input order.
+   */
+  async detectFacesFromFiles(
+    imagePaths: string[],
+    signal?: AbortSignal
+  ): Promise<Array<DetectFacesResponse | Error>> {
+    if (env.DEMO_MODE) return imagePaths.map(() => demoDetection());
+    return this.detectImages(
+      await Promise.all(imagePaths.map(readImage)),
+      signal
+    );
   }
 
   async isAvailable(): Promise<boolean> {
@@ -171,37 +185,99 @@ export class FaceRecognitionClient {
     image: Blob,
     signal?: AbortSignal
   ): Promise<DetectFacesResponse> {
+    const [result] = await this.detectImages([image], signal);
+    if (!result) throw new Error("Vision service omitted the face analysis result");
+    if (result instanceof Error) throw result;
+    return result;
+  }
+
+  private async detectImages(
+    images: Blob[],
+    signal?: AbortSignal
+  ): Promise<Array<DetectFacesResponse | Error>> {
     const startedAt = performance.now();
-    const result = await this.inference.analyzeBatch(
-      {
-        capabilities: [FACE_CAPABILITY],
-        items: [{ id: SINGLE_IMAGE_ID, timestampSeconds: 0, image }],
-      },
-      signal ?? new AbortController().signal
+    const deadline = Date.now() + TRANSIENT_RETRY_WINDOW_MS;
+    const results: Array<DetectFacesResponse | Error | undefined> = images.map(
+      () => undefined
     );
-    const item = result.items[0];
-    const outcome = item?.outcomes[0];
-
-    if (!item || !outcome || outcome.capability !== FACE_CAPABILITY) {
-      throw new Error("Vision service omitted the face analysis result");
-    }
-    if (outcome.status === "error") {
-      throw new Error(
-        `Face analysis failed (${outcome.error.code}): ${outcome.error.message}`
+    let pending = images.map((_, index) => index);
+    for (let attempt = 0; pending.length > 0; attempt++) {
+      const batch = await this.inference.analyzeBatch(
+        {
+          capabilities: [FACE_CAPABILITY],
+          items: pending.map((index) => ({
+            id: `face-${index}`,
+            timestampSeconds: 0,
+            image: images[index]!,
+          })),
+        },
+        signal ?? new AbortController().signal
       );
+      const byId = new Map(batch.items.map((item) => [item.id, item]));
+      const retry: number[] = [];
+      for (const index of pending) {
+        const item = byId.get(`face-${index}`);
+        const outcome = item?.outcomes[0];
+        if (
+          outcome?.status === "error" &&
+          TRANSIENT_OUTCOME_CODES.has(outcome.error.code) &&
+          Date.now() < deadline
+        ) {
+          retry.push(index);
+          continue;
+        }
+        results[index] = toFaceResponse(item, outcome, startedAt);
+      }
+      pending = retry;
+      if (pending.length > 0)
+        await sleep(Math.min(250 * 2 ** attempt, 2_000), undefined, signal ? { signal } : {});
     }
-    if (item.width === undefined || item.height === undefined) {
-      throw new Error("Vision service omitted face image dimensions");
-    }
+    return results.map(
+      (result) => result ?? new Error("Vision service omitted the face analysis result")
+    );
+  }
+}
 
+async function readImage(imagePath: string): Promise<Blob> {
+  const buffer = await Bun.file(imagePath).arrayBuffer();
+  const extension = imagePath.split(".").pop()?.toLowerCase();
+  const mimeType =
+    extension === "png"
+      ? "image/png"
+      : extension === "webp"
+        ? "image/webp"
+        : "image/jpeg";
+  return new Blob([buffer], { type: mimeType });
+}
+
+function toFaceResponse(
+  item: VisionBatchItemResult | undefined,
+  outcome: VisionCapabilityOutcome | undefined,
+  startedAt: number
+): DetectFacesResponse | Error {
+  if (!item || !outcome || outcome.capability !== FACE_CAPABILITY) {
+    return new Error("Vision service omitted the face analysis result");
+  }
+  if (outcome.status === "error") {
+    return new Error(
+      `Face analysis failed (${outcome.error.code}): ${outcome.error.message}`
+    );
+  }
+  if (item.width === undefined || item.height === undefined) {
+    return new Error("Vision service omitted face image dimensions");
+  }
+  const { width, height } = item;
+  try {
     return {
       faces: outcome.findings.map((finding) =>
-        faceFindingToLegacyResult(finding, item.width!, item.height!)
+        faceFindingToLegacyResult(finding, width, height)
       ),
-      image_width: item.width,
-      image_height: item.height,
+      image_width: width,
+      image_height: height,
       processing_time_ms: Math.max(0, performance.now() - startedAt),
     };
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
   }
 }
 

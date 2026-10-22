@@ -53,7 +53,7 @@ export interface FaceExtractionQueueDependencies {
     videoId: number
   ): Promise<VideoSource | Record<string, unknown> | null>;
   frameService: Pick<FrameExtractionService, "extractFrames" | "cleanupFrames">;
-  faceClient: Pick<FaceClient, "isAvailable" | "detectFacesFromFile">;
+  faceClient: Pick<FaceClient, "isAvailable" | "detectFacesFromFiles">;
   publishDetections(
     videoId: number,
     detections: RawFaceDetection[],
@@ -404,34 +404,38 @@ export class FaceExtractionQueueService {
     }
     const detections: RawFaceDetection[] = [];
     let successfulInferences = 0;
-    const batchSize = Math.max(1, env.FACE_DETECTION_BATCH_SIZE);
+    // One vision request per batch; the service accepts up to 16 items.
+    const batchSize = Math.min(16, Math.max(1, env.FACE_DETECTION_BATCH_SIZE));
 
     for (let start = 0; start < frames.length; start += batchSize) {
       if (context.signal.aborted) {
         throw context.signal.reason ?? new Error("Face extraction cancelled");
       }
       const batch = frames.slice(start, start + batchSize);
-      const results = await Promise.all(
-        batch.map(async (frame) => {
-          try {
-            const result =
-              await this.dependencies.faceClient.detectFacesFromFile(
-                frame.filePath,
-                context.signal
-              );
-            return { frame, result };
-          } catch (error) {
-            if (context.signal.aborted) {
-              throw context.signal.reason ?? error;
-            }
-            logger.warn(
-              { error, runId },
-              "Face inference failed for extracted frame"
-            );
-            return null;
-          }
-        })
-      );
+      let outcomes: Awaited<ReturnType<FaceClient["detectFacesFromFiles"]>>;
+      try {
+        outcomes = await this.dependencies.faceClient.detectFacesFromFiles(
+          batch.map((frame) => frame.filePath),
+          context.signal
+        );
+      } catch (error) {
+        if (context.signal.aborted) {
+          throw context.signal.reason ?? error;
+        }
+        const failure = error instanceof Error ? error : new Error(String(error));
+        outcomes = batch.map(() => failure);
+      }
+      const results = batch.map((frame, index) => {
+        const result = outcomes[index];
+        if (!result || result instanceof Error) {
+          logger.warn(
+            { error: result, runId },
+            "Face inference failed for extracted frame"
+          );
+          return null;
+        }
+        return { frame, result };
+      });
       if (context.signal.aborted) {
         throw context.signal.reason ?? new Error("Face extraction cancelled");
       }

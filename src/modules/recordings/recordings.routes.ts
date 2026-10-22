@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import sharp from "sharp";
 import { z } from "zod";
 import { API_PREFIX } from "@/config/constants";
 import { env } from "@/config/env";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
+import { archiveAllFinished, archiveStatus, queueArchive } from "./recordings.archive";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { AUTOPILOT_MODES } from "./recordings.autopilot.policy";
-import { REVIEW_PASSES } from "./recordings.feedback";
+import { DISCARD_REASONS, REVIEW_PASSES } from "./recordings.feedback";
 import { goondvr } from "./recordings.goondvr";
 import { RECORDER_SITES, demoChannelPicture, recorderService } from "./recordings.live";
 import { PROBE_STATES } from "./recordings.probe";
@@ -105,9 +107,13 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       schema: {
         tags: ["recordings"],
         summary: "Live thumbnail of a GoondVR channel (proxied)",
-        description: "The latest live frame, or with kind=summary the site's profile image.",
+        description: "The latest live frame, or with kind=summary the site's profile image. With size, scaled to fit that square as WebP.",
         params: channelParams,
-        querystring: z.object({ kind: z.enum(["live", "summary"]).default("live"), v: z.string().max(40).optional() }),
+        querystring: z.object({
+          kind: z.enum(["live", "summary"]).default("live"),
+          v: z.string().max(40).optional(),
+          size: z.coerce.number().int().min(32).max(1024).optional(),
+        }),
       },
     },
     async (request, reply) => {
@@ -118,9 +124,17 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       }
       const upstream = await goondvr.thumbnail(request.params.channelId, request.query.kind);
       if (!upstream) return reply.code(404).send({ success: false, error: { message: "No thumbnail", statusCode: 404 } });
+      const image = Buffer.from(await upstream.arrayBuffer());
+      // Profile images change rarely; live frames every few seconds.
+      reply.header("Cache-Control", request.query.kind === "summary" ? "private, max-age=86400" : "private, max-age=30");
+      if (request.query.size) {
+        // Profile images arrive at full camera resolution (8K and 5 MB+); avatars need a sliver of that.
+        const { size } = request.query;
+        reply.header("Content-Type", "image/webp");
+        return reply.send(await sharp(image).rotate().resize(size, size, { fit: "cover", withoutEnlargement: true }).webp({ quality: 80 }).toBuffer());
+      }
       reply.header("Content-Type", upstream.headers.get("content-type") ?? "image/jpeg");
-      reply.header("Cache-Control", "private, max-age=30");
-      return reply.send(Buffer.from(await upstream.arrayBuffer()));
+      return reply.send(image);
     }
   );
 
@@ -180,7 +194,7 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         tags: ["recordings"],
         summary: "Where to play a channel live",
         description:
-          "An HLS playlist relayed from GoondVR's in-memory live view (paused channels included, recording nothing); in the demo a demo video stands in.",
+          "An HLS playlist relayed from GoondVR's in-memory live view (paused channels included, recording nothing); in the demo a demo video, looped as a live window, stands in.",
         params: channelParams,
         response: { 200: anyData },
       },
@@ -195,13 +209,23 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
         tags: ["recordings"],
         summary: "A channel's live HLS view (proxied)",
         description:
-          "index.m3u8 and the segments it lists. 503 with Retry-After while the stream is starting, 404 when there is nothing to watch. Never in the demo.",
+          "index.m3u8 and the segments it lists. 503 with Retry-After while the stream is starting, 404 when there is nothing to watch. In the demo, a demo video looped as a live window.",
         params: channelParams.extend({ file: z.string().regex(/^(?:index\.m3u8|init-\d{1,9}\.mp4|seg-\d{1,12}\.(?:m4s|ts))$/) }),
       },
     },
     async (request, reply) => {
       const fail = (statusCode: number, message: string) => reply.code(statusCode).send({ success: false, error: { message, statusCode } });
-      if (env.DEMO_MODE) return fail(404, "The demo never plays a real broadcast");
+      if (env.DEMO_MODE) {
+        const demo = await recorderService.demoLive(request.params.channelId, request.params.file);
+        if (demo.kind === "starting") {
+          reply.header("Retry-After", "2");
+          return fail(503, "The live view is starting");
+        }
+        if (demo.kind === "missing") return fail(404, "Nothing to watch");
+        reply.header("Content-Type", demo.contentType);
+        reply.header("Cache-Control", "no-store");
+        return reply.send(demo.body);
+      }
       const upstream = await goondvr.live(request.params.channelId, request.params.file);
       if (!upstream) return fail(502, "GoondVR is not reachable");
       if (!upstream.ok) {
@@ -216,6 +240,22 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       reply.header("Cache-Control", upstream.headers.get("cache-control") ?? "no-store");
       return reply.send(Buffer.from(await upstream.arrayBuffer()));
     }
+  );
+
+  app.put(
+    "/live/channels/:channelId/quality",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Pick the quality a paused channel is watched at",
+        description:
+          "A height the broadcast offers (`live.heights`), or 0 for the channel's own setting. A running live view restarts at it; 409 while the channel records, whose view plays the recording's quality.",
+        params: channelParams,
+        body: z.object({ height: z.number().int().min(0).max(4320) }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => ({ success: true as const, data: await recorderService.setLiveQuality(request.params.channelId, request.body.height) })
   );
 
   app.post(
@@ -439,6 +479,58 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
   );
 
   app.get(
+    "/guide",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "What to review, delete and record next",
+        description: "Ranks the review queue by what it teaches the highlight model, flags fragments and edited compilations, names channels worth recording more (or enough of), and reports progress toward the training targets.",
+        response: { 200: anyData },
+      },
+    },
+    async (request) => ({ success: true as const, data: await recordingsService.guide(request.user!.id) })
+  );
+
+  app.get(
+    "/archive",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Moving finished recordings to the NAS",
+        description: "Whether the NAS archive folder is mounted, how many finished recordings are still on this disk, and the progress of moves in this server run.",
+        response: { 200: anyData },
+      },
+    },
+    async () => ({ success: true as const, data: await archiveStatus() })
+  );
+
+  app.post(
+    "/archive",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Move every finished recording to the NAS",
+        description: "Queues every recording whose review is finished (keeps rendered, or saved with nothing kept). Each gets a checksum-verified NAS copy with its labels before it leaves Kura.",
+        response: { 200: anyData },
+      },
+    },
+    async () => ({ success: true as const, data: await archiveAllFinished() })
+  );
+
+  app.post(
+    "/:videoId/archive",
+    {
+      schema: {
+        tags: ["recordings"],
+        summary: "Move one finished recording to the NAS",
+        params: z.object({ videoId: z.coerce.number().int().positive() }),
+        response: { 200: anyData },
+      },
+    },
+    async (request) => ({ success: true as const, data: { queued: queueArchive([request.params.videoId]) } })
+  );
+
+  app.get(
     "/label-tasks",
     {
       schema: {
@@ -499,12 +591,13 @@ export async function recordingsRoutes(fastify: FastifyInstance): Promise<void> 
       schema: {
         tags: ["recordings"],
         summary: "Delete a recording",
-        description: "Deletes the recording (through GoondVR when it owns the file) and its review. Refused while it is still being recorded or clips are rendering from it.",
+        description: "Deletes the recording (through GoondVR when it owns the file) and its review. Refused while it is still being recorded or clips are rendering from it. `reason` says why: `nothing` records every undecided highlight as skipped; `desync` and `fragment` keep the content out of training.",
         params: videoParams,
+        querystring: z.object({ reason: z.enum(DISCARD_REASONS).optional() }),
         response: { 200: anyData },
       },
     },
-    async (request) => ({ success: true as const, data: await recordingsService.discard(request.user!.id, request.params.videoId) })
+    async (request) => ({ success: true as const, data: await recordingsService.discard(request.user!.id, request.params.videoId, request.query.reason) })
   );
 
   app.post(

@@ -60,6 +60,7 @@ allowed DELETE /api/library-sync/runs/{id}
 allowed PATCH /api/library-sync/settings
 allowed GET /api/library-sync/perceptual-results
 allowed GET /api/videos/{id}/related
+allowed GET /api/videos/{id}/metadata-suggestions
 allowed GET /api/videos/{id}
 allowed PATCH /api/videos/{id}
 allowed DELETE /api/videos/{id}
@@ -321,6 +322,7 @@ allowed POST /api/recordings/live/channels
 allowed PUT /api/recordings/live/channels/{channelId}
 allowed GET /api/recordings/live/channels/{channelId}/watch
 allowed GET /api/recordings/live/channels/{channelId}/stream/{file}
+allowed PUT /api/recordings/live/channels/{channelId}/quality
 allowed POST /api/recordings/live/channels/{channelId}/pause
 allowed POST /api/recordings/live/channels/{channelId}/resume
 allowed DELETE /api/recordings/live/channels/{channelId}

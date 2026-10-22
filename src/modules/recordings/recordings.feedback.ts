@@ -28,6 +28,15 @@ export const LABEL_TYPE = "triage";
 export const REVIEW_PASSES = ["triage", "highlights"] as const;
 export type ReviewPass = (typeof REVIEW_PASSES)[number];
 
+/**
+ * Why a recording was deleted from its review. Only `nothing` judges its content; `desync`
+ * (audio off the picture) and `fragment` (a reconnect sliver without context) judge the file.
+ */
+export const DISCARD_REASONS = ["nothing", "desync", "fragment"] as const;
+export type DiscardReason = (typeof DISCARD_REASONS)[number];
+/** The skip reason every undecided highlight of a "nothing worth keeping" recording gets. */
+export const NOTHING_REASON = "skip_tame";
+
 /** The label type a Save's rows carry. */
 export const labelTypeOf = (context: Pick<SaveContext, "pass"> | null | undefined) => (context?.pass === "highlights" ? "highlight" : LABEL_TYPE);
 
@@ -293,15 +302,25 @@ export async function recordFeedback(
   });
 }
 
-/** The recording was thrown away from its review: every decision recorded for it says so. */
-export async function markRecordingDiscarded(videoId: number): Promise<void> {
+/** The recording was thrown away from its review: every decision recorded for it says so, and why. */
+export async function markRecordingDiscarded(videoId: number, reason?: DiscardReason): Promise<void> {
+  const tag = reason ? `discard_${reason}` : null;
   if (env.DEMO_MODE) {
-    for (const row of demoFeedback.values()) if (row.videoId === videoId) row.recordingDiscarded = true;
+    for (const row of demoFeedback.values())
+      if (row.videoId === videoId) {
+        row.recordingDiscarded = true;
+        if (tag && !row.reasons?.includes(tag)) row.reasons = [...(row.reasons ?? []), tag];
+      }
     return;
   }
+  const reasons = recordingClipFeedbackTable.reasons;
   await db
     .update(recordingClipFeedbackTable)
-    .set({ recordingDiscarded: true, updatedAt: new Date() })
+    .set({
+      recordingDiscarded: true,
+      ...(tag ? { reasons: sql`CASE WHEN ${reasons} ? ${tag} THEN ${reasons} ELSE ${reasons} || jsonb_build_array(${tag}::text) END` } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(recordingClipFeedbackTable.videoId, videoId));
 }
 

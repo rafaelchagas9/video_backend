@@ -13,7 +13,11 @@ export HIP_VISIBLE_DEVICES=0
 # 3. Set ROCm library path
 export LD_LIBRARY_PATH=/opt/rocm/lib:${LD_LIBRARY_PATH}
 
-# 4. Disable MLIR backend (causes crashes on RDNA 3)
+# 4. Disable the MLIR backend. Originally "causes crashes on RDNA 3"; those crashes were
+# most likely the GPU power cabling (fixed 2026-10-21). Kept off on measured merit: with
+# MLIR, NudeNet took 9 min to compile and ran slower (118 vs 109 ms per batch of 16),
+# SigLIP2 had not finished compiling after 10 min, and the face detector with exhaustive
+# tuning compiled for 27+ min. See docs/gpu-workaround-review.md.
 export MIGRAPHX_DISABLE_MLIR=1
 
 # 5. Set MIGraphX model cache path to avoid recompilation across restarts

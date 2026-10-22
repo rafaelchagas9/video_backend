@@ -2,16 +2,43 @@
 
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 from insightface.app import FaceAnalysis
+from insightface.model_zoo import model_zoo
 
 from .config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def fixed_shape_model(source: Path, size: int, directory: Path) -> Path:
+    """Copy of a detector ONNX with its input pinned to 1x3xSIZExSIZE.
+
+    MIGraphX names compiled programs by a hash of the model graph, not the input shape.
+    Two sessions of the same dynamic-shape detector at different sizes therefore share
+    one cache file: the second loads the first one's program, writes outputs sized for
+    the other shape and the GPU page-faults (gfxhub PROTECTION_FAULT, then SIGABRT).
+    Pinning the shape changes the graph and so the cache file.
+    """
+    target = directory / f"{source.stem}_{size}.onnx"
+    if target.is_file():
+        return target
+    model = onnx.load(str(source))
+    dims = model.graph.input[0].type.tensor_type.shape.dim
+    for dim, value in zip(dims, (1, 3, size, size), strict=True):
+        dim.ClearField("dim_param")
+        dim.dim_value = value
+    directory.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(f".{os.getpid()}.partial")
+    onnx.save(model, str(partial))
+    partial.replace(target)
+    return target
 
 
 class FaceEngine:
@@ -19,30 +46,29 @@ class FaceEngine:
 
     Uses a hybrid dual-detector approach:
     - High-res detector (1280x1280) on GPU (MIGraphX) for large images
-    - Low-res detector (640x640) on CPU for small images
+    - Low-res detector (640x640) for small images and face visibility: on the CPU by
+      default, or as its own fixed-shape GPU session with FACE_FALLBACK_ON_GPU=true
 
-    !!! THE FACE ENGINE OWNS EXACTLY ONE MIGraphX GPU SESSION, AT ONE INPUT SHAPE !!!
+    !!! EVERY MIGraphX SESSION RUNS AT EXACTLY ONE INPUT SHAPE !!!
 
-    Never create a second GPU session for face work (another detector, another
-    size, a "fixed-shape copy"), and never run the 1280 GPU session at any other
-    input size. Every other size or face task (640 detection, face visibility)
-    goes to the CPU session. Do not "optimise" this by moving work onto the GPU.
-    The layout that has run stably for months is one GPU session per model, each at
-    a fixed shape: this 1280 face detector plus NudeNet and SigLIP2 vision. Adding
-    a GPU session beyond that set means re-testing on the real machine first.
+    Never run the 1280 GPU session at any other input size, and keep the GPU 1280
+    detector on its fixed-shape model copy (`fixed_shape_model`). MIGraphX caches
+    compiled programs under a hash of the model graph, not the input shape, so the
+    dynamic det_10g model at 1280 and at 640 would share one cache file. Whichever
+    size loads second runs the other size's program. Outputs come back sized for the
+    wrong shape and the GPU page-faults (gfxhub PROTECTION_FAULT, SIGABRT).
 
-    This is not a performance preference. On this machine (RX 7800 XT, ROCm /
-    MIGraphX) breaking it hard-freezes the whole PC, not just this service:
-    - ~April 2026 (from memory): multi-session face GPU crashes. The single-GPU
-      + CPU hybrid below fixed them.
-    - 2026-10-14: a second fixed-640 GPU face session was added for visibility.
-      The PC froze twice, about a minute after the service started each time, and
-      a diagnostic script using that session raised a GPU page fault
-      (gfxhub PROTECTION_FAULT). Reverted to this layout the same day.
-    - Running 640 on the 1280 GPU session instead returns outputs for the wrong
-      shape (INFERENCE_FAILED on later gallery analysis).
-    Ad-hoc scripts that open their own GPU session while this service is running
-    count as extra sessions too.
+    That collision is what broke earlier attempts. From January 2026 the 640 detector
+    stayed on the CPU to "avoid MIGraphX multi-session GPU crashes". A second fixed-640
+    GPU session on 2026-10-14 page-faulted, and running 640 on the 1280 session
+    returned wrong-shape outputs. The whole-PC freezes from that period were the GPU
+    running on one daisy-chained PCIe power cable (fixed 2026-10-21). With the
+    1280 detector on its pinned copy, FACE_FALLBACK_ON_GPU=true runs the 640 detector
+    as its own GPU session (verified 2026-10-21 in isolation, no faults).
+
+    A cache directory written before the pinned copy holds the 1280 program under the
+    dynamic model's name. Delete that file before enabling the GPU 640 session,
+    otherwise the 640 session loads it and faults.
     """
 
     def __init__(self) -> None:
@@ -92,9 +118,12 @@ class FaceEngine:
         """Configure and initialize hybrid face analysis models."""
         gpu_providers = self._build_gpu_providers(settings)
         cpu_providers = self._build_cpu_providers()
+        fallback_on_gpu = settings.face_fallback_on_gpu
+        low_providers = gpu_providers if fallback_on_gpu else cpu_providers
+        self._low_label = "GPU" if fallback_on_gpu else "CPU"
 
         logger.info(f"GPU Providers: {gpu_providers}")
-        logger.info(f"CPU Providers: {cpu_providers}")
+        logger.info(f"Low-Res Providers: {low_providers}")
 
         self.det_size_threshold = settings.det_size_threshold
         self.use_dual_detectors = settings.det_size > settings.det_size_fallback
@@ -113,6 +142,7 @@ class FaceEngine:
                 allowed_modules=["detection", "recognition"],
                 root=settings.model_cache_dir,
             )
+            self._pin_detector_shape(self.app_high, settings.det_size, gpu_providers, settings)
             self.app_high.prepare(ctx_id=0, det_size=(settings.det_size, settings.det_size))
 
             # Verify active providers for High-Res
@@ -131,17 +161,22 @@ class FaceEngine:
 
             logger.info(f"   -> Ready in {time.time() - start_time:.1f}s")
 
-            # 2. Low-Res Detector on CPU
+            # 2. Low-Res Detector (CPU, or its own fixed-shape GPU session)
             logger.info(
-                f"2. Low-Res (CPU): {settings.det_size_fallback}x{settings.det_size_fallback} [CPU]"
+                f"2. Low-Res ({self._low_label}): "
+                f"{settings.det_size_fallback}x{settings.det_size_fallback}"
             )
             start_time = time.time()
             self.app_low = FaceAnalysis(
                 name=settings.insightface_model,
-                providers=cpu_providers,
-                allowed_modules=["detection", "recognition"],
+                providers=low_providers,
+                # On the GPU, reuse the high-res recognition session rather than open
+                # another one: recognition always runs at 112x112 either way.
+                allowed_modules=["detection"] if fallback_on_gpu else ["detection", "recognition"],
                 root=settings.model_cache_dir,
             )
+            if fallback_on_gpu:
+                self.app_low.models["recognition"] = self.app_high.models["recognition"]
             self.app_low.prepare(
                 ctx_id=0, det_size=(settings.det_size_fallback, settings.det_size_fallback)
             )
@@ -163,11 +198,25 @@ class FaceEngine:
                 allowed_modules=["detection", "recognition"],
                 root=settings.model_cache_dir,
             )
+            self._pin_detector_shape(self.app, settings.det_size, gpu_providers, settings)
             self.app.prepare(ctx_id=0, det_size=(settings.det_size, settings.det_size))
             self.app_high = self.app
             self.app_low = self.app
 
             self._prewarm_single()
+
+    @staticmethod
+    def _pin_detector_shape(app: FaceAnalysis, size: int, providers: list, settings) -> None:
+        """Swap a MIGraphX detector for its fixed-shape copy (see `fixed_shape_model`)."""
+        names = [p if isinstance(p, str) else p[0] for p in providers]
+        if "MIGraphXExecutionProvider" not in names:
+            return
+        pinned = fixed_shape_model(
+            Path(app.det_model.model_file), size, settings.model_cache_dir / "fixed-shape"
+        )
+        detector = model_zoo.get_model(str(pinned), providers=providers)
+        app.models["detection"] = detector
+        app.det_model = detector
 
     def _prewarm_detectors(self) -> None:
         """Pre-warm both detectors."""
@@ -179,8 +228,7 @@ class FaceEngine:
         self.app_high.get(np.zeros((64, 64, 3), dtype=np.uint8))
         logger.info(f"-> Done in {time.time() - t0:.1f}s")
 
-        # Low-res (CPU)
-        logger.info("Pre-warming Low-Res (CPU)...")
+        logger.info(f"Pre-warming Low-Res ({self._low_label})...")
         t0 = time.time()
         self.app_low.get(np.zeros((64, 64, 3), dtype=np.uint8))
         logger.info(f"-> Done in {time.time() - t0:.1f}s")
@@ -200,7 +248,7 @@ class FaceEngine:
         # Select detector
         if self.use_dual_detectors and max_dim < self.det_size_threshold:
             detector = self.app_low
-            det_type = "Low-Res (CPU)"
+            det_type = f"Low-Res ({self._low_label})"
         else:
             detector = self.app_high
             det_type = "High-Res (GPU)"
@@ -226,10 +274,10 @@ class FaceEngine:
         """Detection only on the existing 640 low-res session; never recognize identities.
 
         Explicit 640 input matches the experimental SCRFD preprocessing recipe.
-        In the hybrid layout that session is the CPU one. See the class docstring:
-        visibility must never get its own GPU session or run 640 on the 1280 GPU
-        session, both of which froze the machine. The detector must already be
-        prepared at 640, so this call never changes any session's input shape.
+        That session is the CPU one, or the fixed-640 GPU one with
+        FACE_FALLBACK_ON_GPU. Never run 640 on the 1280 GPU session (see the class
+        docstring). The detector must already be prepared at 640, so this call
+        never changes any session's input shape.
         Shared runtime admission serializes this call with face recognition.
         """
         detector = self.app_low.det_model

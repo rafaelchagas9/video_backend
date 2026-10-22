@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { queueArchive } from "./recordings.archive";
 import { basename } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/config/drizzle";
@@ -27,10 +28,11 @@ import { readRecordingTemporalVersions } from "./recordings.temporal-cache";
 import { recordingTemporalReview, recordingTemporalOriginalProposals, type RecordingTemporalMetadata } from "./recordings.temporal-runtime";
 import { eventsService } from "@/modules/events/events.service";
 import { enqueueRecordingAudio, RECORDING_AUDIO_PIN } from "./recordings.audio-cache";
-import { channelKeeps, confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type ReviewPass, type SaveContext } from "./recordings.feedback";
+import { NOTHING_REASON, channelKeeps, confirmedDecisions, feedbackSummary, markRecordingDiscarded, recordFeedback, type DiscardReason, type ReviewPass, type SaveContext } from "./recordings.feedback";
 import { recorderAutopilot } from "./recordings.autopilot";
 import { isAuditRecording, trainingValues } from "./recordings.training-value";
 import { preserveRecordingTrainingSnapshot } from "./recordings.snapshots.store";
+import { recordingGuide } from "./recordings.guide";
 import { keptRecordingSeconds } from "./recordings.kept-duration";
 import { liveSessions } from "./recordings.sessions";
 
@@ -599,6 +601,15 @@ export class RecordingsService {
     return feedbackSummary();
   }
 
+  /** The queue the overview lists, ranked and explained for training. */
+  async guide(userId: number) {
+    const { recordings } = await this.overview(userId);
+    return recordingGuide(recordings.flatMap((entry) => entry.status === "pending" || entry.status === "proposed" ? [{
+      videoId: entry.video.id, fileName: entry.video.file_name, title: entry.video.title ?? null,
+      durationSeconds: entry.video.duration_seconds ?? null, channel: entry.channel, library: entry.library, status: entry.status,
+    }] : []));
+  }
+
   /**
    * Renders the kept highlights: one clip video each, or (`combine`) a single video of every
    * kept stretch in recording order, overlaps joined. Combined, every kept clip points at the
@@ -717,27 +728,25 @@ export class RecordingsService {
         logger.warn({ error, videoId }, "Could not update completed training snapshot; original retained");
       }
     }
-    if (!failures.length && archived && row.deleteOriginal && source && outputs.length) await this.deleteOriginal(source);
+    // "Afterwards" moves the original to the NAS; it stays here whenever that cannot be done safely.
+    if (!failures.length && archived && row.deleteOriginal && source && outputs.length && !env.DEMO_MODE) queueArchive([source.id]);
     return done;
-  }
-
-  private async deleteOriginal(source: Video) {
-    try {
-      await this.remove(source);
-    } catch (error) {
-      logger.warn({ error, videoId: source.id }, "Could not delete the original recording");
-    }
   }
 
   /**
    * Throws a whole recording away from its review, when nothing in it is worth keeping.
    * Clips already rendered from it stay in the library.
    */
-  async discard(userId: number, videoId: number) {
-    if ((await this.row(videoId))?.status === "rendering") throw new BadRequestError("Clips are still being rendered from this recording");
-    await this.remove(await videosService.findById(videoId, userId));
+  async discard(userId: number, videoId: number, reason?: DiscardReason) {
+    const row = await this.row(videoId);
+    if (row?.status === "rendering") throw new BadRequestError("Clips are still being rendered from this recording");
+    const video = await videosService.findById(videoId, userId);
+    // "Nothing worth keeping" answers every highlight nobody decided; desync and fragments say nothing about the content.
+    if (reason === "nothing" && row && !row.savedAt)
+      await this.recordDecisions(row, video, row.clips.map((clip) => ({ ...clip, keep: false, reasons: [NOTHING_REASON] })));
+    await this.remove(video);
     demoReviews.delete(videoId);
-    await markRecordingDiscarded(videoId).catch((error) => logger.warn({ error, videoId }, "Could not mark review decisions discarded"));
+    await markRecordingDiscarded(videoId, reason).catch((error) => logger.warn({ error, videoId }, "Could not mark review decisions discarded"));
     return { video_id: videoId };
   }
 

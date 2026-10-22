@@ -54,7 +54,7 @@ class Clip:
 
 @lru_cache(maxsize=1)
 def latest_clips() -> tuple[Clip, ...]:
-    """Every recording's latest analysis generation, merged-away proposals left out."""
+    """Every recording's latest analysis generation, merged-away proposals and desync-only decisions left out."""
     import psycopg
 
     with psycopg.connect(PG) as pg:
@@ -65,7 +65,9 @@ def latest_clips() -> tuple[Clip, ...]:
                from recording_clip_feedback f
                join (select video_id, max(analyzed_at) a from recording_clip_feedback group by video_id) l
                  on l.video_id = f.video_id and l.a = f.analyzed_at
-               where f.merged_into is null order by f.video_id, f.start_seconds"""
+               -- Decided because of unbearable audio desync, not the content (audio-desync.md).
+               where f.merged_into is null and not f.reasons ?| array['skip_desync', 'discard_desync']
+               order by f.video_id, f.start_seconds"""
         ).fetchall()
     return tuple(Clip(r[0], r[1], channel_key(r[2]), *r[3:]) for r in rows)
 

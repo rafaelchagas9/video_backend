@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     det_size: int = Field(default=1280, ge=1)
     det_size_fallback: int = Field(default=640, ge=1)
     det_size_threshold: int = Field(default=900, ge=1)
+    # Run the 640 detector as its own fixed-shape GPU session instead of on the CPU. Under
+    # test since 2026-10-21; see FaceEngine and docs/gpu-workaround-review.md.
+    face_fallback_on_gpu: bool = False
 
     # NudeNet settings. The model remains lazy until the first nudity request.
     nudity_enabled: bool = True

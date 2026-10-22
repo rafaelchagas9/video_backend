@@ -282,6 +282,8 @@ const envSchema = z.object({
   GOONDVR_API_URL: z.string().default("http://localhost:32080/api/v1"),
   GOONDVR_USERNAME: z.string().default(""),
   GOONDVR_PASSWORD: z.string().default(""),
+  /** Where finished recordings move instead of being deleted; must be on the NAS, not the local disk. */
+  RECORDING_ARCHIVE_DIR: z.string().default("/mnt/nas/backup/kura/recordings"),
 
   // Creator Enrichment (Python microservice)
   ENRICHMENT_SERVICE_URL: z.string().default("http://localhost:8200"),

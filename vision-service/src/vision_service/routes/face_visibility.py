@@ -1,4 +1,4 @@
-"""Detection-only numeric observations on the shared face runtime's 640 CPU detector."""
+"""Detection-only numeric observations on the shared face runtime's 640 detector (CPU, or GPU with FACE_FALLBACK_ON_GPU)."""
 from fastapi import APIRouter, Depends, Request
 from ..config import Settings, get_settings
 from ..runtime import VisionRuntime

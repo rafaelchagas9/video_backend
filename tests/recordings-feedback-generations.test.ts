@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { RecordingClip, RecordingProposal } from "@/database/schema";
 import { feedbackRows, mergeTarget } from "@/modules/recordings/recordings.feedback";
+import * as feedback from "@/modules/recordings/recordings.feedback";
 import { RecordingsService } from "@/modules/recordings/recordings.service";
 import { isAuditRecording } from "@/modules/recordings/recordings.training-value";
 import { videosService } from "@/modules/videos/videos.service";
@@ -158,5 +159,39 @@ describe("Save", () => {
     expect(contexts[0]).toMatchObject({ queuePosition: 4, queueSort: "useful", audit: isAuditRecording(7) });
     expect(contexts[0].batch).not.toBe(contexts[1].batch);
     expect(preserve.mock.calls[0]![3]).toEqual(contexts[0]);
+  });
+});
+
+describe("deleting from review", () => {
+  const unsaved = { ...saved, savedAt: null, clips: [clip("c1", 0, 30, true), clip("c2", 60, 90, false)] };
+  const deleting = (row: typeof saved | typeof unsaved) => {
+    const service = new RecordingsService();
+    const decided: { clips: RecordingClip[] }[] = [];
+    Object.assign(service, { row: async () => row, remove: async () => {}, recordDecisions: async (_row: unknown, _video: unknown, clips: RecordingClip[]) => { decided.push({ clips }); } });
+    spies.push(spyOn(videosService, "findById").mockResolvedValue({ id: 7, file_name: "someone_2026-10-08_01-02-03.mkv", duration_seconds: 600 } as any));
+    const marked = spyOn(feedback, "markRecordingDiscarded").mockResolvedValue(); spies.push(marked);
+    return { service, decided, marked };
+  };
+
+  it("records every undecided highlight as skipped when nothing was worth keeping", async () => {
+    const { service, decided, marked } = deleting(unsaved);
+    await service.discard(1, 7, "nothing");
+    expect(decided[0]!.clips.map((c) => [c.id, c.keep, c.reasons])).toEqual([["c1", false, ["skip_tame"]], ["c2", false, ["skip_tame"]]]);
+    expect(marked).toHaveBeenCalledWith(7, "nothing");
+  });
+
+  it("learns nothing about the content when the audio was out of sync or the file a fragment", async () => {
+    for (const reason of ["desync", "fragment"] as const) {
+      const { service, decided, marked } = deleting(unsaved);
+      await service.discard(1, 7, reason);
+      expect(decided).toEqual([]);
+      expect(marked).toHaveBeenCalledWith(7, reason);
+    }
+  });
+
+  it("leaves saved decisions as they are", async () => {
+    const { service, decided } = deleting(saved);
+    await service.discard(1, 7, "nothing");
+    expect(decided).toEqual([]);
   });
 });

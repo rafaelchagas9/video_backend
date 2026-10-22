@@ -31,6 +31,12 @@ export interface GoondvrChannel {
   has_thumbnail: boolean;
   has_live_thumbnail: boolean;
   logs: string[] | null;
+  /** The live view (GoondVR ≥ the backlog release; absent before). */
+  live_height?: number;
+  live_heights?: number[] | null;
+  live_quality_choice?: number;
+  watching?: boolean;
+  live_buffer_seconds?: number;
 }
 
 export interface GoondvrRecording {
@@ -231,6 +237,11 @@ export const goondvr = {
 
   pauseChannel(channelId: string) {
     return command(`/channels/${encodeURIComponent(channelId)}/pause`, { method: "POST" });
+  },
+
+  /** 409 while the channel records: its view plays the recording's quality. */
+  setLiveQuality(channelId: string, height: number) {
+    return command(`/channels/${encodeURIComponent(channelId)}/live-quality`, { method: "PUT", ...json({ height }) });
   },
 
   resumeChannel(channelId: string) {

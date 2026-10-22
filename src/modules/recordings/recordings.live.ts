@@ -3,15 +3,16 @@
  * drive them, the recorder's settings, and a relay of its event stream to every
  * signed-in client.
  */
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { API_PREFIX } from "@/config/constants";
 import { db } from "@/config/drizzle";
 import { demoSchema, getDemoDatabase } from "@/database/demo";
+import { resolveDemoAssetPath } from "@/database/demo/assets";
 import { env } from "@/config/env";
 import { creatorsService } from "@/modules/creators/creators.service";
 import { creatorsSocialService } from "@/modules/creators/creators.social.service";
 import { eventsService } from "@/modules/events/events.service";
-import { AppError, BadRequestError, NotFoundError } from "@/utils/errors";
+import { AppError, BadRequestError, ConflictError, NotFoundError } from "@/utils/errors";
 import { logger } from "@/utils/logger";
 import {
   GOONDVR_DEFAULT_PATTERN,
@@ -21,6 +22,7 @@ import {
   type GoondvrSettings,
   type GoondvrSettingsUpdate,
 } from "./recordings.goondvr";
+import { demoLiveFile, type DemoLiveFile } from "./recordings.demo-live";
 
 export const RECORDER_SITES = ["chaturbate", "stripchat", "twitch", "kick", "youtube"] as const;
 export type RecorderSite = (typeof RECORDER_SITES)[number];
@@ -125,6 +127,37 @@ function toLive(channel: GoondvrChannel, creator: CreatorRef | null) {
     stored_bytes: channel.total_disk_usage_bytes ?? 0,
     logs: (channel.logs ?? []).slice(-40),
     creator,
+    live: env.DEMO_MODE ? demoLiveView(channel) : liveView(channel),
+  };
+}
+
+function liveView(channel: GoondvrChannel) {
+  return {
+    height: channel.live_height ?? 0,
+    heights: channel.live_heights ?? [],
+    choice: channel.live_quality_choice ?? 0,
+    watching: Boolean(channel.watching),
+    buffer_seconds: Math.round(channel.live_buffer_seconds ?? 0),
+  };
+}
+
+/**
+ * The demo plays a library video instead of the broadcast, so the quality
+ * menu has nothing real behind it: it offers the usual ladder and remembers
+ * the pick, which is enough to try the controls.
+ */
+const DEMO_HEIGHTS = [1080, 720, 480, 240];
+const demoQualityChoices = new Map<string, number>();
+
+function demoLiveView(channel: GoondvrChannel) {
+  const live = channel.is_online;
+  const choice = demoQualityChoices.get(channel.id) ?? 0;
+  return {
+    height: live ? choice || (channel.resolution > 0 ? DEMO_HEIGHTS.find((height) => height <= channel.resolution) ?? 240 : 1080) : 0,
+    heights: live ? DEMO_HEIGHTS : [],
+    choice,
+    watching: false,
+    buffer_seconds: live ? 120 : 0,
   };
 }
 
@@ -431,9 +464,35 @@ export class RecorderService {
     if (env.DEMO_MODE) {
       const videoId = await demoStandInVideo(id);
       if (!videoId) throw new NotFoundError("The demo has no video to stand in for a live view");
-      return { kind: "file", url: `${API_PREFIX}/videos/${videoId}/stream` };
     }
     return { kind: "hls", url: `${API_PREFIX}/recordings/live/channels/${encodeURIComponent(id)}/stream/index.m3u8` };
+  }
+
+  /** The demo's live view of a channel: its stand-in video as an endless live playlist. */
+  async demoLive(id: string, file: string): Promise<DemoLiveFile> {
+    const videoId = await demoStandInVideo(id);
+    if (!videoId) return { kind: "missing" };
+    const { demoVideosTable } = demoSchema;
+    const row = getDemoDatabase()
+      .select({ path: demoVideosTable.filePath })
+      .from(demoVideosTable)
+      .where(eq(demoVideosTable.id, videoId))
+      .get();
+    if (!row) return { kind: "missing" };
+    return demoLiveFile(id, videoId, resolveDemoAssetPath(row.path), file);
+  }
+
+  /** Watch a paused channel at this height (0: its setting). */
+  async setLiveQuality(id: string, height: number): Promise<LiveChannel> {
+    if (env.DEMO_MODE) {
+      const channel = await this.channel(id);
+      if (!channel.paused) throw new ConflictError("The channel is recording: its live view plays the recording's quality");
+      if (height) demoQualityChoices.set(id, height);
+      else demoQualityChoices.delete(id);
+      return this.channel(id);
+    }
+    await goondvr.setLiveQuality(id, height);
+    return this.channel(id);
   }
 
   async remove(id: string) {
@@ -461,8 +520,23 @@ export class RecorderService {
     if (!linked) {
       await creatorsSocialService.addSocialLink(creatorId, { platform_name: SITE_LABELS[site], url });
     }
+    await this.adoptChannelPicture(id, creatorId);
     creators.invalidate();
     return this.channel(id);
+  }
+
+  /** A creator without a picture takes the channel's profile image. Best effort: linking never fails over it. */
+  private async adoptChannelPicture(channelId: string, creatorId: number) {
+    if (env.DEMO_MODE) return;
+    try {
+      const creator = await creatorsService.findById(creatorId);
+      if (creator.profile_picture_path) return;
+      const image = await goondvr.thumbnail(channelId, "summary");
+      if (!image) return;
+      await creatorsSocialService.uploadProfilePicture(creatorId, Buffer.from(await image.arrayBuffer()), "channel-picture");
+    } catch (error) {
+      logger.warn({ err: error, channelId, creatorId }, "Could not copy the channel picture to the creator");
+    }
   }
 
   async settings() {
@@ -473,8 +547,11 @@ export class RecorderService {
 
   /**
    * GoondVR replaces every plain field on save, so the change is laid over its
-   * current values. Finalization stays off: GoondVR keeps its own ffmpeg out of
-   * the files, and conversion happens in Kura.
+   * current values. Finalization is pinned to a stream-copy remux into MP4: the
+   * live fMP4 keeps audio in its own fragments seconds after the matching
+   * video, and its sidx makes FFmpeg (so Chrome) seek audio to a stale sample,
+   * leaving seeks silent or out of sync. The remux interleaves the tracks and
+   * writes a full index. Re-encoding still happens in Kura, never here.
    */
   async updateSettings(update: RecorderSettingsUpdate) {
     const current = await goondvr.settings();
@@ -493,9 +570,9 @@ export class RecorderService {
       cf_global_threshold: next.cf_global_threshold,
       notify_cooldown_hours: next.notify_cooldown_hours,
       notify_stream_online: next.notify_stream_online,
-      finalize_mode: "none",
+      finalize_mode: "remux",
       ffmpeg_encoder: current.ffmpeg_encoder,
-      ffmpeg_container: current.ffmpeg_container,
+      ffmpeg_container: "mp4",
       ffmpeg_quality: current.ffmpeg_quality,
       ffmpeg_preset: current.ffmpeg_preset,
     });

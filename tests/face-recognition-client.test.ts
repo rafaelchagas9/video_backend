@@ -230,6 +230,68 @@ describe("FaceRecognitionClient compatibility facade", () => {
     expect(analyzeBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("sends file batches as one request and retries only overloaded items", async () => {
+    const imagePath = fileURLToPath(import.meta.url);
+    const requests: string[][] = [];
+    const analyzeBatch = mock(
+      async (input: {
+        items: Array<{ id: string }>;
+      }): Promise<VisionBatchResult> => {
+        const ids = input.items.map((item) => item.id);
+        requests.push(ids);
+        return {
+          version: "1" as const,
+          items: ids.map((id) => ({
+            id,
+            timestampSeconds: 0,
+            width: 640,
+            height: 480,
+            outcomes: [
+              id === "face-1" && requests.length === 1
+                ? {
+                    capability: "faces",
+                    status: "error" as const,
+                    error: { code: "OVERLOADED", message: "busy" },
+                  }
+                : id === "face-2"
+                  ? {
+                      capability: "faces",
+                      status: "error" as const,
+                      error: { code: "INVALID_IMAGE", message: "bad" },
+                    }
+                  : { capability: "faces", status: "ok" as const, findings: [] },
+            ],
+          })),
+        };
+      }
+    );
+    const port = {
+      capabilities: mock(async () => ({
+        version: "1" as const,
+        capabilities: [],
+      })),
+      analyzeBatch,
+    } satisfies VisualInferencePort;
+    const client = new FaceRecognitionClient(
+      "http://unused.test",
+      100,
+      "",
+      port
+    );
+
+    const results = await client.detectFacesFromFiles([
+      imagePath,
+      imagePath,
+      imagePath,
+    ]);
+
+    expect(requests).toEqual([["face-0", "face-1", "face-2"], ["face-1"]]);
+    expect(results[0]).toMatchObject({ faces: [], image_width: 640 });
+    expect(results[1]).toMatchObject({ faces: [], image_width: 640 });
+    expect(results[2]).toBeInstanceOf(Error);
+    expect((results[2] as Error).message).toContain("INVALID_IMAGE");
+  });
+
   it("sends the bearer secret only to analysis, not capability discovery", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
     globalThis.fetch = mock(

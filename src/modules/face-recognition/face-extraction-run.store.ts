@@ -39,6 +39,45 @@ export class PostgresFaceExtractionRunStore implements FaceExtractionRunStore {
   async enqueue(intent: FaceExtractionIntent): Promise<FaceExtractionJob> {
     try {
       return await db.transaction(async (tx) => {
+        // A retryable failure parks the run as "pending"; if the durable job then gives up
+        // (e.g. vision was down for its whole retry budget) nothing settles the run, and its
+        // stale row would block every new run for the video on the active-run unique index.
+        const active = await tx
+          .select({
+            id: faceExtractionJobsTable.id,
+            durableStatus: durableJobsTable.status,
+          })
+          .from(faceExtractionJobsTable)
+          .leftJoin(
+            durableJobsTable,
+            eq(durableJobsTable.id, faceExtractionJobsTable.durableJobId)
+          )
+          .where(
+            and(
+              eq(faceExtractionJobsTable.videoId, intent.videoId),
+              inArray(faceExtractionJobsTable.status, ["pending", "processing"])
+            )
+          );
+        for (const run of active) {
+          const finished =
+            run.durableStatus === null ||
+            ["completed", "failed", "cancelled"].includes(run.durableStatus);
+          if (!finished) continue;
+          await tx
+            .update(faceExtractionJobsTable)
+            .set({
+              status:
+                run.durableStatus === "completed"
+                  ? "completed"
+                  : run.durableStatus === "cancelled"
+                    ? "skipped"
+                    : "failed",
+              completedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(faceExtractionJobsTable.id, run.id));
+        }
+
         const [durableJob] = await tx
           .insert(durableJobsTable)
           .values({
@@ -66,7 +105,9 @@ export class PostgresFaceExtractionRunStore implements FaceExtractionRunStore {
         return run;
       });
     } catch (error) {
-      if ((error as { code?: string }).code !== "23505") throw error;
+      // Drizzle wraps the driver error, so the SQLSTATE lives on its cause.
+      const failure = error as { code?: string; cause?: { code?: string } };
+      if ((failure.code ?? failure.cause?.code) !== "23505") throw error;
       const active = await db
         .select()
         .from(faceExtractionJobsTable)

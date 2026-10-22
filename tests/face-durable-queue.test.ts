@@ -158,14 +158,18 @@ function createHarness(
       } as never,
       faceClient: {
         isAvailable: mock(async () => true),
-        detectFacesFromFile: mock(
-          options.detectFacesFromFile ??
-            (async () => ({
-              faces: [],
-              image_width: 960,
-              image_height: 540,
-              processing_time_ms: 1,
-            }))
+        detectFacesFromFiles: mock(
+          async (imagePaths: string[], signal?: AbortSignal) => {
+            const detect =
+              options.detectFacesFromFile ??
+              (async () => ({
+                faces: [] as [],
+                image_width: 960,
+                image_height: 540,
+                processing_time_ms: 1,
+              }));
+            return Promise.all(imagePaths.map((path) => detect(path, signal)));
+          }
         ),
       } as never,
       publishDetections,

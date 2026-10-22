@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import { env } from "@/config/env";
 import { AppError } from "@/utils/errors";
@@ -76,6 +77,24 @@ async function failure(response: Response): Promise<VisualSearchUnavailableError
   if (code === "CAPABILITY_NOT_READY")
     return new VisualSearchUnavailableError("The visual search model is still loading", code);
   return new VisualSearchUnavailableError(`Vision service rejected the request (${code})`, code);
+}
+
+/**
+ * GPU modes start the vision unit on demand and admit work once /readyz passes, but SigLIP2
+ * warms in the background after that (~15 s with a cached program). Page batches wait out the
+ * warm-up instead of failing every queued item.
+ */
+const CLIP_WARMUP_WAIT_MS = 180_000;
+const CLIP_WARMUP_POLL_MS = 2_000;
+
+async function clipStillLoading(response: Response): Promise<boolean> {
+  if (response.status !== 503) return false;
+  try {
+    const body = (await response.clone().json()) as { detail?: { code?: string } };
+    return body.detail?.code === "CAPABILITY_NOT_READY";
+  } catch {
+    return false;
+  }
 }
 
 export const visualSearchClient = {
@@ -159,13 +178,19 @@ export const visualSearchClient = {
     let response: Response;
     try {
       response = await gpuModes.runCompute(
-        () =>
-          fetch(`${env.VISION_SERVICE_URL}/v1/embeddings/pages`, {
-            method: "POST",
-            headers: headers(),
-            body: form,
-            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000),
-          }),
+        async () => {
+          const deadline = Date.now() + CLIP_WARMUP_WAIT_MS;
+          for (;;) {
+            const attempt = await fetch(`${env.VISION_SERVICE_URL}/v1/embeddings/pages`, {
+              method: "POST",
+              headers: headers(),
+              body: form,
+              signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000),
+            });
+            if (Date.now() >= deadline || !(await clipStillLoading(attempt))) return attempt;
+            await sleep(CLIP_WARMUP_POLL_MS, undefined, signal ? { signal } : {});
+          }
+        },
         { label: "visual index pages", ...(signal ? { signal } : {}) }
       );
     } catch (error) {

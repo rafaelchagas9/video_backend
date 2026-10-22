@@ -16,7 +16,7 @@ const SAFE_API_REQUESTS: Array<{
   // Recording reviews run on demo vectors and keep decisions in memory.
   {
     methods: new Set(["GET"]),
-    path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|feedback|autopilot|sessions|\\d+|channels/[^/]+/thumbnail))?/?$`),
+    path: new RegExp(`^${API_PREFIX}/recordings(?:/(?:settings|feedback|guide|archive|autopilot|sessions|\\d+|channels/[^/]+/thumbnail))?/?$`),
   },
   // Label fixtures and answer changes are confined to the demo catalogue and memory.
   { methods: new Set(["GET"]), path: new RegExp(`^${API_PREFIX}/recordings/label-tasks/?$`) },
@@ -34,7 +34,7 @@ const SAFE_API_REQUESTS: Array<{
   },
   {
     methods: new Set(["PUT"]),
-    path: new RegExp(`^${API_PREFIX}/recordings/live/(?:settings|channels/[^/]+)$`),
+    path: new RegExp(`^${API_PREFIX}/recordings/live/(?:settings|channels/[^/]+(?:/quality)?)$`),
   },
   {
     methods: new Set(["DELETE"]),
