@@ -112,7 +112,17 @@ export class VideosService {
   ): Promise<Video> {
     if (env.DEMO_MODE) {
       const video = demoRepository.getVideoById(id);
-      const response = { ...video, ...(include.includes("external_ids") ? { external_ids: [] } : {}) } as Video;
+      const response = {
+        ...video,
+        ...(include.includes("external_ids")
+          ? {
+              external_ids: demoRepository.listResources(
+                "video-external-id",
+                `${id}:`
+              ),
+            }
+          : {}),
+      } as Video;
       if (include.includes("artwork")) {
         const { artworkService } =
           await import("@/modules/artwork/artwork.service");

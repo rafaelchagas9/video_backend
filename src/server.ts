@@ -88,6 +88,8 @@ export async function buildServer() {
   if (env.DEMO_MODE) {
     const { prepareDemoDatabaseForStartup } = await import("@/database/demo");
     prepareDemoDatabaseForStartup(env.DEMO_RESET_MODE);
+    const { ensureDemoSceneCredits } = await import("@/database/demo/scene-credits");
+    await ensureDemoSceneCredits();
   }
 
   const fastify = Fastify({
@@ -506,6 +508,8 @@ export async function buildServer() {
         await import("./modules/thumbnails/thumbnails.routes");
       const { artworkRoutes, videoArtworkRoutes } =
         await import("./modules/artwork/artwork.routes");
+      const { sourceCoversRoutes } =
+        await import("./modules/source-covers/source-covers.routes");
       const { playlistsRoutes } =
         await import("./modules/playlists/playlists.routes");
       const { videoCollectionsRoutes } =
@@ -581,6 +585,7 @@ export async function buildServer() {
       await instance.register(videoThumbnailsRoutes, { prefix: "/videos" });
       await instance.register(thumbnailsRoutes, { prefix: "/thumbnails" });
       await instance.register(videoArtworkRoutes, { prefix: "/videos" });
+      await instance.register(sourceCoversRoutes, { prefix: "/videos" });
       await instance.register(artworkRoutes, { prefix: "/artwork" });
       await instance.register(playlistsRoutes, { prefix: "/playlists" });
       await instance.register(videoCollectionsRoutes, {

@@ -17,6 +17,7 @@ import {
 
 import { buildDemoVideoQuery } from "./video-query";
 import { demoCreatorScan, demoSceneScan } from "./enrichment-scan";
+import { demoSceneFixture } from "./scene-credits";
 
 const DEMO_USER_ID = 1;
 type DemoPage = {
@@ -1474,7 +1475,16 @@ export class DemoRepository {
       videoId
     ).map((item) => `${API_PREFIX}/artwork/${item.id}/image`);
     if (pictures.length === 0) pictures.push(`${API_PREFIX}/thumbnails/${videoId}/image`);
-    this.insertScanRows("scene", videoId, demoSceneScan(pictures), timestamp);
+    // Fixture scenes propose real alternative covers instead of their own art.
+    const candidates = demoSceneFixture().find((scene) => scene.video_id === videoId)?.candidates ?? [];
+    if (candidates.length > 0) {
+      pictures.splice(
+        0,
+        pictures.length,
+        ...candidates.map((file) => `${API_PREFIX}/videos/${videoId}/cover/image?file=${encodeURIComponent(file.split("/").pop()!)}`)
+      );
+    }
+    this.insertScanRows("scene", videoId, demoSceneScan(pictures, candidates.length || undefined), timestamp);
   }
   private insertScanRows(
     entityType: string,
@@ -1570,10 +1580,20 @@ export class DemoRepository {
     return this.getEnrichmentSuggestionById(id);
   }
 
-  listResources(kind: string): any[] {
-    return this.rows(
-      "SELECT payload_json FROM demo_resources WHERE kind=? ORDER BY id",
-      kind
+  /** `idPrefix` narrows to ids like `<videoId>:…` for per-entity resources. */
+  listResources(kind: string, idPrefix?: string): any[] {
+    return (
+      idPrefix === undefined
+        ? this.rows(
+            "SELECT payload_json FROM demo_resources WHERE kind=? ORDER BY id",
+            kind
+          )
+        : this.rows(
+            "SELECT payload_json FROM demo_resources WHERE kind=? AND substr(id,1,?)=? ORDER BY id",
+            kind,
+            idPrefix.length,
+            idPrefix
+          )
     ).map((item) => parseJson(item.payload_json, {}));
   }
   getResource(kind: string, id: string | number): any | null {

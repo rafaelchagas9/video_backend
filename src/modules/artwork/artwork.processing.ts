@@ -858,7 +858,7 @@ async function selectSourceFrame(params: {
 async function renderVariant(params: {
   videoId: number;
   sourcePath: string;
-  sourceTimestamp: number;
+  sourceTimestamp: number | null;
   sourceWidth: number;
   sourceHeight: number;
   focalPoint: NormalizedPoint;
@@ -989,6 +989,41 @@ async function renderTitleVariant(params: {
   };
 }
 
+/** A scene cover downloaded from ThePornDB / StashDB (see source-covers). */
+export interface ArtworkCoverSource {
+  path: string;
+  width: number;
+  height: number;
+}
+
+/** Largest box of the variant's shape that fits in a source, and how much of the source it keeps. */
+function variantCrop(
+  variant: RasterArtworkVariant,
+  source: { width: number; height: number }
+) {
+  const spec = VARIANT_SPECS[variant];
+  const aspect = spec.width / spec.height;
+  const width = Math.min(source.width, source.height * aspect);
+  const height = width / aspect;
+  return { width, retained: (width * height) / (source.width * source.height) };
+}
+
+/**
+ * The cover is curated art, so it wins a variant unless cropping it to that
+ * shape would throw most of it away (a 2:3 poster cut down to a 16:9 strip) or
+ * leave it too small to fill the variant where the frame would not.
+ */
+export function coverServesVariant(
+  variant: RasterArtworkVariant,
+  cover: { width: number; height: number },
+  frame: { width: number; height: number } | null
+): boolean {
+  const crop = variantCrop(variant, cover);
+  if (crop.retained < 0.5) return false;
+  if (crop.width >= VARIANT_SPECS[variant].width * 0.9) return true;
+  return !frame || crop.width >= variantCrop(variant, frame).width;
+}
+
 export async function generateArtworkFiles(params: {
   video: {
     id: number;
@@ -1000,6 +1035,8 @@ export async function generateArtworkFiles(params: {
     height: number | null;
   };
   request: StoredArtworkRequest;
+  /** Used for every variant it serves well, unless a frame was picked by timestamp. */
+  cover?: ArtworkCoverSource | null;
 }): Promise<GeneratedArtworkSet> {
   const rendered: Array<{ asset: GeneratedArtworkAsset; buffer: Buffer }> = [];
   const wantsTitle = params.request.variants.includes("title");
@@ -1020,8 +1057,25 @@ export async function generateArtworkFiles(params: {
     return { assets: rendered.map((item) => item.asset), palette: null };
   }
 
+  const frameSize =
+    params.video.width && params.video.height
+      ? { width: params.video.width, height: params.video.height }
+      : null;
+  const cover =
+    params.cover && params.request.timestamp_seconds === undefined
+      ? params.cover
+      : null;
+  const fromCover = new Set(
+    cover
+      ? rasterVariants.filter((variant) =>
+          coverServesVariant(variant, cover, frameSize)
+        )
+      : []
+  );
+  const fromFrame = rasterVariants.filter((variant) => !fromCover.has(variant));
+
   const duration = params.video.duration_seconds;
-  if (!duration || duration <= 0)
+  if (fromFrame.length > 0 && (!duration || duration <= 0))
     throw new Error("Video duration is unavailable");
   const workDir = join(
     env.ARTWORK_DIR,
@@ -1030,42 +1084,62 @@ export async function generateArtworkFiles(params: {
   );
   await mkdir(workDir, { recursive: true });
   try {
-    const selected = await selectSourceFrame({
-      videoId: params.video.id,
-      videoPath: params.video.file_path,
-      duration,
-      timestamp: params.request.timestamp_seconds,
-      workDir,
-    });
-    const metadata = await sharp(selected.path).metadata();
-    const sourceWidth = metadata.width ?? params.video.width;
-    const sourceHeight = metadata.height ?? params.video.height;
-    if (!sourceWidth || !sourceHeight)
-      throw new Error("Source frame dimensions are unavailable");
+    const sources: Array<{
+      variants: RasterArtworkVariant[];
+      path: string;
+      timestamp: number | null;
+      analysis: FrameAnalysis;
+    }> = [];
+    if (cover && fromCover.size > 0) {
+      sources.push({
+        variants: [...fromCover],
+        path: cover.path,
+        timestamp: null,
+        analysis: await analyzeFrame(cover.path, []),
+      });
+    }
+    if (fromFrame.length > 0) {
+      const selected = await selectSourceFrame({
+        videoId: params.video.id,
+        videoPath: params.video.file_path,
+        duration: duration!,
+        timestamp: params.request.timestamp_seconds,
+        workDir,
+      });
+      sources.push({ variants: fromFrame, ...selected });
+    }
 
-    // Detected once per frame, not per variant — every variant has to be cut
-    // from the same content box or they stop agreeing with each other.
-    const contentBox = await detectContentBox(
-      selected.path,
-      sourceWidth,
-      sourceHeight
-    );
+    for (const source of sources) {
+      const metadata = await sharp(source.path).metadata();
+      const sourceWidth = metadata.width ?? params.video.width;
+      const sourceHeight = metadata.height ?? params.video.height;
+      if (!sourceWidth || !sourceHeight)
+        throw new Error("Source image dimensions are unavailable");
 
-    for (const variant of rasterVariants) {
-      rendered.push(
-        await renderVariant({
-          videoId: params.video.id,
-          sourcePath: selected.path,
-          sourceTimestamp: selected.timestamp,
-          sourceWidth,
-          sourceHeight,
-          focalPoint: selected.analysis.focalPoint,
-          faces: selected.analysis.faces,
-          variant,
-          effects: params.request.effects,
-          contentBox,
-        })
+      // Detected once per source, not per variant — every variant cut from the
+      // same image has to come from the same content box or they disagree.
+      const contentBox = await detectContentBox(
+        source.path,
+        sourceWidth,
+        sourceHeight
       );
+
+      for (const variant of source.variants) {
+        rendered.push(
+          await renderVariant({
+            videoId: params.video.id,
+            sourcePath: source.path,
+            sourceTimestamp: source.timestamp,
+            sourceWidth,
+            sourceHeight,
+            focalPoint: source.analysis.focalPoint,
+            faces: source.analysis.faces,
+            variant,
+            effects: params.request.effects,
+            contentBox,
+          })
+        );
+      }
     }
     if (wantsTitle) {
       const title = await renderTitleVariant({

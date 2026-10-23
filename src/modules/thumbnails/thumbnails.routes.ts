@@ -6,6 +6,8 @@ import { env } from "@/config/env";
 import { resolveDemoAssetPath } from "@/database/demo/assets";
 import { authenticateUser } from "@/modules/auth/auth.middleware";
 import { thumbnailsService } from "./thumbnails.service";
+import { sourceCoversService } from "@/modules/source-covers/source-covers.service";
+import { sourceCoversDemoService } from "@/modules/source-covers/source-covers.demo.service";
 import {
   idParamSchema,
   generateThumbnailSchema,
@@ -147,6 +149,31 @@ export async function thumbnailsRoutes(
     async (request, reply) => {
       const thumbnail = await thumbnailsService.findById(request.params.id);
 
+      // A landscape scene cover beats the 640×480 ffmpeg frame wherever a
+      // thumbnail is shown, without every list endpoint learning about covers.
+      // The URL stays the same when a cover arrives, so revalidate by ETag.
+      const cover = env.DEMO_MODE
+        ? null
+        : await sourceCoversService.get(thumbnail.video_id);
+      const demoCover = env.DEMO_MODE
+        ? await sourceCoversDemoService.thumbnail(thumbnail.video_id)
+        : null;
+      const version = cover?.thumbPath
+        ? `cover-${cover.contentHash}`
+        : demoCover
+          ? `cover-${demoCover.byteLength}`
+          : `frame-${thumbnail.generated_at}`;
+      const etag = `"${version}"`;
+      reply.header("Cache-Control", "private, no-cache");
+      reply.header("ETag", etag);
+      if (request.headers["if-none-match"] === etag)
+        return reply.status(304).send();
+      if (demoCover) return reply.type("image/webp").send(demoCover);
+      if (cover?.thumbPath)
+        return reply
+          .type("image/webp")
+          .send(createReadStream(cover.thumbPath));
+
       // Determine mime type from file extension
       const ext = thumbnail.file_path.split(".").pop()?.toLowerCase();
       const mimeType =
@@ -157,7 +184,6 @@ export async function thumbnailsRoutes(
             : "image/jpeg";
 
       reply.header("Content-Type", mimeType);
-      reply.header("Cache-Control", "public, max-age=86400");
       const safePath = env.DEMO_MODE
         ? resolveDemoAssetPath(thumbnail.file_path, { mustExist: true })
         : thumbnail.file_path;

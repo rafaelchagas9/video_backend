@@ -219,6 +219,8 @@ allowed GET /api/thumbnails/{id}/image
 allowed GET /api/videos/{id}/artwork
 allowed POST /api/videos/{id}/artwork http-contract
 allowed DELETE /api/videos/{id}/artwork http-contract
+allowed GET /api/videos/{id}/cover
+allowed GET /api/videos/{id}/cover/image
 allowed POST /api/artwork/batch http-contract
 allowed GET /api/artwork/{id}/image
 allowed GET /api/playlists/

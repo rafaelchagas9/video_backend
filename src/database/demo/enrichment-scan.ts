@@ -52,13 +52,30 @@ export function demoCreatorScan(pictures: string[]): DemoScanRow[] {
   return replay("enrichment-sample.json", "creator", "Lilly Bell", pictures);
 }
 
-/** A real scene match (43 tags, cast, studio, details); covers become the video's own art. */
-export function demoSceneScan(pictures: string[]): DemoScanRow[] {
-  return replay("enrichment-scene-sample.json", "scene", "Kinky Chemistry", pictures);
+/**
+ * A real scene match (43 tags, cast, studio, details); covers become the
+ * video's own art. `coverCount` replaces the sample's cover slots with exactly
+ * that many proposals, one per picture, so fixture candidates are not repeated.
+ */
+export function demoSceneScan(pictures: string[], coverCount?: number): DemoScanRow[] {
+  return replay("enrichment-scene-sample.json", "scene", "Kinky Chemistry", pictures, coverCount);
 }
 
-function replay(file: string, entityType: string, name: string, pictures: string[]): DemoScanRow[] {
-  const proposals = loadSample(file);
+function replay(
+  file: string,
+  entityType: string,
+  name: string,
+  pictures: string[],
+  imageCount?: number
+): DemoScanRow[] {
+  let proposals = loadSample(file);
+  if (imageCount !== undefined) {
+    const template = proposals.find((item) => item.type === "image");
+    proposals = [
+      ...proposals.filter((item) => item.type !== "image"),
+      ...(template ? Array.from({ length: imageCount }, () => template) : []),
+    ];
+  }
   const externalId = proposals.find((item) => item.type === "external_id")?.value ?? null;
   const match = { name, source: "theporndb", entity_type: entityType, external_id: externalId };
   let picture = 0;

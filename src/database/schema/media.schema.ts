@@ -27,6 +27,21 @@ export const thumbnailsTable = pgTable('thumbnails', {
   videoIdx: index('idx_thumbnails_video').on(table.videoId),
 }));
 
+// A scene's cover from ThePornDB / StashDB, downloaded once so artwork and
+// thumbnails can be cut from it instead of an ffmpeg frame when it is sharper.
+export const videoSourceCoversTable = pgTable('video_source_covers', {
+  videoId: integer('video_id').primaryKey().references(() => videosTable.id, { onDelete: 'cascade' }),
+  sourceUrl: text('source_url').notNull(),
+  filePath: text('file_path').notNull(),
+  /** Landscape downscale served through the thumbnail route; null for covers too tall to stand in for a frame. */
+  thumbPath: text('thumb_path'),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  fileSizeBytes: bigint('file_size_bytes', { mode: "number" }).notNull(),
+  contentHash: text('content_hash').notNull(),
+  fetchedAt: timestamp('fetched_at').defaultNow().notNull(),
+});
+
 // Storyboards table (Vidstack slider thumbnails)
 export const storyboardsTable = pgTable('storyboards', {
   id: serial('id').primaryKey(),

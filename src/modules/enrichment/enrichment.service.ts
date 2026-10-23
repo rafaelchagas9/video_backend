@@ -7,6 +7,7 @@
  * is ever auto-applied.
  */
 
+import { sourceCoversService } from "@/modules/source-covers/source-covers.service";
 import { computeVideoOshash } from "./enrichment.fingerprint";
 import { loadEnrichmentImage } from "./enrichment.images";
 import { createHash } from "crypto";
@@ -1228,6 +1229,7 @@ export class EnrichmentService {
         )
       );
 
+    sourceCoversService.scheduleSync(videoId);
     logger.info(
       {
         videoId,
@@ -1525,6 +1527,8 @@ export class EnrichmentService {
             target: [videoMetadataTable.videoId, videoMetadataTable.key],
             set: { value: s.value, updatedAt: new Date() },
           });
+        // Download it off the request path; artwork regenerates from it.
+        sourceCoversService.scheduleSync(videoId);
         break;
       default:
         throw new BadRequestError(

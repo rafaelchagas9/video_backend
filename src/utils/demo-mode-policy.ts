@@ -172,7 +172,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:related|metadata-suggestions|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|preview(?:/status)?|conversions|conversion-estimate|artwork)$`
+      `^${API_PREFIX}/videos/\\d+/(?:related|metadata-suggestions|stream|creators|tags|studios|ratings|bookmarks|stats|thumbnails|storyboard(?:/status)?|preview(?:/status)?|conversions|conversion-estimate|artwork|cover)$`
     ),
   },
   {
@@ -234,7 +234,7 @@ const SAFE_API_REQUESTS: Array<{
   {
     methods: new Set(["GET"]),
     path: new RegExp(
-      `^${API_PREFIX}/videos/\\d+/(?:thumbnails\\.vtt|storyboard\\.(?:jpg|webp)|storyboard/pages/\\d+\\.(?:jpg|webp)|preview\\.mp4)$`
+      `^${API_PREFIX}/videos/\\d+/(?:thumbnails\\.vtt|storyboard\\.(?:jpg|webp)|storyboard/pages/\\d+\\.(?:jpg|webp)|preview\\.mp4|cover/image)$`
     ),
   },
   {

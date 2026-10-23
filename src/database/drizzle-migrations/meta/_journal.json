@@ -421,6 +421,13 @@
       "when": 1791807505226,
       "tag": "0059_live_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792710609506,
+      "tag": "0060_video_source_covers",
+      "breakpoints": true
     }
   ]
 }

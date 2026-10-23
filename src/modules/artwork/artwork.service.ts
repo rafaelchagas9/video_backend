@@ -16,6 +16,7 @@ import { createVideoEventContext } from "@/modules/events/events.types";
 import { logger } from "@/utils/logger";
 import { NotFoundError } from "@/utils/errors";
 import { demoArtworkService } from "./artwork.demo.service";
+import { sourceCoversService } from "@/modules/source-covers/source-covers.service";
 import { demoMediaAssetsService } from "@/modules/media/demo-media-assets.service";
 import { demoRepository } from "@/database/demo";
 import {
@@ -492,6 +493,7 @@ class ArtworkService {
       const generated = await generateArtworkFiles({
         video,
         request: job.request,
+        cover: await sourceCoversService.artworkSource(job.videoId),
       });
       newPaths = generated.assets.map((asset) => asset.filePath);
       if (this.cancelledVideos.has(job.videoId)) {
